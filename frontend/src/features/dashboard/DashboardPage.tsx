@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     Zap, Shield, RefreshCw, BarChart3, Activity,
     ChevronLeft, Database, LayoutDashboard, Wallet,
-    TrendingUp, Lock, Settings, Layers, AlertCircle,
+    TrendingUp, Lock, Settings, Layers,
     Unplug, X, Loader2
 } from 'lucide-react';
 import { fetchPortfolio, fetchPositions, triggerScan, closeTrade, socket, cn } from '../../lib/api';
@@ -15,10 +15,6 @@ function fmt(v: number, prefix = '$', decimals = 2) {
     const abs = Math.abs(v);
     const str = abs.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
     return `${v < 0 ? '-' : ''}${prefix}${str}`;
-}
-
-function pct(v: number) {
-    return `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
 }
 
 // ─── Close button with confirmation ──────────────────
