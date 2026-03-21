@@ -3,23 +3,23 @@ import crypto from 'crypto';
 
 export const dynamic = 'force-dynamic';
 
-const BASE_URL = process.env.USE_TESTNET === 'true'
-  ? 'https://testnet.binance.vision'
-  : 'https://api.binance.com';
+const IS_TESTNET = process.env.USE_TESTNET === 'true';
+const IS_FUTURES = process.env.USE_FUTURES === 'true';
+
+const BASE_URL = IS_FUTURES
+  ? (IS_TESTNET ? 'https://testnet.binancefuture.com' : 'https://fapi.binance.com')
+  : (IS_TESTNET ? 'https://testnet.binance.vision'    : 'https://api.binance.com');
 
 function sign(queryString: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(queryString).digest('hex');
 }
 
-async function getServerTimeOffset(): Promise<number> {
-  try {
-    const res = await fetch(`${BASE_URL}/api/v3/time`, { cache: 'no-store' });
-    if (!res.ok) return 0;
-    const data = await res.json();
-    return Date.now() - data.serverTime;
-  } catch {
-    return 0;
-  }
+// Get Binance server time to avoid clock skew (-1021 error)
+async function getServerTime(): Promise<number> {
+  const endpoint = IS_FUTURES ? '/fapi/v1/time' : '/api/v3/time';
+  const res = await fetch(`${BASE_URL}${endpoint}`, { cache: 'no-store' });
+  const data = await res.json();
+  return data.serverTime;
 }
 
 export async function GET() {
@@ -31,13 +31,13 @@ export async function GET() {
   }
 
   try {
-    // Get server time offset to fix timestamp issues
-    const offset = await getServerTimeOffset();
-    const timestamp = Date.now() - offset;
+    const timestamp = await getServerTime();
     const recvWindow = 10000;
     const queryString = `timestamp=${timestamp}&recvWindow=${recvWindow}`;
     const signature = sign(queryString, secretKey);
-    const url = `${BASE_URL}/api/v3/account?${queryString}&signature=${signature}`;
+
+    const endpoint = IS_FUTURES ? '/fapi/v2/balance' : '/api/v3/account';
+    const url = `${BASE_URL}${endpoint}?${queryString}&signature=${signature}`;
 
     const res = await fetch(url, {
       headers: { 'X-MBX-APIKEY': apiKey },
@@ -47,33 +47,51 @@ export async function GET() {
     const data = await res.json();
 
     if (!res.ok) {
-      // Return full Binance error so we can debug
       return NextResponse.json(
         { error: data.msg || 'Binance error', binance_code: data.code, status: res.status },
         { status: res.status }
       );
     }
 
-    // Extract all non-zero balances
-    const balances: Record<string, { free: number; locked: number; total: number }> = {};
-    for (const b of data.balances ?? []) {
-      const free = parseFloat(b.free);
-      const locked = parseFloat(b.locked);
-      if (free > 0 || locked > 0) {
-        balances[b.asset] = { free, locked, total: free + locked };
+    if (IS_FUTURES) {
+      const balances: Record<string, any> = {};
+      for (const b of data) {
+        const total = parseFloat(b.balance);
+        if (total > 0) {
+          balances[b.asset] = {
+            free: parseFloat(b.availableBalance),
+            locked: total - parseFloat(b.availableBalance),
+            total,
+          };
+        }
       }
+      const usdt = balances['USDT'] ?? { free: 0, locked: 0, total: 0 };
+      return NextResponse.json({
+        usdt_free: usdt.free,
+        usdt_locked: usdt.locked,
+        usdt_total: usdt.total,
+        balances,
+        account_type: 'FUTURES',
+      });
+    } else {
+      const balances: Record<string, any> = {};
+      for (const b of data.balances ?? []) {
+        const free = parseFloat(b.free);
+        const locked = parseFloat(b.locked);
+        if (free > 0 || locked > 0) {
+          balances[b.asset] = { free, locked, total: free + locked };
+        }
+      }
+      const usdt = balances['USDT'] ?? { free: 0, locked: 0, total: 0 };
+      return NextResponse.json({
+        usdt_free: usdt.free,
+        usdt_locked: usdt.locked,
+        usdt_total: usdt.total,
+        balances,
+        can_trade: data.canTrade ?? false,
+        account_type: data.accountType ?? 'SPOT',
+      });
     }
-
-    const usdt = balances['USDT'] ?? { free: 0, locked: 0, total: 0 };
-
-    return NextResponse.json({
-      usdt_free: usdt.free,
-      usdt_locked: usdt.locked,
-      usdt_total: usdt.total,
-      balances,
-      can_trade: data.canTrade ?? false,
-      account_type: data.accountType ?? '',
-    });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
