@@ -3,6 +3,7 @@
 ═══════════════════════════════════════════════════════════
   REGIME DETECTION TRADING SYSTEM v3
   Docker + MySQL + Redis + Binance API
+  Enhanced: Multi-Symbol, Trailing Stops, Kelly Sizing
 ═══════════════════════════════════════════════════════════
 """
 import json, time, sys, os, traceback, threading
@@ -10,6 +11,9 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import *
+
+# Threading lock for position state changes
+_position_lock = threading.Lock()
 
 # ═══════════════════════════════════════
 # INFRA WAIT
@@ -43,6 +47,35 @@ def wait_for_redis(max_retries=15):
 
 
 # ═══════════════════════════════════════
+# HELPER FUNCTIONS
+# ═══════════════════════════════════════
+def _verify_order_placed(order_resp: dict, order_type: str) -> bool:
+    """Verify an order was successfully placed on Binance."""
+    if order_resp.get('_http_status', 0) != 200:
+        print(f"⚠️ {order_type} order failed: {order_resp}")
+        return False
+    if 'orderId' not in order_resp:
+        print(f"⚠️ {order_type} order missing orderId: {order_resp}")
+        return False
+    return True
+
+
+def _with_retry(fn, *args, retries=3, **kwargs):
+    """Retry a function up to N times on failure."""
+    for attempt in range(retries):
+        try:
+            result = fn(*args, **kwargs)
+            if result.get('_http_status', 200) == 200:
+                return result
+        except Exception as e:
+            if attempt < retries - 1:
+                time.sleep(1 * (attempt + 1))
+            else:
+                raise
+    return result
+
+
+# ═══════════════════════════════════════
 # LIVE TRADING
 # ═══════════════════════════════════════
 def run_live():
@@ -51,11 +84,11 @@ def run_live():
     import data.monitor as mon
     from data.socket_server import run_socket_server
     from data.http_api import run_http_server
-    from data.fetcher import fetch_klines
+    from data.fetcher import fetch_klines, fetch_multi_symbol
     from core.features import calculate_features, get_regime_features
     from core.regime_detector import RegimeDetector, REGIME_NAMES
     from core.risk_manager import RiskManager, FeeFilter
-    from strategies.strategies import generate_all_signals
+    from strategies.strategies import generate_all_signals, check_exit_signals
 
     print("=" * 60)
     print(f"  LIVE TRADING - {SYMBOL} {TIMEFRAME}")
@@ -93,14 +126,49 @@ def run_live():
     def monitor_loop():
         while True:
             try:
-                # Update price
-                price = bnb.get_price(SYMBOL)
-                mon.update_price(price)
+                with _position_lock:
+                    # Update price
+                    price = bnb.get_price(SYMBOL)
+                    mon.update_price(price)
 
-                # Sync positions with Binance (check SL/TP)
-                closed = mon.sync_open_positions_with_binance(db)
-                if closed:
-                    db.log("INFO", "monitor", f"Closed {len(closed)} positions", {"ids": closed})
+                    # Get open positions from Redis
+                    open_positions = mon.get_open_positions_from_redis()
+
+                    for pos in open_positions:
+                        # Update trailing stop
+                        new_sl = risk_mgr.update_trailing_stop(pos, price)
+                        if new_sl != float(pos.get('stop_loss', 0)):
+                            print(f"🔄 Updating trailing stop for position #{pos.get('id')}: {pos.get('stop_loss')} → {new_sl}")
+                            pos['stop_loss'] = new_sl
+                            try:
+                                if pos.get('sl_order_id'):
+                                    bnb.cancel_order(pos['symbol'], int(pos['sl_order_id']))
+                            except:
+                                pass
+                            # Place new SL order
+                            sl_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
+                            new_sl_order = bnb.place_stop_loss_order(pos['symbol'], sl_side,
+                                                                      float(pos['quantity']), new_sl)
+                            if new_sl_order.get('orderId'):
+                                pos['sl_order_id'] = new_sl_order['orderId']
+                                mon.publish_position_open(pos['id'], pos)
+
+                        # Check time-based exit
+                        if risk_mgr.should_time_exit(pos):
+                            print(f"⏰ Time exit for position #{pos['id']} - open too long with no profit")
+                            close_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
+                            close_order = bnb.place_market_order(pos['symbol'], close_side,
+                                                                  float(pos['quantity']))
+                            if close_order.get('orderId'):
+                                mon.publish_position_close(pos['id'],
+                                    {'exit_price': price, 'reason': 'Time Exit',
+                                     'pnl': float(pos.get('unrealized_pnl', 0))})
+                                db.log("INFO", "monitor", f"Time exit #{pos['id']}", {})
+
+                    # Sync positions with Binance (check SL/TP)
+                    closed = mon.sync_open_positions_with_binance(db)
+                    if closed:
+                        db.log("INFO", "monitor", f"Closed {len(closed)} positions", {"ids": closed})
 
             except Exception as e:
                 print(f"⚠️  Monitor: {e}")
@@ -206,49 +274,52 @@ def run_live():
 
                     if TRADING_MODE != "paper":
                         try:
-                            sl_resp = bnb.place_stop_loss_order(SYMBOL, exit_side, qty, sig.stop_loss)
-                            sl_oid = sl_resp.get("orderId")
-                            print(f"   🛑 SL order placed: #{sl_oid}")
+                            sl_resp = _with_retry(bnb.place_stop_loss_order, SYMBOL, exit_side, qty, sig.stop_loss)
+                            if _verify_order_placed(sl_resp, "SL"):
+                                sl_oid = sl_resp.get("orderId")
+                                print(f"   🛑 SL order placed: #{sl_oid}")
                         except Exception as e:
                             print(f"   ⚠️  SL order failed: {e}")
 
                         try:
-                            tp_resp = bnb.place_take_profit_order(SYMBOL, exit_side, qty, sig.take_profit)
-                            tp_oid = tp_resp.get("orderId")
-                            print(f"   🎯 TP order placed: #{tp_oid}")
+                            tp_resp = _with_retry(bnb.place_take_profit_order, SYMBOL, exit_side, qty, sig.take_profit)
+                            if _verify_order_placed(tp_resp, "TP"):
+                                tp_oid = tp_resp.get("orderId")
+                                print(f"   🎯 TP order placed: #{tp_oid}")
                         except Exception as e:
                             print(f"   ⚠️  TP order failed: {e}")
 
-                    pos_id = db.open_position_live(
-                        signal_id=sig_id, symbol=SYMBOL,
-                        direction=sig.direction, strategy=sig.strategy,
-                        regime=sig.regime, entry_price=sig.entry_price,
-                        entry_time=now, quantity=qty,
-                        order_data=parsed,
-                        stop_loss=sig.stop_loss, take_profit=sig.take_profit,
-                        risk_reward=sig.risk_reward,
-                        sl_order_id=sl_oid, tp_order_id=tp_oid,
-                    )
+                    with _position_lock:
+                        pos_id = db.open_position_live(
+                            signal_id=sig_id, symbol=SYMBOL,
+                            direction=sig.direction, strategy=sig.strategy,
+                            regime=sig.regime, entry_price=sig.entry_price,
+                            entry_time=now, quantity=qty,
+                            order_data=parsed,
+                            stop_loss=sig.stop_loss, take_profit=sig.take_profit,
+                            risk_reward=sig.risk_reward,
+                            sl_order_id=sl_oid, tp_order_id=tp_oid,
+                        )
 
-                    # Publish to Redis for monitoring
-                    mon.publish_position_open(pos_id, {
-                        "source": "LIVE", "symbol": SYMBOL,
-                        "direction": sig.direction, "strategy": sig.strategy,
-                        "entry_price": sig.entry_price,
-                        "entry_fill_price": parsed.get("fill_price"),
-                        "entry_commission": parsed.get("commission"),
-                        "quantity": qty,
-                        "stop_loss": sig.stop_loss, "take_profit": sig.take_profit,
-                        "sl_order_id": sl_oid, "tp_order_id": tp_oid,
-                        "entry_time": now.isoformat(),
-                    })
+                        # Publish to Redis for monitoring
+                        mon.publish_position_open(pos_id, {
+                            "source": "LIVE", "symbol": SYMBOL,
+                            "direction": sig.direction, "strategy": sig.strategy,
+                            "entry_price": sig.entry_price,
+                            "entry_fill_price": parsed.get("fill_price"),
+                            "entry_commission": parsed.get("commission"),
+                            "quantity": qty,
+                            "stop_loss": sig.stop_loss, "take_profit": sig.take_profit,
+                            "sl_order_id": sl_oid, "tp_order_id": tp_oid,
+                            "entry_time": now.isoformat(),
+                        })
 
-                    db.log("INFO", "trade", f"Opened #{pos_id}", {
-                        "direction": sig.direction, "qty": qty,
-                        "fill": parsed.get("fill_price"),
-                        "fee": parsed.get("commission"),
-                        "sl_order": sl_oid, "tp_order": tp_oid,
-                    })
+                        db.log("INFO", "trade", f"Opened #{pos_id}", {
+                            "direction": sig.direction, "qty": qty,
+                            "fill": parsed.get("fill_price"),
+                            "fee": parsed.get("commission"),
+                            "sl_order": sl_oid, "tp_order": tp_oid,
+                        })
 
                 last_signal_time = last_bar
             else:

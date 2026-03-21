@@ -29,6 +29,7 @@ class BacktestEngine:
         self.fee_filter = FeeFilter()
         self.results = {}
         self.use_db = use_db and HAS_DB
+        self._pos_id_counter = 0  # Counter for position IDs (instead of id())
 
     def run(self, df: pd.DataFrame, train_ratio: float = 0.6) -> dict:
         print("\n" + "=" * 60)
@@ -88,7 +89,7 @@ class BacktestEngine:
             for s in all_signals:
                 ff = s in passed
                 sid = save_signal(s, SYMBOL, fee_filtered=ff)
-                signal_id_map[id(s)] = sid
+                signal_id_map[s.timestamp] = sid  # Use timestamp instead of id()
 
         # Step 7: Execute
         print("\n⚡ Executing backtest...")
@@ -110,8 +111,9 @@ class BacktestEngine:
                     pid = pos_db_ids.get(id(cp))
                     if pid and not getattr(cp, '_db_closed', False):
                         pnl_pct = cp.pnl / (cp.entry_price * cp.quantity) * 100 if cp.quantity > 0 else 0
+                        # Remove the mysterious 0.5 multiplier on exit fees
                         db_close_position(pid, cp.exit_price, cp.exit_time,
-                                          cp.exit_reason, cp.fees_paid * 0.5,
+                                          cp.exit_reason, cp.fees_paid,
                                           cp.pnl, pnl_pct, cp.fees_paid)
                         cp._db_closed = True
 
@@ -123,7 +125,7 @@ class BacktestEngine:
                     if pos:
                         executed += 1
                         if self.use_db:
-                            sid = signal_id_map.get(id(signal), None)
+                            sid = signal_id_map.get(signal.timestamp, None)
                             dbid = db_open_position(
                                 sid, SYMBOL, signal.direction, signal.strategy,
                                 signal.regime, pos.entry_price, idx, pos.quantity,
@@ -141,8 +143,9 @@ class BacktestEngine:
                 pid = pos_db_ids.get(id(cp))
                 if pid and not getattr(cp, '_db_closed', False):
                     pnl_pct = cp.pnl / (cp.entry_price * cp.quantity) * 100 if cp.quantity > 0 else 0
+                    # Remove the mysterious 0.5 multiplier on exit fees
                     db_close_position(pid, cp.exit_price, cp.exit_time,
-                                      cp.exit_reason, cp.fees_paid * 0.5,
+                                      cp.exit_reason, cp.fees_paid,
                                       cp.pnl, pnl_pct, cp.fees_paid)
                     cp._db_closed = True
 
@@ -202,11 +205,48 @@ class BacktestEngine:
                       ("Max Drawdown", t['max_drawdown']),
                       ("Final Capital", f"${t['final_capital']}"),
                       ("Return", t['return_pct']),
-                      ("Sharpe", t['sharpe_approx'])]:
+                      ("Sharpe", t.get('sharpe_ratio', t.get('sharpe_approx', 'N/A')))]:
             print(f"  {k:<25} {str(v):>15}")
 
         for name, stats in t.get('strategy_breakdown', {}).items():
             print(f"  {name}: {stats['trades']}T WR={stats['win_rate']} PnL=${stats['pnl']:.2f}")
+
+    def run_walk_forward(self, df: pd.DataFrame, train_pct: float = 0.6,
+                          step_pct: float = 0.1) -> list:
+        """
+        Walk-forward backtest: train on first 60%, test on next 10%,
+        then expand window and repeat.
+        Returns list of result dicts per window.
+        """
+        results = []
+        n = len(df)
+        train_size = int(n * train_pct)
+        step_size = int(n * step_pct)
+
+        window_start = 0
+        test_start = train_size
+
+        while test_start + step_size <= n:
+            train_df = df.iloc[window_start:test_start]
+            test_df = df.iloc[test_start:test_start + step_size]
+
+            # Train regime detector on this window
+            try:
+                from core.features import calculate_features, get_regime_features
+                train_df_features = calculate_features(train_df)
+                train_feat = get_regime_features(train_df_features).dropna()
+                self.detector.fit(train_df_features, train_feat)
+
+                # Run test
+                result = self.run(test_df, train_ratio=1.0)  # Use full test set
+                results.append(result)
+            except Exception as e:
+                print(f"Walk-forward window failed: {e}")
+
+            # Expand window (anchored walk-forward)
+            test_start += step_size
+
+        return results
 
     def get_trade_log(self) -> pd.DataFrame:
         if not self.closed_positions:

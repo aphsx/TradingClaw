@@ -76,3 +76,21 @@ VOL_ATR_TP_MULT = 4.0
 # ─── Loop ───
 LOOP_INTERVAL_SECONDS = 60
 MONITOR_INTERVAL_SECONDS = 15  # Check positions every 15s
+
+# ─── Multi-Symbol & Multi-Timeframe ───
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+TIMEFRAMES = ["1h", "4h"]
+
+# ─── Trailing Stops ───
+TRAILING_STOP_ACTIVATION = 0.005  # Activate trailing stop at 0.5% profit
+TRAILING_STOP_DISTANCE = 0.003    # Trail 0.3% behind price
+
+# ─── Position Management ───
+MAX_POSITION_AGE_HOURS = 24       # Close if open >24h with no progress
+MIN_WIN_RATE_SAMPLE = 20          # Minimum trades before Kelly sizing kicks in
+KELLY_FRACTION = 0.5              # Use half Kelly to be conservative
+MAX_CORRELATED_POSITIONS = 2      # Max positions with correlation > 0.7
+
+# ─── Volatility Adjustment ───
+VOLATILITY_SCALE_HIGH = 1.5       # Scale down position if vol > 1.5x average
+VOLATILITY_SCALE_LOW = 0.5        # Scale up position if vol < 0.5x average

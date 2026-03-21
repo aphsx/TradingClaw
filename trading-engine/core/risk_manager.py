@@ -7,6 +7,8 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Optional
+from collections import deque
+from datetime import datetime, timezone
 
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -77,12 +79,12 @@ class RiskManager:
     - Daily loss limit
     """
     
-    def __init__(self, initial_capital=INITIAL_CAPITAL, 
+    def __init__(self, initial_capital=INITIAL_CAPITAL,
                  risk_per_trade=RISK_PER_TRADE,
                  max_daily_loss=MAX_DAILY_LOSS,
                  max_drawdown=MAX_DRAWDOWN,
                  max_open_trades=MAX_OPEN_TRADES):
-        
+
         self.initial_capital = initial_capital
         self.capital = initial_capital
         self.peak_capital = initial_capital
@@ -90,13 +92,16 @@ class RiskManager:
         self.max_daily_loss = max_daily_loss
         self.max_drawdown = max_drawdown
         self.max_open_trades = max_open_trades
-        
+
         self.open_positions: List[Position] = []
         self.closed_positions: List[Position] = []
         self.daily_pnl = 0.0
         self.current_date = None
         self.is_circuit_broken = False
         self.equity_curve = []
+
+        # Track trade results for Kelly sizing
+        self.trade_results = deque(maxlen=100)
     
     def reset(self):
         """Reset for new backtest."""
@@ -108,33 +113,72 @@ class RiskManager:
         self.current_date = None
         self.is_circuit_broken = False
         self.equity_curve = []
+        self.trade_results = deque(maxlen=100)
     
-    def calculate_position_size(self, signal) -> float:
+    def _calculate_kelly_size(self) -> float:
+        """Calculate Kelly fraction based on recent trade history."""
+        if len(self.trade_results) < MIN_WIN_RATE_SAMPLE:
+            return RISK_PER_TRADE  # Fall back to fixed sizing
+        recent = list(self.trade_results)[-MIN_WIN_RATE_SAMPLE:]
+        wins = [t for t in recent if t > 0]
+        losses = [t for t in recent if t <= 0]
+        if not wins or not losses:
+            return RISK_PER_TRADE
+        win_rate = len(wins) / len(recent)
+        avg_win = sum(wins) / len(wins)
+        avg_loss = abs(sum(losses) / len(losses))
+        if avg_loss == 0:
+            return RISK_PER_TRADE
+        b = avg_win / avg_loss  # Odds ratio
+        kelly = (b * win_rate - (1 - win_rate)) / b
+        kelly = max(0, kelly) * KELLY_FRACTION  # Half-Kelly
+        return min(kelly, 0.04)  # Cap at 4%
+
+    def _get_vol_adjustment(self, current_atr_pct: float, avg_atr_pct: float) -> float:
+        """Scale position size based on current vs average volatility."""
+        if avg_atr_pct == 0:
+            return 1.0
+        vol_ratio = current_atr_pct / avg_atr_pct
+        if vol_ratio > VOLATILITY_SCALE_HIGH:
+            return 0.5  # High vol: half size
+        elif vol_ratio < VOLATILITY_SCALE_LOW:
+            return 1.5  # Low vol: 1.5x size (capped)
+        return 1.0
+
+    def calculate_position_size(self, signal, current_atr_pct: float = None, avg_atr_pct: float = None) -> float:
         """
-        Calculate position size based on risk per trade.
-        Risk amount = Capital * risk_per_trade
+        Calculate position size based on adaptive Kelly sizing + volatility adjustment.
+        Risk amount = Capital * kelly_size (adaptive)
         Position size = Risk amount / (entry - stop_loss)
         """
         if self.is_circuit_broken:
             return 0.0
-        
-        risk_amount = self.capital * self.risk_per_trade
+
+        # Use adaptive Kelly sizing if we have enough trade history
+        kelly_size = self._calculate_kelly_size()
+
+        risk_amount = self.capital * kelly_size
         risk_per_unit = abs(signal.entry_price - signal.stop_loss)
-        
+
         if risk_per_unit <= 0:
             return 0.0
-        
+
         position_size = risk_amount / risk_per_unit
-        
+
+        # Apply volatility adjustment if ATR data is provided
+        if current_atr_pct is not None and avg_atr_pct is not None:
+            vol_adj = self._get_vol_adjustment(current_atr_pct, avg_atr_pct)
+            position_size *= vol_adj
+
         # Cap at 50% of capital in notional value
         max_notional = self.capital * 0.5
         max_size = max_notional / signal.entry_price
         position_size = min(position_size, max_size)
-        
+
         # Minimum trade size (0.0001 BTC for Binance)
         if position_size * signal.entry_price < 10:  # Min $10 notional
             return 0.0
-        
+
         return round(position_size, 6)
     
     def _get_total_equity(self, current_price: float = None) -> float:
@@ -259,38 +303,83 @@ class RiskManager:
         for pos, exit_price, exit_reason, exit_time in positions_to_close:
             self._close_position(pos, exit_price, exit_reason, exit_time)
     
-    def _close_position(self, position: Position, exit_price: float, 
+    def _close_position(self, position: Position, exit_price: float,
                         reason: str, exit_time: pd.Timestamp):
         """Close a position and update capital."""
         position.exit_price = exit_price
         position.exit_reason = reason
         position.exit_time = exit_time
         position.is_open = False
-        
+
         # Calculate PnL
         if position.signal.direction == "LONG":
             pnl = (exit_price - position.entry_price) * position.quantity
         else:
             pnl = (position.entry_price - exit_price) * position.quantity
-        
+
         # Exit fee
         exit_notional = exit_price * position.quantity
         exit_fee = exit_notional * TAKER_FEE
         position.fees_paid += exit_fee
-        
+
         # Net PnL after all fees
         position.pnl = pnl - position.fees_paid
-        
+
+        # Track trade result for Kelly sizing (as a percentage return)
+        position_cost = position.entry_price * position.quantity
+        if position_cost > 0:
+            pnl_return = position.pnl / position_cost
+            self.trade_results.append(pnl_return)
+
         # Return capital: original notional + PnL - exit fee
         entry_notional = position.entry_price * position.quantity
         self.capital += entry_notional + pnl - exit_fee
         self.daily_pnl += position.pnl
         # peak_capital tracked in record_equity()
-        
+
         # Move to closed
         self.open_positions.remove(position)
         self.closed_positions.append(position)
     
+    def update_trailing_stop(self, position: dict, current_price: float) -> float:
+        """Return new stop loss price if trailing stop should move."""
+        entry = float(position.get('entry_fill_price') or position.get('entry_price', 0))
+        current_sl = float(position.get('stop_loss', 0))
+        direction = position.get('direction', 'LONG')
+        qty = float(position.get('quantity', 0))
+
+        if direction == 'LONG':
+            profit_pct = (current_price - entry) / entry
+            if profit_pct < TRAILING_STOP_ACTIVATION:
+                return current_sl  # Not activated yet
+            new_sl = current_price * (1 - TRAILING_STOP_DISTANCE)
+            return max(new_sl, current_sl)  # Only move up
+        else:  # SHORT
+            profit_pct = (entry - current_price) / entry
+            if profit_pct < TRAILING_STOP_ACTIVATION:
+                return current_sl
+            new_sl = current_price * (1 + TRAILING_STOP_DISTANCE)
+            return min(new_sl, current_sl)  # Only move down
+
+    def should_time_exit(self, position: dict) -> bool:
+        """Return True if position has been open too long without progress."""
+        entry_time_str = position.get('entry_time')
+        if not entry_time_str:
+            return False
+        try:
+            if isinstance(entry_time_str, str):
+                entry_time = datetime.fromisoformat(entry_time_str.replace('Z', '+00:00'))
+            else:
+                entry_time = entry_time_str
+            if entry_time.tzinfo is None:
+                entry_time = entry_time.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
+            unrealized = float(position.get('unrealized_pnl', 0))
+            # Exit if: too old AND not profitable (stuck position)
+            return age_hours > MAX_POSITION_AGE_HOURS and unrealized <= 0
+        except:
+            return False
+
     def force_close_all(self, current_price: float, current_time: pd.Timestamp):
         """Force close all open positions (end of backtest)."""
         for pos in list(self.open_positions):
@@ -367,6 +456,18 @@ class RiskManager:
             "final_capital": round(self.capital, 2),
             "return_pct": f"{(self.capital - self.initial_capital)/self.initial_capital*100:.2f}%",
             "avg_trade_duration_hours": round(np.mean(durations), 1) if durations else 0,
-            "sharpe_approx": round(np.mean(pnls) / max(np.std(pnls), 0.01) * np.sqrt(len(trades)), 2),
+            "sharpe_ratio": self._calculate_sharpe(pnls),
             "strategy_breakdown": strategy_stats
         }
+
+    def _calculate_sharpe(self, pnl_series: list) -> float:
+        """Calculate Sharpe ratio with proper annualization for hourly data."""
+        if len(pnl_series) < 2:
+            return 0.0
+        returns = pd.Series(pnl_series)
+        if returns.std() == 0:
+            return 0.0
+        # Sharpe = mean(returns) / std(returns) * sqrt(periods_per_year)
+        # For hourly data: 24 hours/day * 252 trading days/year
+        sharpe = (returns.mean() / returns.std()) * np.sqrt(24 * 252)
+        return round(sharpe, 2)

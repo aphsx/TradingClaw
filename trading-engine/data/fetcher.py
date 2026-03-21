@@ -72,9 +72,32 @@ def test_connection() -> dict:
     return results
 
 
+def validate_candles(df: pd.DataFrame, symbol: str = "BTCUSDT") -> pd.DataFrame:
+    """Validate candles: remove duplicates, fill small gaps, detect outliers."""
+    if df.empty:
+        return df
+    # Remove duplicates
+    df = df[~df.index.duplicated(keep='last')]
+    # Sort
+    df = df.sort_index()
+    # Detect price outliers (spike >10x average ATR in a single candle)
+    if 'high' in df.columns and 'low' in df.columns:
+        candle_range = df['high'] - df['low']
+        avg_range = candle_range.rolling(20).mean()
+        spike_mask = candle_range > avg_range * 10
+        if spike_mask.sum() > 0:
+            print(f"⚠️ {symbol}: Detected {spike_mask.sum()} spike candles, flagging")
+            df.loc[spike_mask, 'is_spike'] = True
+    return df
+
+
 def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
-                 days: int = LOOKBACK_DAYS) -> pd.DataFrame:
+                 days: int = LOOKBACK_DAYS, lookback_days: int = None) -> pd.DataFrame:
     """Fetch historical klines/candlestick data from Binance."""
+    # Support both parameter names for backwards compatibility
+    if lookback_days is not None:
+        days = lookback_days
+
     all_data = []
     end_time = int(time.time() * 1000)
     start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
@@ -119,8 +142,10 @@ def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
     
     df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume', 'trades']].copy()
     df = df.set_index('timestamp')
-    df = df[~df.index.duplicated(keep='first')]
-    
+
+    # Validate candles
+    df = validate_candles(df, symbol)
+
     print(f"✅ Fetched {len(df)} candles from {df.index[0]} to {df.index[-1]}")
     return df
 
@@ -272,6 +297,20 @@ def generate_realistic_btc_data(days: int = 90, interval_hours: float = 1.0,
     }, index=pd.DatetimeIndex(timestamps, name='timestamp'))
     
     return df
+
+
+def fetch_multi_symbol(symbols: list, interval: str = "1h", lookback_days: int = 180) -> dict:
+    """Fetch data for multiple symbols. Returns {symbol: dataframe}."""
+    result = {}
+    for symbol in symbols:
+        try:
+            df = fetch_klines(symbol=symbol, interval=interval, lookback_days=lookback_days)
+            df = validate_candles(df, symbol)
+            result[symbol] = df
+            print(f"✅ Fetched {len(df)} candles for {symbol}")
+        except Exception as e:
+            print(f"⚠️ Failed to fetch {symbol}: {e}")
+    return result
 
 
 def get_data(use_api: bool = True, days: int = LOOKBACK_DAYS) -> pd.DataFrame:

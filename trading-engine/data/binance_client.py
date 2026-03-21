@@ -33,8 +33,32 @@ def _headers():
     return {"X-MBX-APIKEY": API_KEY}
 
 
+# Global server time offset for clock skew correction
+_server_time_offset = 0
+_last_offset_sync = 0
+
+
+def _sync_server_time():
+    """Sync local time with Binance server time. Cache offset for 60s."""
+    global _server_time_offset, _last_offset_sync
+    now = time.time()
+    if now - _last_offset_sync > 60:  # Resync every 60s
+        try:
+            local_before = int(time.time() * 1000)
+            r = requests.get(f"{BASE_URL}{API_PREFIX}/time", timeout=5)
+            local_after = int(time.time() * 1000)
+            server_time = r.json()["serverTime"]
+            latency = (local_after - local_before) // 2
+            _server_time_offset = server_time - local_before - latency
+            _last_offset_sync = now
+        except Exception:
+            pass  # Keep existing offset if sync fails
+
+
 def _ts():
-    return int(time.time() * 1000)
+    """Get current timestamp with server time offset correction."""
+    _sync_server_time()
+    return int(time.time() * 1000) + _server_time_offset
 
 
 # ═══════════════════════════════════════

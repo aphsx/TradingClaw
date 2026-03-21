@@ -49,14 +49,21 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
     df['volume_std'] = df['volume'].rolling(20).std()
     
     # ─── Volatility measures ───
-    df['volatility_20'] = df['returns'].rolling(20).std() * np.sqrt(24 * 365) * 100
+    # Use daily vol (sqrt(24) for hourly data), not annualized for regime detection
+    df['volatility_20'] = df['returns'].rolling(20).std() * np.sqrt(24) * 100
     df['volatility_ratio'] = df['volatility_20'] / df['volatility_20'].rolling(50).mean()
-    
+
     # ─── VWAP (for intraday) ───
-    df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
-    # Rolling VWAP (20-period)
-    vol_price = df['volume'] * (df['high'] + df['low'] + df['close']) / 3
+    # Cumulative VWAP (since market open)
+    typical_price = (df['high'] + df['low'] + df['close']) / 3
+    df['vwap'] = (df['volume'] * typical_price).cumsum() / df['volume'].cumsum()
+
+    # Rolling VWAP (20-period moving window)
+    vol_price = df['volume'] * typical_price
     df['vwap_20'] = vol_price.rolling(20).sum() / df['volume'].rolling(20).sum()
+
+    # ─── VWAP Distance (normalized by ATR) ───
+    df['vwap_distance'] = (df['close'] - df['vwap_20']) / df['atr_14']  # Price distance from VWAP
     
     # ─── Momentum ───
     df['momentum_10'] = df['close'].pct_change(10) * 100
