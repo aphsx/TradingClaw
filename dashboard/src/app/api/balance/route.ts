@@ -5,10 +5,8 @@ export const dynamic = 'force-dynamic';
 
 const BASE_URL = 'https://api.binance.com';
 
-function sign(params: Record<string, string | number>, secret: string): string {
-  const query = new URLSearchParams(params as any).toString();
-  const sig = crypto.createHmac('sha256', secret).update(query).digest('hex');
-  return `${query}&signature=${sig}`;
+function sign(queryString: string, secret: string): string {
+  return crypto.createHmac('sha256', secret).update(queryString).digest('hex');
 }
 
 export async function GET() {
@@ -16,24 +14,31 @@ export async function GET() {
   const secretKey = process.env.BINANCE_SECRET_KEY;
 
   if (!apiKey || !secretKey) {
-    return NextResponse.json({ error: 'Binance API keys not configured' }, { status: 500 });
+    return NextResponse.json({ error: 'Binance API keys not configured in .env.local' }, { status: 500 });
   }
 
   try {
-    const params = { timestamp: Date.now(), recvWindow: 10000 };
-    const signed = sign(params, secretKey);
+    // Build query string manually (ensure string types, no extra chars)
+    const timestamp = Date.now();
+    const recvWindow = 10000;
+    const queryString = `timestamp=${timestamp}&recvWindow=${recvWindow}`;
+    const signature = sign(queryString, secretKey);
+    const url = `${BASE_URL}/api/v3/account?${queryString}&signature=${signature}`;
 
-    const res = await fetch(`${BASE_URL}/api/v3/account?${signed}`, {
+    const res = await fetch(url, {
       headers: { 'X-MBX-APIKEY': apiKey },
       cache: 'no-store',
     });
 
-    if (!res.ok) {
-      const err = await res.json();
-      return NextResponse.json({ error: err.msg || 'Binance error' }, { status: res.status });
-    }
-
     const data = await res.json();
+
+    if (!res.ok) {
+      // Return full Binance error so we can debug
+      return NextResponse.json(
+        { error: data.msg || 'Binance error', binance_code: data.code, status: res.status },
+        { status: res.status }
+      );
+    }
 
     // Extract all non-zero balances
     const balances: Record<string, { free: number; locked: number; total: number }> = {};
@@ -45,7 +50,6 @@ export async function GET() {
       }
     }
 
-    // USDT is the main quote currency
     const usdt = balances['USDT'] ?? { free: 0, locked: 0, total: 0 };
 
     return NextResponse.json({

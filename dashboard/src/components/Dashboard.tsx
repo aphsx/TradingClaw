@@ -34,19 +34,38 @@ export default function Dashboard({ data }: { data: any }) {
   const [tab, setTab] = useState<'live' | 'positions' | 'backtest'>('live');
   const [liveData, setLiveData] = useState<any>(null);
   const [balanceData, setBalanceData] = useState<any>(null);
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Auto-refresh positions every 10s
+  // Auto-refresh every 10s
   const fetchLive = useCallback(async () => {
+    // Positions + Stats (DB/Redis)
     try {
-      const [posRes, statsRes, balRes] = await Promise.all([
+      const [posRes, statsRes] = await Promise.all([
         fetch('/api/positions').then(r => r.json()),
         fetch('/api/stats?source=LIVE').then(r => r.json()),
-        fetch('/api/balance').then(r => r.json()),
       ]);
+      // Show DB/Redis errors if any but still render
+      const errs = [...(posRes._errors || []), ...(statsRes._errors || [])];
+      setBackendError(errs.length > 0 ? errs[0] : null);
       setLiveData({ positions: posRes, stats: statsRes });
-      if (!balRes.error) setBalanceData(balRes);
-    } catch {}
+    } catch (e: any) {
+      setBackendError(e.message);
+    }
+
+    // Balance (Binance direct) — separate so a Binance error doesn't block the rest
+    try {
+      const balRes = await fetch('/api/balance').then(r => r.json());
+      if (balRes.error) {
+        setBalanceError(`${balRes.error}${balRes.binance_code ? ` (code ${balRes.binance_code})` : ''}`);
+      } else {
+        setBalanceData(balRes);
+        setBalanceError(null);
+      }
+    } catch (e: any) {
+      setBalanceError(e.message);
+    }
   }, []);
 
   useEffect(() => {
@@ -100,18 +119,24 @@ export default function Dashboard({ data }: { data: any }) {
           <p className="text-sm text-gray-500">BTCUSDT · Binance · Real-time Monitor</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
-          {/* Balance card — always visible, data from Binance API */}
-          <div className="flex items-center gap-3 bg-[#12121a] border border-[#1e1e2e] rounded-lg px-4 py-2">
-            <DollarSign size={14} className="text-green-400 shrink-0" />
+          {/* Balance card — always visible */}
+          <div className={`flex items-center gap-3 bg-[#12121a] border rounded-lg px-4 py-2 ${balanceError ? 'border-red-900/50' : 'border-[#1e1e2e]'}`}>
+            <DollarSign size={14} className={balanceError ? 'text-red-500 shrink-0' : 'text-green-400 shrink-0'} />
             <div>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 leading-none mb-0.5">USDT Balance</div>
-              <div className="text-base font-bold text-green-400 leading-none">
-                {usdtTotal !== null
-                  ? `$${usdtTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                  : <span className="text-gray-600 text-sm">Loading…</span>}
-              </div>
+              {balanceError ? (
+                <div className="text-xs text-red-400 leading-none max-w-[200px] truncate" title={balanceError}>
+                  {balanceError}
+                </div>
+              ) : usdtTotal !== null ? (
+                <div className="text-base font-bold text-green-400 leading-none">
+                  ${usdtTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              ) : (
+                <div className="text-gray-600 text-xs leading-none">connecting…</div>
+              )}
             </div>
-            {usdtFree !== null && (
+            {!balanceError && usdtFree !== null && (
               <div className="border-l border-[#1e1e2e] pl-3">
                 <div className="text-[10px] uppercase tracking-wider text-gray-500 leading-none mb-0.5">Available</div>
                 <div className="text-sm font-semibold text-gray-300 leading-none">
@@ -119,7 +144,7 @@ export default function Dashboard({ data }: { data: any }) {
                 </div>
               </div>
             )}
-            {usdtLocked !== null && usdtLocked > 0 && (
+            {!balanceError && usdtLocked !== null && usdtLocked > 0 && (
               <div className="border-l border-[#1e1e2e] pl-3">
                 <div className="text-[10px] uppercase tracking-wider text-gray-500 leading-none mb-0.5">In orders</div>
                 <div className="text-sm font-semibold text-amber-400 leading-none">
@@ -127,7 +152,7 @@ export default function Dashboard({ data }: { data: any }) {
                 </div>
               </div>
             )}
-            {unrealizedPnl !== null && (
+            {!balanceError && unrealizedPnl !== null && (
               <div className="border-l border-[#1e1e2e] pl-3">
                 <div className="text-[10px] uppercase tracking-wider text-gray-500 leading-none mb-0.5">Unrealized</div>
                 <div className={`text-sm font-semibold leading-none ${unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -136,6 +161,14 @@ export default function Dashboard({ data }: { data: any }) {
               </div>
             )}
           </div>
+
+          {/* Backend (DB/Redis) error badge */}
+          {backendError && (
+            <div className="flex items-center gap-2 bg-[#12121a] border border-red-900/50 rounded-lg px-3 py-2" title={backendError}>
+              <div className="w-2 h-2 rounded-full bg-red-500" />
+              <span className="text-xs text-red-400">DB offline</span>
+            </div>
+          )}
 
           {/* Engine status */}
           <div className="flex items-center gap-2 bg-[#12121a] border border-[#1e1e2e] rounded-lg px-3 py-2">
