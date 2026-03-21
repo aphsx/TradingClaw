@@ -1,9 +1,6 @@
 version: "3.8"
 
 services:
-  # ═══════════════════════════════════════
-  # MySQL Database
-  # ═══════════════════════════════════════
   db:
     image: mysql:8.0
     container_name: regime_db
@@ -24,9 +21,20 @@ services:
       timeout: 5s
       retries: 5
 
-  # ═══════════════════════════════════════
-  # Trading Engine (Python)
-  # ═══════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: regime_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   trading-engine:
     build: ./trading-engine
     container_name: regime_engine
@@ -34,24 +42,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       - DB_HOST=db
       - DB_PORT=3306
       - DB_NAME=${MYSQL_DATABASE:-regime_trader}
       - DB_USER=${MYSQL_USER:-trader}
       - DB_PASSWORD=${MYSQL_PASSWORD:-trader_pass_2026}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - BINANCE_API_KEY=${BINANCE_API_KEY}
       - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
-      - TRADING_MODE=${TRADING_MODE:-backtest}
+      - TRADING_MODE=${TRADING_MODE:-live}
       - SYMBOL=${SYMBOL:-BTCUSDT}
       - TIMEFRAME=${TIMEFRAME:-1h}
     volumes:
       - ./trading-engine:/app
-      - engine_output:/app/output
 
-  # ═══════════════════════════════════════
-  # Next.js Dashboard
-  # ═══════════════════════════════════════
   dashboard:
     build: ./dashboard
     container_name: regime_dashboard
@@ -59,16 +67,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=mysql://${MYSQL_USER:-trader}:${MYSQL_PASSWORD:-trader_pass_2026}@db:3306/${MYSQL_DATABASE:-regime_trader}
       - DB_HOST=db
       - DB_PORT=3306
       - DB_NAME=${MYSQL_DATABASE:-regime_trader}
       - DB_USER=${MYSQL_USER:-trader}
       - DB_PASSWORD=${MYSQL_PASSWORD:-trader_pass_2026}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
 
 volumes:
   mysql_data:
-  engine_output:
+  redis_data:

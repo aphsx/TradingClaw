@@ -1,23 +1,31 @@
 import { NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const status = searchParams.get('status') || 'all';
+    const source = searchParams.get('source') || 'LIVE';
     const limit = parseInt(searchParams.get('limit') || '100');
 
-    let sql = 'SELECT * FROM positions';
-    const params: any[] = [];
+    const rows = await query(
+      `SELECT id, source, symbol, direction, strategy, regime, status,
+              entry_price, entry_time, quantity,
+              entry_order_id, entry_client_oid, entry_fill_price, entry_fill_qty,
+              entry_commission, entry_commission_asset, entry_status,
+              exit_price, exit_time, exit_reason,
+              exit_order_id, exit_client_oid, exit_fill_price, exit_fill_qty,
+              exit_commission, exit_commission_asset, exit_status,
+              pnl, pnl_pct, total_fees, stop_loss, take_profit, risk_reward,
+              created_at
+       FROM positions
+       WHERE source = ? AND status = 'CLOSED'
+       ORDER BY exit_time DESC
+       LIMIT ?`,
+      [source, limit]
+    );
 
-    if (status !== 'all') {
-      sql += ' WHERE status = ?';
-      params.push(status.toUpperCase());
-    }
-    sql += ' ORDER BY entry_time DESC LIMIT ?';
-    params.push(limit);
-
-    const rows = await query(sql, params);
     return NextResponse.json(rows);
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

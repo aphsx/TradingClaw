@@ -1,183 +1,176 @@
-# Regime Detection Trading System v2
-## Docker + Next.js Dashboard + MySQL + Binance API
+# Regime Detection Trading System v3
+## Docker + MySQL + Redis + Next.js + Binance API
 
-ระบบเทรด Crypto อัจฉริยะที่ใช้ Machine Learning ตรวจจับ Market Regime
-แล้วสลับ Strategy ให้เหมาะสมอัตโนมัติ พร้อม Dashboard แบบ Real-time
+ระบบเทรด Crypto ที่ใช้ ML ตรวจจับ Market Regime แล้วสลับ Strategy อัตโนมัติ
+พร้อม **real-time position monitoring** และ **ข้อมูลเทรดจริงจาก Binance**
+
+---
+
+## สิ่งที่เปลี่ยนจาก v2
+
+| เรื่อง | v2 | v3 |
+|--------|----|----|
+| Position monitor | ไม่มี | Redis real-time (ทุก 15 วินาที) |
+| ข้อมูล order | คำนวณเอง | จาก Binance API จริง (order ID, fill price, commission) |
+| Backtest ↔ Live | ปนกัน | แยก `source` column ชัดเจน |
+| Dashboard เปิดใหม่ | มี trade ปลอม | ว่างเปล่า จนกว่าจะเทรดจริง |
+| SL/TP | คำนวณใน engine | ยิง order จริงบน Binance แล้ว monitor fill |
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Docker Compose                     │
-├──────────────┬──────────────┬───────────────────────┤
-│  MySQL 8.0   │  Trading     │  Next.js Dashboard    │
-│  Port: 3306  │  Engine      │  Port: 3000           │
-│              │  (Python)    │  (React + Recharts)   │
-│  - candles   │              │                       │
-│  - regimes   │  - Backtest  │  - Equity Curve       │
-│  - signals   │  - Live Loop │  - Trade Log          │
-│  - positions │  - ML Model  │  - Position Monitor   │
-│  - equity    │  - Binance   │  - Regime Display     │
-│  - logs      │    API       │  - Strategy Stats     │
-└──────────────┴──────────────┴───────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Docker Compose                            │
+├────────────┬────────────┬───────────────┬───────────────────┤
+│  MySQL 8   │  Redis 7   │  Trading      │  Next.js          │
+│  :3306     │  :6379     │  Engine       │  Dashboard :3000   │
+│            │            │  (Python)     │                    │
+│ positions  │ pos:open:* │              │  Live Trades        │
+│ signals    │ monitor:*  │  Main Loop:  │  Open Positions     │
+│ candles    │            │  ① Fetch     │  (auto-refresh 10s) │
+│ regimes    │ Pub/Sub:   │  ② Features  │                    │
+│ equity     │ positions  │  ③ Regime ML │  Backtest History   │
+│ logs       │            │  ④ Signals   │  (separate tab)     │
+│            │            │  ⑤ Order     │                    │
+│            │            │              │  Binance Details:   │
+│            │            │  Monitor:    │  · Order ID         │
+│            │            │  · Price     │  · Fill Price       │
+│            │            │  · SL/TP     │  · Commission       │
+│            │            │  · Sync      │  · Commission Asset │
+└────────────┴────────────┴───────────────┴───────────────────┘
 ```
+
+---
 
 ## Quick Start
 
 ```bash
-# 1. Clone / unzip the project
-cd regime-trader-pro
-
-# 2. Edit .env with your Binance API keys
+# 1. แก้ .env ใส่ API key
 nano .env
 
-# 3. Start everything
+# 2. Start ทุกอย่าง
 docker compose up --build
 
-# 4. Open Dashboard
-# http://localhost:3000
+# 3. เปิด Dashboard
+open http://localhost:3000
 ```
 
-## Services
-
-### MySQL Database (Port 3306)
-เก็บข้อมูลทั้งหมด:
-- `candles` - ข้อมูลราคา OHLCV
-- `regimes` - ผล regime detection (Trending/Ranging/Volatile)
-- `signals` - สัญญาณเทรดที่ generate ได้
-- `positions` - ตำแหน่งเปิด/ปิด + PnL
-- `equity_curve` - equity over time
-- `backtest_runs` - ประวัติ backtest
-- `system_log` - log ระบบ
-
-### Trading Engine (Python)
-ใจกลางของระบบ:
-- **Regime Detector** - Random Forest ML จำแนก market regime
-- **3 Strategies** - Trend (EMA Cross), Range (BB+RSI), Volatile (Momentum)
-- **Fee Filter** - กรอง trade ที่ expected profit < 3× fee
-- **Risk Manager** - Position sizing, max drawdown, daily loss limit
-- **Binance API** - ดึงข้อมูล + ยิง order
-
-### Next.js Dashboard (Port 3000)
-หน้าจอ monitoring:
-- **Overview** - Key metrics, equity curve, PnL chart, regime pie
-- **Trades** - รายละเอียดทุก trade
-- **Positions** - Monitor open positions แบบ real-time
+---
 
 ## Trading Modes
 
 ```bash
-# Backtest (default) - ใช้ synthetic/historical data
-TRADING_MODE=backtest docker compose up
-
-# Live Trading - เทรดจริงบน Binance
+# Live: ดึงข้อมูลจริง + ยิง order จริง
 TRADING_MODE=live docker compose up
 
-# Paper Trading - signals only, ไม่ยิง order
+# Paper: ดึงข้อมูลจริง + ไม่ยิง order (จำลอง)
 TRADING_MODE=paper docker compose up
+
+# Backtest: synthetic data + backtest only
+TRADING_MODE=backtest docker compose up
 ```
 
-## Commands (Standalone, no Docker)
+---
+
+## Live Trading Flow
+
+```
+1. Engine เปิด → เชื่อม MySQL + Redis + Binance
+2. ทุกๆ 60 วินาที:
+   a. Fetch OHLCV จาก Binance
+   b. คำนวณ features → ตรวจ regime
+   c. Generate signals → ผ่าน fee filter
+   d. ถ้ามี signal ใหม่:
+      - ยิง MARKET order (entry)
+      - ยิง STOP_LOSS_LIMIT order (SL)
+      - ยิง TAKE_PROFIT_LIMIT order (TP)
+      - บันทึก fill details จริงจาก Binance ลง MySQL
+      - Publish position ลง Redis
+
+3. Monitor thread (ทุก 15 วินาที):
+   a. อัพเดทราคาล่าสุด
+   b. คำนวณ Unrealized PnL ทุก position
+   c. เช็คว่า SL/TP orders ถูก fill หรือยัง
+   d. ถ้า filled → บันทึก exit details จริง → cancel ฝั่งตรงข้าม → ลบจาก Redis
+```
+
+---
+
+## ข้อมูลที่เก็บจาก Binance (ไม่ใช่คำนวณเอง)
+
+ทุก trade ที่เกิดขึ้นจะเก็บ:
+
+| Field | Description |
+|-------|-------------|
+| `entry_order_id` | Binance orderId ของ entry order |
+| `entry_client_oid` | Client order ID ที่เราตั้ง |
+| `entry_fill_price` | ราคา fill เฉลี่ยจริง (avg of fills) |
+| `entry_fill_qty` | จำนวนที่ fill จริง |
+| `entry_commission` | ค่า fee จริงจาก Binance |
+| `entry_commission_asset` | สกุลที่จ่าย fee (BNB, USDT, etc.) |
+| `entry_raw` | Full JSON response จาก Binance |
+| `exit_order_id` | Binance orderId ของ exit order |
+| `exit_fill_price` | ราคา fill exit จริง |
+| `exit_commission` | ค่า fee exit จริง |
+| `exit_raw` | Full JSON response |
+
+---
+
+## Dashboard Tabs
+
+### 1. Live Trades
+- แสดง **เฉพาะ trade จริง** ที่เกิดบน Binance
+- เปิดใหม่ = ว่างเปล่า (ไม่มี trade ปลอม)
+- แสดง: Order ID, fill price, commission จาก Binance
+
+### 2. Open Positions
+- **Real-time** จาก Redis (auto-refresh ทุก 10 วินาที)
+- แสดง: Entry fill price, current price, unrealized PnL, SL/TP levels
+- ค่า fee จริงจาก Binance
+
+### 3. Backtest History
+- แยกจาก live ชัดเจน
+- ข้อมูลจาก backtest runs เท่านั้น
+
+---
+
+## Redis Keys
+
+| Key | Description |
+|-----|-------------|
+| `pos:open:{id}` | JSON ของ open position (รวม unrealized PnL) |
+| `pos:open_ids` | SET ของ ID ที่ยังเปิดอยู่ |
+| `monitor:last_price` | ราคาล่าสุด |
+| `monitor:equity` | Equity snapshot |
+| `monitor:regime` | Current regime + confidence |
+| `monitor:status` | Engine status (running/error) |
+
+---
+
+## Access MySQL
 
 ```bash
-cd trading-engine
-
-# Install
-pip install -r requirements.txt
-
-# Backtest
-python main.py --mode backtest
-
-# Test API
-python main.py --mode test-api
-
-# Live
-python main.py --mode live
-```
-
-## File Structure
-
-```
-regime-trader-pro/
-├── docker-compose.yml         # Orchestration
-├── .env                       # API keys + config
-├── db/
-│   └── init.sql               # MySQL schema (auto-run)
-├── trading-engine/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── config.py              # All parameters
-│   ├── main.py                # Entry point
-│   ├── core/
-│   │   ├── features.py        # Technical indicators
-│   │   ├── regime_detector.py # ML regime classifier
-│   │   └── risk_manager.py    # Position sizing + risk
-│   ├── strategies/
-│   │   └── strategies.py      # Trend/Range/Volatile
-│   ├── data/
-│   │   ├── database.py        # MySQL operations
-│   │   └── fetcher.py         # Binance API + synthetic
-│   └── backtest/
-│       └── engine.py          # Full backtest pipeline
-└── dashboard/
-    ├── Dockerfile
-    ├── package.json
-    ├── next.config.js
-    ├── tailwind.config.js
-    └── src/
-        ├── lib/db.ts           # MySQL connection
-        ├── app/
-        │   ├── layout.tsx
-        │   ├── page.tsx        # Main page (SSR)
-        │   ├── globals.css
-        │   └── api/            # REST endpoints
-        │       ├── stats/
-        │       ├── trades/
-        │       ├── equity/
-        │       ├── positions/
-        │       └── regimes/
-        └── components/
-            └── Dashboard.tsx   # Main dashboard UI
-```
-
-## Customization
-
-### เปลี่ยน Parameters
-แก้ไฟล์ `trading-engine/config.py` หรือ set ผ่าน `.env`:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| SYMBOL | BTCUSDT | คู่เทรด |
-| TIMEFRAME | 1h | Timeframe |
-| INITIAL_CAPITAL | 10000 | ทุนเริ่มต้น (USDT) |
-| RISK_PER_TRADE | 0.02 | Risk 2% per trade |
-| MAX_DRAWDOWN | 0.15 | หยุดเทรดถ้า DD > 15% |
-| FEE_MULTIPLIER | 3.0 | Min profit ≥ 3× fee |
-
-### เพิ่ม Strategy ใหม่
-1. สร้าง class ใน `strategies/strategies.py`
-2. เพิ่มใน `STRATEGY_MAP`
-3. เพิ่ม regime ใหม่ใน `regime_detector.py` ถ้าจำเป็น
-
-## Access MySQL Direct
-
-```bash
-# Connect to MySQL
 docker exec -it regime_db mysql -utrader -ptrader_pass_2026 regime_trader
 
-# Check trades
-SELECT * FROM positions ORDER BY entry_time DESC LIMIT 10;
+-- ดู live trades (ของจริง)
+SELECT id, direction, strategy, entry_fill_price, exit_fill_price,
+       entry_commission, exit_commission, pnl, exit_reason
+FROM positions WHERE source='LIVE' ORDER BY entry_time DESC;
 
-# Check equity
-SELECT * FROM equity_curve ORDER BY timestamp DESC LIMIT 5;
+-- ดู backtest (จำลอง)
+SELECT * FROM positions WHERE source='BACKTEST' LIMIT 10;
 
-# Regime distribution
+-- Regime distribution
 SELECT regime_name, COUNT(*) FROM regimes GROUP BY regime_name;
 ```
 
-## ⚠️ Important
+---
 
-1. **เปลี่ยน API Key** หลังทดสอบเสร็จ!
-2. ระบบนี้เหมาะสำหรับ **Demo/Paper trading** ก่อน
+## ⚠️ สำคัญ
+
+1. **เปลี่ยน API Key** ใน `.env` ก่อนใช้งาน!
+2. ระบบเหมาะสำหรับ **Demo account** หรือ **Paper mode** ก่อน
 3. ทดสอบ backtest ให้ดีก่อนเทรดจริง
-4. Cryptocurrency trading มีความเสี่ยงสูง - ใช้เงินที่พร้อมจะเสียได้เท่านั้น
+4. Crypto trading มีความเสี่ยงสูง

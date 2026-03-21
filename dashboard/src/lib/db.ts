@@ -22,3 +22,41 @@ export async function query(sql: string, params?: any[]) {
   const [rows] = await db.execute(sql, params);
   return rows;
 }
+
+// ─── Redis helper ───
+import Redis from 'ioredis';
+
+let redis: Redis | null = null;
+
+export function getRedis() {
+  if (!redis) {
+    redis = new Redis({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT || '6379'),
+      maxRetriesPerRequest: 3,
+      lazyConnect: true,
+    });
+  }
+  return redis;
+}
+
+export async function redisGet(key: string) {
+  try {
+    const r = getRedis();
+    await r.connect().catch(() => {});
+    const val = await r.get(key);
+    return val ? JSON.parse(val) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function redisSmembers(key: string) {
+  try {
+    const r = getRedis();
+    await r.connect().catch(() => {});
+    return await r.smembers(key);
+  } catch {
+    return [];
+  }
+}

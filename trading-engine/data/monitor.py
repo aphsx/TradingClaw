@@ -1,0 +1,253 @@
+"""
+Position Monitor - Real-time position tracking via Redis + Binance
+===================================================================
+- Stores live position state in Redis for instant dashboard reads
+- Periodically syncs with Binance to get actual order status
+- Detects SL/TP fills and updates MySQL
+"""
+import json
+import time
+import redis
+import traceback
+from datetime import datetime
+from typing import Optional
+
+from config import SYMBOL
+from data import binance_client as bnb
+
+import os
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+
+_redis = None
+
+def get_redis():
+    global _redis
+    if _redis is None:
+        _redis = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0,
+                             decode_responses=True, socket_connect_timeout=5)
+    return _redis
+
+
+# ═══════════════════════════════════════
+# REDIS KEYS
+# ═══════════════════════════════════════
+# pos:open:{pos_id}        → JSON of open position
+# pos:open_ids             → SET of open position IDs
+# monitor:last_price       → latest price
+# monitor:last_check       → timestamp of last sync
+# monitor:equity           → current equity snapshot
+# monitor:regime           → current regime info
+# monitor:status           → "running" / "stopped" / "error"
+
+
+def publish_position_open(pos_id: int, data: dict):
+    """Write a new open position to Redis."""
+    r = get_redis()
+    key = f"pos:open:{pos_id}"
+    r.set(key, json.dumps(data, default=str))
+    r.sadd("pos:open_ids", pos_id)
+    r.publish("positions", json.dumps({"event": "open", "id": pos_id, **data}, default=str))
+
+
+def publish_position_close(pos_id: int, data: dict):
+    """Mark position as closed in Redis."""
+    r = get_redis()
+    key = f"pos:open:{pos_id}"
+    r.delete(key)
+    r.srem("pos:open_ids", pos_id)
+    r.publish("positions", json.dumps({"event": "close", "id": pos_id, **data}, default=str))
+
+
+def get_open_positions_from_redis() -> list:
+    """Get all open positions from Redis (fast, no DB hit)."""
+    r = get_redis()
+    ids = r.smembers("pos:open_ids")
+    positions = []
+    for pid in ids:
+        data = r.get(f"pos:open:{pid}")
+        if data:
+            pos = json.loads(data)
+            pos["id"] = int(pid)
+            positions.append(pos)
+    return positions
+
+
+def update_price(price: float):
+    """Update latest price and recalc unrealized PnL for all open positions."""
+    r = get_redis()
+    r.set("monitor:last_price", str(price))
+    r.set("monitor:last_check", datetime.utcnow().isoformat())
+
+    # Update unrealized PnL for each open position
+    positions = get_open_positions_from_redis()
+    total_unrealized = 0.0
+    for pos in positions:
+        entry = float(pos.get("entry_fill_price") or pos.get("entry_price", 0))
+        qty = float(pos.get("quantity", 0))
+        if pos.get("direction") == "LONG":
+            upnl = (price - entry) * qty
+        else:
+            upnl = (entry - price) * qty
+        pos["unrealized_pnl"] = round(upnl, 4)
+        pos["current_price"] = price
+        pos["pnl_pct"] = round(upnl / (entry * qty) * 100, 2) if entry * qty > 0 else 0
+        total_unrealized += upnl
+        # Re-save with updated unrealized
+        r.set(f"pos:open:{pos['id']}", json.dumps(pos, default=str))
+
+    return total_unrealized
+
+
+def update_equity(equity: float, capital: float, unrealized: float, n_open: int):
+    r = get_redis()
+    r.set("monitor:equity", json.dumps({
+        "equity": round(equity, 2),
+        "capital": round(capital, 2),
+        "unrealized": round(unrealized, 2),
+        "open_positions": n_open,
+        "timestamp": datetime.utcnow().isoformat(),
+    }))
+
+
+def update_regime(regime_name: str, confidence: float, probs: dict):
+    r = get_redis()
+    r.set("monitor:regime", json.dumps({
+        "regime": regime_name,
+        "confidence": round(confidence, 4),
+        "probabilities": probs,
+        "timestamp": datetime.utcnow().isoformat(),
+    }))
+
+
+def set_status(status: str, message: str = ""):
+    r = get_redis()
+    r.set("monitor:status", json.dumps({
+        "status": status,
+        "message": message,
+        "timestamp": datetime.utcnow().isoformat(),
+    }))
+
+
+def get_status() -> dict:
+    r = get_redis()
+    data = r.get("monitor:status")
+    return json.loads(data) if data else {"status": "unknown"}
+
+
+# ═══════════════════════════════════════
+# BINANCE SYNC - check if SL/TP orders filled
+# ═══════════════════════════════════════
+
+def sync_open_positions_with_binance(db_module) -> list:
+    """
+    Check each open LIVE position's exit orders on Binance.
+    If an SL or TP order has been FILLED, close the position in DB + Redis.
+    Returns list of newly closed position IDs.
+    """
+    closed = []
+    positions = get_open_positions_from_redis()
+
+    for pos in positions:
+        if pos.get("source") != "LIVE":
+            continue
+
+        try:
+            # Check SL order
+            sl_oid = pos.get("sl_order_id")
+            if sl_oid:
+                sl_status = bnb.get_order(pos["symbol"], int(sl_oid))
+                if sl_status.get("status") == "FILLED":
+                    _handle_exit_fill(pos, sl_status, "Stop Loss", db_module)
+                    closed.append(pos["id"])
+                    continue
+
+            # Check TP order
+            tp_oid = pos.get("tp_order_id")
+            if tp_oid:
+                tp_status = bnb.get_order(pos["symbol"], int(tp_oid))
+                if tp_status.get("status") == "FILLED":
+                    _handle_exit_fill(pos, tp_status, "Take Profit", db_module)
+                    closed.append(pos["id"])
+                    continue
+
+        except Exception as e:
+            print(f"⚠️ Sync error for position {pos.get('id')}: {e}")
+
+    return closed
+
+
+def _handle_exit_fill(pos: dict, order_resp: dict, reason: str, db_module):
+    """Process a filled exit order: update MySQL, remove from Redis, cancel other side."""
+    parsed = bnb.parse_order_response(order_resp) if order_resp.get("fills") else {
+        "order_id": order_resp.get("orderId"),
+        "fill_price": float(order_resp.get("price", 0)),
+        "fill_qty": float(order_resp.get("executedQty", 0)),
+        "commission": 0,
+        "commission_asset": "",
+        "status": order_resp.get("status"),
+    }
+
+    # Get actual trades for accurate commission
+    if parsed.get("order_id"):
+        trades = bnb.get_order_trades(pos["symbol"], parsed["order_id"])
+        total_comm = sum(float(t.get("commission", 0)) for t in trades)
+        comm_asset = trades[0].get("commissionAsset", "") if trades else ""
+        avg_price = (sum(float(t["price"]) * float(t["qty"]) for t in trades)
+                     / sum(float(t["qty"]) for t in trades)) if trades else parsed.get("fill_price", 0)
+        parsed["commission"] = total_comm
+        parsed["commission_asset"] = comm_asset
+        parsed["fill_price"] = avg_price
+
+    # Calculate PnL
+    entry = float(pos.get("entry_fill_price") or pos.get("entry_price", 0))
+    exit_p = parsed.get("fill_price", 0)
+    qty = float(pos.get("quantity", 0))
+    entry_comm = float(pos.get("entry_commission") or 0)
+    exit_comm = parsed.get("commission", 0)
+
+    if pos.get("direction") == "LONG":
+        raw_pnl = (exit_p - entry) * qty
+    else:
+        raw_pnl = (entry - exit_p) * qty
+
+    net_pnl = raw_pnl - entry_comm - exit_comm
+    pnl_pct = net_pnl / (entry * qty) * 100 if entry * qty > 0 else 0
+
+    # Update MySQL
+    db_module.close_position_live(
+        position_id=pos["id"],
+        exit_price=exit_p,
+        exit_time=datetime.utcnow(),
+        exit_reason=reason,
+        exit_order_id=parsed.get("order_id"),
+        exit_client_oid=parsed.get("client_order_id"),
+        exit_fill_price=exit_p,
+        exit_fill_qty=parsed.get("fill_qty"),
+        exit_commission=exit_comm,
+        exit_commission_asset=parsed.get("commission_asset"),
+        exit_status=parsed.get("status"),
+        exit_raw=order_resp,
+        pnl=net_pnl,
+        pnl_pct=pnl_pct,
+        total_fees=entry_comm + exit_comm,
+    )
+
+    # Cancel the other side order
+    try:
+        if reason == "Stop Loss" and pos.get("tp_order_id"):
+            bnb.cancel_order(pos["symbol"], int(pos["tp_order_id"]))
+        elif reason == "Take Profit" and pos.get("sl_order_id"):
+            bnb.cancel_order(pos["symbol"], int(pos["sl_order_id"]))
+    except Exception:
+        pass
+
+    # Remove from Redis
+    publish_position_close(pos["id"], {
+        "exit_price": exit_p, "reason": reason,
+        "pnl": round(net_pnl, 4), "pnl_pct": round(pnl_pct, 2),
+        "commission": round(exit_comm, 6),
+    })
+
+    print(f"✅ Position #{pos['id']} closed: {reason} @ ${exit_p:,.2f} "
+          f"PnL=${net_pnl:.2f} Fee=${exit_comm:.6f} {parsed.get('commission_asset','')}")

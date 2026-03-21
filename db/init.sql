@@ -1,11 +1,7 @@
--- ═══════════════════════════════════════════════════
--- REGIME DETECTION TRADING SYSTEM - DATABASE SCHEMA
--- ═══════════════════════════════════════════════════
-
 CREATE DATABASE IF NOT EXISTS regime_trader;
 USE regime_trader;
 
--- ─── Market Data Cache ───
+-- ─── Market Data ───
 CREATE TABLE IF NOT EXISTS candles (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     symbol VARCHAR(20) NOT NULL,
@@ -17,19 +13,19 @@ CREATE TABLE IF NOT EXISTS candles (
     close DECIMAL(20,8) NOT NULL,
     volume DECIMAL(20,8) NOT NULL,
     quote_volume DECIMAL(20,8),
-    trades INT,
+    num_trades INT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_candle (symbol, timeframe, timestamp),
-    INDEX idx_symbol_time (symbol, timeframe, timestamp)
+    INDEX idx_sym_tf_ts (symbol, timeframe, timestamp)
 ) ENGINE=InnoDB;
 
--- ─── Regime Classification Log ───
+-- ─── Regime Log ───
 CREATE TABLE IF NOT EXISTS regimes (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     symbol VARCHAR(20) NOT NULL,
     timeframe VARCHAR(10) NOT NULL,
     timestamp DATETIME NOT NULL,
-    regime TINYINT NOT NULL COMMENT '0=Trending, 1=Ranging, 2=Volatile',
+    regime TINYINT NOT NULL,
     regime_name VARCHAR(20) NOT NULL,
     confidence DECIMAL(5,4),
     prob_trending DECIMAL(5,4),
@@ -37,18 +33,18 @@ CREATE TABLE IF NOT EXISTS regimes (
     prob_volatile DECIMAL(5,4),
     adx DECIMAL(10,4),
     atr_pct DECIMAL(10,4),
-    volatility DECIMAL(10,4),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uq_regime (symbol, timeframe, timestamp),
-    INDEX idx_regime_time (symbol, timestamp)
+    UNIQUE KEY uq_regime (symbol, timeframe, timestamp)
 ) ENGINE=InnoDB;
 
--- ─── Trading Signals ───
+-- ─── Signals (source-tagged) ───
 CREATE TABLE IF NOT EXISTS signals (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source ENUM('BACKTEST','LIVE','PAPER') NOT NULL,
+    run_id BIGINT NULL COMMENT 'backtest_runs.id when source=BACKTEST',
     symbol VARCHAR(20) NOT NULL,
     timestamp DATETIME NOT NULL,
-    direction VARCHAR(10) NOT NULL COMMENT 'LONG or SHORT',
+    direction VARCHAR(10) NOT NULL,
     strategy VARCHAR(50) NOT NULL,
     regime TINYINT NOT NULL,
     entry_price DECIMAL(20,8) NOT NULL,
@@ -57,57 +53,78 @@ CREATE TABLE IF NOT EXISTS signals (
     atr DECIMAL(20,8),
     confidence DECIMAL(5,4),
     expected_profit_pct DECIMAL(10,4),
-    fee_filtered BOOLEAN DEFAULT FALSE COMMENT 'TRUE=passed fee filter',
+    fee_filtered BOOLEAN DEFAULT FALSE,
     executed BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_signal_time (symbol, timestamp),
-    INDEX idx_signal_exec (executed, fee_filtered)
+    INDEX idx_sig_src (source, timestamp)
 ) ENGINE=InnoDB;
 
--- ─── Positions (Open + Closed) ───
+-- ─── Positions (with REAL Binance order data) ───
 CREATE TABLE IF NOT EXISTS positions (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    signal_id BIGINT,
+    source ENUM('BACKTEST','LIVE','PAPER') NOT NULL,
+    run_id BIGINT NULL,
+    signal_id BIGINT NULL,
     symbol VARCHAR(20) NOT NULL,
     direction VARCHAR(10) NOT NULL,
     strategy VARCHAR(50) NOT NULL,
     regime TINYINT NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'OPEN' COMMENT 'OPEN, CLOSED, CANCELLED',
-    
-    -- Entry
+    status ENUM('OPEN','CLOSED','CANCELLED','ERROR') NOT NULL DEFAULT 'OPEN',
+
+    -- ENTRY
     entry_price DECIMAL(20,8) NOT NULL,
     entry_time DATETIME NOT NULL,
     quantity DECIMAL(20,8) NOT NULL,
-    entry_fee DECIMAL(20,8) DEFAULT 0,
-    
-    -- Exit (filled when closed)
-    exit_price DECIMAL(20,8),
-    exit_time DATETIME,
-    exit_reason VARCHAR(50) COMMENT 'Take Profit, Stop Loss, Force Close, Manual',
-    exit_fee DECIMAL(20,8) DEFAULT 0,
-    
-    -- P&L
+
+    -- Binance entry order (NULL for BACKTEST)
+    entry_order_id BIGINT NULL COMMENT 'Binance orderId',
+    entry_client_oid VARCHAR(100) NULL COMMENT 'our clientOrderId',
+    entry_fill_price DECIMAL(20,8) NULL COMMENT 'actual avg fill',
+    entry_fill_qty DECIMAL(20,8) NULL,
+    entry_commission DECIMAL(20,8) NULL COMMENT 'fee from Binance',
+    entry_commission_asset VARCHAR(20) NULL COMMENT 'BNB/USDT/...',
+    entry_status VARCHAR(20) NULL COMMENT 'FILLED/PARTIALLY_FILLED/...',
+    entry_raw JSON NULL COMMENT 'full Binance response',
+
+    -- EXIT
+    exit_price DECIMAL(20,8) NULL,
+    exit_time DATETIME NULL,
+    exit_reason VARCHAR(50) NULL,
+
+    -- Binance exit order
+    exit_order_id BIGINT NULL,
+    exit_client_oid VARCHAR(100) NULL,
+    exit_fill_price DECIMAL(20,8) NULL,
+    exit_fill_qty DECIMAL(20,8) NULL,
+    exit_commission DECIMAL(20,8) NULL,
+    exit_commission_asset VARCHAR(20) NULL,
+    exit_status VARCHAR(20) NULL,
+    exit_raw JSON NULL,
+
+    -- P&L (real from Binance for LIVE, calculated for BACKTEST)
     pnl DECIMAL(20,8) DEFAULT 0,
     pnl_pct DECIMAL(10,4) DEFAULT 0,
     total_fees DECIMAL(20,8) DEFAULT 0,
-    
+
     -- Risk
     stop_loss DECIMAL(20,8),
     take_profit DECIMAL(20,8),
     risk_reward DECIMAL(10,4),
-    
+
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    
-    FOREIGN KEY (signal_id) REFERENCES signals(id),
-    INDEX idx_pos_status (status, symbol),
-    INDEX idx_pos_time (entry_time),
-    INDEX idx_pos_strategy (strategy)
+
+    FOREIGN KEY (signal_id) REFERENCES signals(id) ON DELETE SET NULL,
+    INDEX idx_pos_src_status (source, status),
+    INDEX idx_pos_open (status, symbol),
+    INDEX idx_pos_entry (entry_time)
 ) ENGINE=InnoDB;
 
 -- ─── Equity Curve ───
 CREATE TABLE IF NOT EXISTS equity_curve (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source ENUM('BACKTEST','LIVE','PAPER') NOT NULL,
+    run_id BIGINT NULL,
     timestamp DATETIME NOT NULL,
     equity DECIMAL(20,8) NOT NULL,
     capital DECIMAL(20,8) NOT NULL,
@@ -116,7 +133,7 @@ CREATE TABLE IF NOT EXISTS equity_curve (
     drawdown_pct DECIMAL(10,4) DEFAULT 0,
     peak_equity DECIMAL(20,8),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_eq_time (timestamp)
+    INDEX idx_eq_src (source, timestamp)
 ) ENGINE=InnoDB;
 
 -- ─── Backtest Runs ───
@@ -138,8 +155,7 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     total_fees DECIMAL(20,8),
     config_json JSON,
     results_json JSON,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_run_time (created_at)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 -- ─── System Log ───
@@ -150,6 +166,5 @@ CREATE TABLE IF NOT EXISTS system_log (
     message TEXT,
     data JSON,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_log_time (created_at),
-    INDEX idx_log_level (level)
+    INDEX idx_log_time (created_at)
 ) ENGINE=InnoDB;

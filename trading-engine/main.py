@@ -1,219 +1,308 @@
 #!/usr/bin/env python3
 """
 ═══════════════════════════════════════════════════════════
-  REGIME DETECTION TRADING SYSTEM v2 (Docker + MySQL)
+  REGIME DETECTION TRADING SYSTEM v3
+  Docker + MySQL + Redis + Binance API
 ═══════════════════════════════════════════════════════════
-
-Modes:
-  TRADING_MODE=backtest   → Run backtest, save to MySQL
-  TRADING_MODE=live       → Live trading loop with Binance
-  TRADING_MODE=paper      → Paper trading (signals only, no orders)
 """
-import argparse
-import json
-import time
-import sys
-import os
-import traceback
+import json, time, sys, os, traceback, threading
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import *
-from data.fetcher import get_data, test_connection, place_test_order, place_real_order
 
-# DB optional
-try:
-    from data.database import log as db_log, get_engine
-    HAS_DB = True
-except Exception:
-    HAS_DB = False
-
-
-def wait_for_db(max_retries=30, delay=2):
-    """Wait for MySQL to be ready."""
-    if not HAS_DB:
-        print("⚠️  No DB connection configured, running standalone")
-        return False
-
+# ═══════════════════════════════════════
+# INFRA WAIT
+# ═══════════════════════════════════════
+def wait_for_db(max_retries=30):
+    from data.database import get_engine
+    from sqlalchemy import text
     for i in range(max_retries):
         try:
-            eng = get_engine()
-            with eng.connect() as conn:
-                conn.execute(__import__('sqlalchemy').text("SELECT 1"))
-            print("✅ Database connected!")
+            with get_engine().connect() as c:
+                c.execute(text("SELECT 1"))
+            print("✅ MySQL connected")
             return True
         except Exception as e:
-            print(f"⏳ Waiting for DB... ({i+1}/{max_retries}) {e}")
-            time.sleep(delay)
-
-    print("❌ Could not connect to database")
+            print(f"⏳ DB... ({i+1}/{max_retries})")
+            time.sleep(2)
     return False
 
 
-def run_backtest():
-    """Run full backtest and save to MySQL."""
-    from backtest.engine import BacktestEngine
-
-    print("=" * 60)
-    print("  REGIME DETECTION TRADING SYSTEM - BACKTEST")
-    print("=" * 60)
-
-    db_ready = wait_for_db()
-
-    # Get data
-    df = get_data(use_api=True, days=LOOKBACK_DAYS)
-    if len(df) < 100:
-        print("❌ Insufficient data")
-        return
-
-    # Run
-    engine = BacktestEngine(capital=INITIAL_CAPITAL, use_db=db_ready)
-    results = engine.run(df)
-
-    # Save JSON output
-    os.makedirs("output", exist_ok=True)
-    with open("output/backtest_results.json", 'w') as f:
-        json.dump(results, f, indent=2, default=str)
-
-    trade_log = engine.get_trade_log()
-    if len(trade_log) > 0:
-        trade_log.to_csv("output/trade_log.csv", index=False)
-
-    print("\n✅ Backtest complete! Check dashboard at http://localhost:3000")
-    return results
+def wait_for_redis(max_retries=15):
+    from data.monitor import get_redis
+    for i in range(max_retries):
+        try:
+            get_redis().ping()
+            print("✅ Redis connected")
+            return True
+        except Exception:
+            print(f"⏳ Redis... ({i+1}/{max_retries})")
+            time.sleep(1)
+    return False
 
 
+# ═══════════════════════════════════════
+# LIVE TRADING
+# ═══════════════════════════════════════
 def run_live():
-    """Live trading loop - continuously monitor and trade."""
+    import data.database as db
+    import data.binance_client as bnb
+    import data.monitor as mon
+    from data.fetcher import fetch_klines
     from core.features import calculate_features, get_regime_features
     from core.regime_detector import RegimeDetector, REGIME_NAMES
     from core.risk_manager import RiskManager, FeeFilter
     from strategies.strategies import generate_all_signals
 
     print("=" * 60)
-    print("  LIVE TRADING MODE")
+    print(f"  LIVE TRADING - {SYMBOL} {TIMEFRAME}")
     print("=" * 60)
 
-    db_ready = wait_for_db()
+    wait_for_db()
+    wait_for_redis()
+
+    # Test Binance
+    conn = bnb.test_connection()
+    print(f"🔌 Binance: ping={conn.get('ping')}")
+    if conn.get("account", {}).get("connected"):
+        bals = conn["account"]["balances"]
+        for asset, b in list(bals.items())[:5]:
+            print(f"   {asset}: {b['free']}")
+    else:
+        print(f"⚠️  Account: {conn.get('account')}")
+
     detector = RegimeDetector()
     risk_mgr = RiskManager(initial_capital=INITIAL_CAPITAL)
     fee_filter = FeeFilter()
     is_trained = False
+    last_signal_time = None
 
-    if db_ready:
-        db_log("INFO", "engine", "Live trading started", {"symbol": SYMBOL, "timeframe": TIMEFRAME})
+    mon.set_status("running", f"Live trading {SYMBOL}")
+    db.log("INFO", "engine", "Live started", {"symbol": SYMBOL})
 
+    # ─── MONITOR THREAD: check SL/TP fills every N seconds ───
+    def monitor_loop():
+        while True:
+            try:
+                # Update price
+                price = bnb.get_price(SYMBOL)
+                mon.update_price(price)
+
+                # Sync positions with Binance (check SL/TP)
+                closed = mon.sync_open_positions_with_binance(db)
+                if closed:
+                    db.log("INFO", "monitor", f"Closed {len(closed)} positions", {"ids": closed})
+
+            except Exception as e:
+                print(f"⚠️  Monitor: {e}")
+            time.sleep(MONITOR_INTERVAL_SECONDS)
+
+    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    monitor_thread.start()
+    print("🔍 Position monitor started")
+
+    # ─── MAIN SIGNAL LOOP ───
     while True:
         try:
-            print(f"\n{'─'*40}")
-            print(f"⏰ {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            now = datetime.utcnow()
+            print(f"\n{'─'*50}")
+            print(f"⏰ {now.strftime('%Y-%m-%d %H:%M:%S')} UTC")
 
-            # 1. Fetch recent data
-            df = get_data(use_api=True, days=30)
+            # 1. Fetch data
+            df = fetch_klines(symbol=SYMBOL, interval=TIMEFRAME, days=30)
             if len(df) < 50:
-                print("⚠️ Not enough data, waiting...")
+                print("⚠️  Not enough data")
                 time.sleep(LOOP_INTERVAL_SECONDS)
                 continue
 
-            # 2. Calculate features
+            # 2. Features
             df = calculate_features(df)
-            regime_features = get_regime_features(df).dropna()
-            common_idx = df.index.intersection(regime_features.index)
-            df = df.loc[common_idx]
-            regime_features = regime_features.loc[common_idx]
+            feat = get_regime_features(df).dropna()
+            ci = df.index.intersection(feat.index)
+            df, feat = df.loc[ci], feat.loc[ci]
 
-            # 3. Train/retrain if needed
+            # 3. Train if needed
             if not is_trained:
-                print("🧠 Training regime detector...")
-                stats = detector.fit(df, regime_features)
-                print(f"   Accuracy: {stats['cv_accuracy']}")
+                print("🧠 Training...")
+                stats = detector.fit(df, feat)
+                print(f"   CV: {stats['cv_accuracy']}")
                 is_trained = True
 
-            # 4. Detect current regime
-            current = detector.get_current_regime(regime_features)
-            print(f"🔮 Regime: {current['regime_name']} ({current['confidence']:.0%})")
+            # 4. Current regime
+            current = detector.get_current_regime(feat)
+            rname = current['regime_name']
+            rconf = current['confidence']
+            print(f"🔮 Regime: {rname} ({rconf:.0%})")
+            mon.update_regime(rname, rconf, current['probabilities'])
 
-            # 5. Generate signals
-            regimes = detector.predict(regime_features)
+            # 5. Signals
+            regimes = detector.predict(feat)
             signals = generate_all_signals(df, regimes)
             passed, _ = fee_filter.filter_signals(signals)
 
-            # 6. Check for new signals (last bar only)
-            last_time = df.index[-1]
-            new_signals = [s for s in passed if s.timestamp == last_time]
+            # Only look at the latest bar signal
+            last_bar = df.index[-1]
+            new_sigs = [s for s in passed if s.timestamp == last_bar]
 
-            if new_signals:
-                for sig in new_signals:
+            # Skip if we already processed this bar
+            if last_bar == last_signal_time:
+                print("⏸️  Already processed this bar")
+            elif new_sigs:
+                for sig in new_sigs:
                     print(f"\n📡 SIGNAL: {sig.direction} @ ${sig.entry_price:,.2f}")
                     print(f"   SL: ${sig.stop_loss:,.2f} | TP: ${sig.take_profit:,.2f}")
                     print(f"   Strategy: {sig.strategy} | RR: 1:{sig.risk_reward:.1f}")
 
-                    # Place order on demo account
+                    # Check risk limits
+                    open_pos = mon.get_open_positions_from_redis()
+                    if len(open_pos) >= MAX_OPEN_TRADES:
+                        print(f"   ⛔ Max {MAX_OPEN_TRADES} open trades")
+                        continue
+
+                    # Calculate quantity
                     qty = risk_mgr.calculate_position_size(sig)
-                    if qty > 0:
-                        result = place_real_order(
-                            symbol=SYMBOL,
-                            side=sig.direction.replace("LONG", "BUY").replace("SHORT", "SELL"),
-                            quantity=qty,
-                            order_type="MARKET"
-                        )
-                        print(f"   Order result: {json.dumps(result, default=str)}")
+                    if qty <= 0:
+                        print("   ⛔ Qty too small")
+                        continue
 
-                        if db_ready:
-                            from data.database import save_signal, open_position
-                            sid = save_signal(sig, SYMBOL, True)
-                            open_position(sid, SYMBOL, sig.direction, sig.strategy,
-                                          sig.regime, sig.entry_price, last_time,
-                                          qty, 0, sig.stop_loss, sig.take_profit,
-                                          sig.risk_reward)
+                    # Place ENTRY order
+                    side = "BUY" if sig.direction == "LONG" else "SELL"
+                    print(f"   🔫 Placing {side} {qty:.6f} {SYMBOL}...")
+
+                    if TRADING_MODE == "paper":
+                        order_resp = {"orderId": 0, "status": "PAPER",
+                                      "fills": [{"price": str(sig.entry_price),
+                                                  "qty": str(qty), "commission": "0",
+                                                  "commissionAsset": "USDT"}],
+                                      "_client_oid": "paper"}
+                    else:
+                        order_resp = bnb.place_market_order(SYMBOL, side, qty)
+
+                    parsed = bnb.parse_order_response(order_resp)
+                    print(f"   ✅ Order {parsed.get('status')}: fill=${parsed.get('fill_price'):,.2f} "
+                          f"fee={parsed.get('commission'):.6f} {parsed.get('commission_asset')}")
+
+                    if parsed.get("status") not in ("FILLED", "PAPER"):
+                        print(f"   ❌ Order not filled: {parsed.get('status')}")
+                        db.log("ERROR", "order", "Entry not filled", parsed)
+                        continue
+
+                    # Save signal + position to DB
+                    sig_id = db.save_signal(sig, SYMBOL, source="LIVE")
+
+                    # Place SL + TP orders
+                    sl_oid = None
+                    tp_oid = None
+                    exit_side = "SELL" if sig.direction == "LONG" else "BUY"
+
+                    if TRADING_MODE != "paper":
+                        try:
+                            sl_resp = bnb.place_stop_loss_order(SYMBOL, exit_side, qty, sig.stop_loss)
+                            sl_oid = sl_resp.get("orderId")
+                            print(f"   🛑 SL order placed: #{sl_oid}")
+                        except Exception as e:
+                            print(f"   ⚠️  SL order failed: {e}")
+
+                        try:
+                            tp_resp = bnb.place_take_profit_order(SYMBOL, exit_side, qty, sig.take_profit)
+                            tp_oid = tp_resp.get("orderId")
+                            print(f"   🎯 TP order placed: #{tp_oid}")
+                        except Exception as e:
+                            print(f"   ⚠️  TP order failed: {e}")
+
+                    pos_id = db.open_position_live(
+                        signal_id=sig_id, symbol=SYMBOL,
+                        direction=sig.direction, strategy=sig.strategy,
+                        regime=sig.regime, entry_price=sig.entry_price,
+                        entry_time=now, quantity=qty,
+                        order_data=parsed,
+                        stop_loss=sig.stop_loss, take_profit=sig.take_profit,
+                        risk_reward=sig.risk_reward,
+                        sl_order_id=sl_oid, tp_order_id=tp_oid,
+                    )
+
+                    # Publish to Redis for monitoring
+                    mon.publish_position_open(pos_id, {
+                        "source": "LIVE", "symbol": SYMBOL,
+                        "direction": sig.direction, "strategy": sig.strategy,
+                        "entry_price": sig.entry_price,
+                        "entry_fill_price": parsed.get("fill_price"),
+                        "entry_commission": parsed.get("commission"),
+                        "quantity": qty,
+                        "stop_loss": sig.stop_loss, "take_profit": sig.take_profit,
+                        "sl_order_id": sl_oid, "tp_order_id": tp_oid,
+                        "entry_time": now.isoformat(),
+                    })
+
+                    db.log("INFO", "trade", f"Opened #{pos_id}", {
+                        "direction": sig.direction, "qty": qty,
+                        "fill": parsed.get("fill_price"),
+                        "fee": parsed.get("commission"),
+                        "sl_order": sl_oid, "tp_order": tp_oid,
+                    })
+
+                last_signal_time = last_bar
             else:
-                print("⏸️  No signal this bar")
+                print("⏸️  No signal")
+                last_signal_time = last_bar
 
-            # 7. Monitor open positions
-            last_bar = df.iloc[-1]
-            risk_mgr.check_exits(last_bar, last_time)
+            # 6. Market snapshot
+            last = df.iloc[-1]
+            price = last['close']
+            print(f"\n📊 {SYMBOL}: ${price:,.2f} | ATR: {last['atr_pct']:.2f}% "
+                  f"| RSI: {last['rsi_14']:.0f} | ADX: {last['adx']:.0f}")
 
-            # Snapshot
-            print(f"\n📊 BTC: ${last_bar['close']:,.2f} | ATR: {last_bar['atr_pct']:.2f}% | RSI: {last_bar['rsi_14']:.0f}")
+            # Update equity in Redis
+            open_count = len(mon.get_open_positions_from_redis())
+            unrealized = mon.update_price(price)
+            mon.update_equity(INITIAL_CAPITAL + unrealized, INITIAL_CAPITAL, unrealized, open_count)
 
         except Exception as e:
             print(f"❌ Error: {e}")
             traceback.print_exc()
-            if db_ready:
-                db_log("ERROR", "engine", str(e))
+            mon.set_status("error", str(e))
+            db.log("ERROR", "engine", str(e))
 
-        print(f"\n💤 Sleeping {LOOP_INTERVAL_SECONDS}s...")
+        print(f"\n💤 Next check in {LOOP_INTERVAL_SECONDS}s...")
         time.sleep(LOOP_INTERVAL_SECONDS)
 
 
-def run_test_api():
-    """Test API connection."""
+# ═══════════════════════════════════════
+# BACKTEST (unchanged from previous, no fake live data)
+# ═══════════════════════════════════════
+def run_backtest():
+    from backtest.engine import BacktestEngine
+    from data.fetcher import get_data
+    import data.database as db
+
     print("=" * 60)
-    print("  API CONNECTION TEST")
+    print("  BACKTEST MODE")
     print("=" * 60)
-    results = test_connection()
-    print(json.dumps(results, indent=2, default=str))
 
-    print("\nTest order:")
-    test = place_test_order()
-    print(json.dumps(test, indent=2, default=str))
+    db_ready = wait_for_db()
+    df = get_data(use_api=True, days=LOOKBACK_DAYS)
+    if len(df) < 100:
+        print("❌ Not enough data")
+        return
+
+    engine = BacktestEngine(capital=INITIAL_CAPITAL, use_db=db_ready)
+    engine.run(df)
 
 
+# ═══════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════
 def main():
-    mode = os.getenv("TRADING_MODE", "backtest")
+    mode = TRADING_MODE
+    print(f"MODE = {mode}")
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", default=mode, choices=["backtest", "live", "paper", "test-api"])
-    args = parser.parse_args()
-
-    if args.mode == "test-api":
-        run_test_api()
-    elif args.mode == "live":
-        run_live()
-    elif args.mode == "paper":
-        os.environ["TRADING_MODE"] = "paper"
+    if mode == "backtest":
+        run_backtest()
+    elif mode in ("live", "paper"):
         run_live()
     else:
-        run_backtest()
+        print(f"Unknown mode: {mode}")
 
 
 if __name__ == "__main__":
