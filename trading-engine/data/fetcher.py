@@ -17,6 +17,9 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
 
+# API version prefix based on market type
+API_PREFIX = "/fapi/v1" if USE_FUTURES else "/api/v3"
+
 
 def _sign(params: dict) -> str:
     """Sign request with HMAC SHA256."""
@@ -32,22 +35,22 @@ def _headers():
 def test_connection() -> dict:
     """Test Binance API connectivity and account access."""
     results = {}
-    
+
     # Test 1: Server time
     try:
-        r = requests.get(f"{BASE_URL}/api/v3/time", timeout=10)
+        r = requests.get(f"{BASE_URL}{API_PREFIX}/time", timeout=10)
         results["server"] = {"status": r.status_code, "data": r.json()}
     except Exception as e:
         results["server"] = {"status": "error", "error": str(e)}
-    
+
     # Test 2: Account info
     try:
         params = {"timestamp": int(time.time() * 1000), "recvWindow": 10000}
-        url = f"{BASE_URL}/api/v3/account?{_sign(params)}"
+        url = f"{BASE_URL}{API_PREFIX}/account?{_sign(params)}"
         r = requests.get(url, headers=_headers(), timeout=10)
         data = r.json()
         if r.status_code == 200:
-            balances = [b for b in data.get('balances', []) 
+            balances = [b for b in data.get('balances', [])
                        if float(b['free']) > 0 or float(b['locked']) > 0]
             results["account"] = {
                 "status": 200,
@@ -58,26 +61,26 @@ def test_connection() -> dict:
             results["account"] = {"status": r.status_code, "error": data}
     except Exception as e:
         results["account"] = {"status": "error", "error": str(e)}
-    
+
     # Test 3: Current price
     try:
-        r = requests.get(f"{BASE_URL}/api/v3/ticker/price?symbol={SYMBOL}", timeout=10)
+        r = requests.get(f"{BASE_URL}{API_PREFIX}/ticker/price?symbol={SYMBOL}", timeout=10)
         results["price"] = r.json()
     except Exception as e:
         results["price"] = {"status": "error", "error": str(e)}
-    
+
     return results
 
 
-def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME, 
+def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
                  days: int = LOOKBACK_DAYS) -> pd.DataFrame:
     """Fetch historical klines/candlestick data from Binance."""
     all_data = []
     end_time = int(time.time() * 1000)
     start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
-    
+
     print(f"📊 Fetching {symbol} {interval} data from Binance ({days} days)...")
-    
+
     while start_time < end_time:
         try:
             params = {
@@ -86,16 +89,16 @@ def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
                 "startTime": start_time,
                 "limit": 1000
             }
-            r = requests.get(f"{BASE_URL}/api/v3/klines", params=params, timeout=15)
+            r = requests.get(f"{BASE_URL}{API_PREFIX}/klines", params=params, timeout=15)
             data = r.json()
-            
+
             if not data or isinstance(data, dict):
                 break
-            
+
             all_data.extend(data)
             start_time = data[-1][0] + 1  # Next batch after last candle
             time.sleep(0.1)  # Rate limit
-            
+
         except Exception as e:
             print(f"⚠️ Error fetching data: {e}")
             break
@@ -122,7 +125,7 @@ def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
     return df
 
 
-def place_test_order(symbol: str = SYMBOL, side: str = "BUY", 
+def place_test_order(symbol: str = SYMBOL, side: str = "BUY",
                      quantity: float = 0.001, order_type: str = "MARKET") -> dict:
     """Place a test order (or real order on demo account)."""
     params = {
@@ -133,15 +136,19 @@ def place_test_order(symbol: str = SYMBOL, side: str = "BUY",
         "timestamp": int(time.time() * 1000),
         "recvWindow": 10000
     }
-    
-    # First try test order endpoint
+
+    # First try test order endpoint (Spot only, Futures doesn't support test endpoint)
     try:
-        url = f"{BASE_URL}/api/v3/order/test?{_sign(params)}"
-        r = requests.post(url, headers=_headers(), timeout=10)
-        test_result = {"test_order_status": r.status_code, "response": r.json() if r.text else {}}
+        if USE_FUTURES:
+            # Futures doesn't have test order endpoint, skip it
+            test_result = {"test_order_status": "skipped", "reason": "Futures API doesn't support test orders"}
+        else:
+            url = f"{BASE_URL}{API_PREFIX}/order/test?{_sign(params)}"
+            r = requests.post(url, headers=_headers(), timeout=10)
+            test_result = {"test_order_status": r.status_code, "response": r.json() if r.text else {}}
     except Exception as e:
         test_result = {"test_order_status": "error", "error": str(e)}
-    
+
     return test_result
 
 
@@ -157,13 +164,13 @@ def place_real_order(symbol: str = SYMBOL, side: str = "BUY",
         "timestamp": int(time.time() * 1000),
         "recvWindow": 10000
     }
-    
+
     if order_type == "LIMIT" and price:
         params["price"] = f"{price:.2f}"
         params["timeInForce"] = "GTC"
-    
+
     try:
-        url = f"{BASE_URL}/api/v3/order?{_sign(params)}"
+        url = f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}"
         r = requests.post(url, headers=_headers(), timeout=10)
         return {"status": r.status_code, "response": r.json()}
     except Exception as e:

@@ -3,6 +3,10 @@ Binance Client - Real Order Management
 ========================================
 Places real orders, queries fills, tracks commissions.
 Every order response is stored raw in MySQL for audit.
+
+Supports both Spot and Futures:
+- Spot: /api/v3/* (testnet.binance.vision or api.binance.com)
+- Futures: /fapi/v1/* (testnet.binancefuture.com or fapi.binance.com)
 """
 import time
 import hmac
@@ -12,7 +16,11 @@ import uuid
 import requests
 from urllib.parse import urlencode
 from typing import Optional
-from config import API_KEY, SECRET_KEY, BASE_URL, SYMBOL
+from config import API_KEY, SECRET_KEY, BASE_URL, SYMBOL, USE_FUTURES
+
+
+# API version prefix based on market type
+API_PREFIX = "/fapi/v1" if USE_FUTURES else "/api/v3"
 
 
 def _sign(params: dict) -> str:
@@ -35,20 +43,20 @@ def _ts():
 
 def ping() -> bool:
     try:
-        r = requests.get(f"{BASE_URL}/api/v3/ping", timeout=5)
+        r = requests.get(f"{BASE_URL}{API_PREFIX}/ping", timeout=5)
         return r.status_code == 200
     except Exception:
         return False
 
 
 def server_time() -> int:
-    r = requests.get(f"{BASE_URL}/api/v3/time", timeout=5)
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/time", timeout=5)
     return r.json()["serverTime"]
 
 
 def account_info() -> dict:
     params = {"timestamp": _ts(), "recvWindow": 10000}
-    r = requests.get(f"{BASE_URL}/api/v3/account?{_sign(params)}",
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/account?{_sign(params)}",
                      headers=_headers(), timeout=10)
     return r.json()
 
@@ -66,14 +74,14 @@ def get_balances() -> dict:
 
 
 def get_price(symbol: str = SYMBOL) -> float:
-    r = requests.get(f"{BASE_URL}/api/v3/ticker/price",
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/ticker/price",
                      params={"symbol": symbol}, timeout=5)
     return float(r.json()["price"])
 
 
 def get_symbol_info(symbol: str = SYMBOL) -> dict:
     """Get trading rules: min qty, step size, tick size, etc."""
-    r = requests.get(f"{BASE_URL}/api/v3/exchangeInfo",
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/exchangeInfo",
                      params={"symbol": symbol}, timeout=10)
     for s in r.json().get("symbols", []):
         if s["symbol"] == symbol:
@@ -101,7 +109,7 @@ def place_market_order(symbol: str, side: str, quantity: float) -> dict:
         "timestamp": _ts(),
         "recvWindow": 10000,
     }
-    r = requests.post(f"{BASE_URL}/api/v3/order?{_sign(params)}",
+    r = requests.post(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
                       headers=_headers(), timeout=10)
     resp = r.json()
     resp["_http_status"] = r.status_code
@@ -124,7 +132,7 @@ def place_limit_order(symbol: str, side: str, quantity: float,
         "timestamp": _ts(),
         "recvWindow": 10000,
     }
-    r = requests.post(f"{BASE_URL}/api/v3/order?{_sign(params)}",
+    r = requests.post(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
                       headers=_headers(), timeout=10)
     resp = r.json()
     resp["_http_status"] = r.status_code
@@ -152,7 +160,7 @@ def place_stop_loss_order(symbol: str, side: str, quantity: float,
         "timestamp": _ts(),
         "recvWindow": 10000,
     }
-    r = requests.post(f"{BASE_URL}/api/v3/order?{_sign(params)}",
+    r = requests.post(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
                       headers=_headers(), timeout=10)
     resp = r.json()
     resp["_http_status"] = r.status_code
@@ -178,7 +186,7 @@ def place_take_profit_order(symbol: str, side: str, quantity: float,
         "timestamp": _ts(),
         "recvWindow": 10000,
     }
-    r = requests.post(f"{BASE_URL}/api/v3/order?{_sign(params)}",
+    r = requests.post(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
                       headers=_headers(), timeout=10)
     resp = r.json()
     resp["_http_status"] = r.status_code
@@ -194,7 +202,7 @@ def get_order(symbol: str, order_id: int) -> dict:
     """Query a specific order by orderId."""
     params = {"symbol": symbol, "orderId": order_id,
               "timestamp": _ts(), "recvWindow": 10000}
-    r = requests.get(f"{BASE_URL}/api/v3/order?{_sign(params)}",
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
                      headers=_headers(), timeout=10)
     return r.json()
 
@@ -203,14 +211,14 @@ def get_order_trades(symbol: str, order_id: int) -> list:
     """Get individual fills/trades for an order."""
     params = {"symbol": symbol, "orderId": order_id,
               "timestamp": _ts(), "recvWindow": 10000}
-    r = requests.get(f"{BASE_URL}/api/v3/myTrades?{_sign(params)}",
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/myTrades?{_sign(params)}",
                      headers=_headers(), timeout=10)
     return r.json() if r.status_code == 200 else []
 
 
 def get_open_orders(symbol: str = SYMBOL) -> list:
     params = {"symbol": symbol, "timestamp": _ts(), "recvWindow": 10000}
-    r = requests.get(f"{BASE_URL}/api/v3/openOrders?{_sign(params)}",
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/openOrders?{_sign(params)}",
                      headers=_headers(), timeout=10)
     return r.json() if r.status_code == 200 else []
 
@@ -220,12 +228,12 @@ def get_all_open_orders(symbol: str = None) -> list:
     params = {"timestamp": _ts(), "recvWindow": 10000}
     if symbol:
         params["symbol"] = symbol
-    r = requests.get(f"{BASE_URL}/api/v3/openOrders?{_sign(params)}",
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/openOrders?{_sign(params)}",
                      headers=_headers(), timeout=10)
     return r.json() if r.status_code == 200 else []
 
 
-def get_position_history(symbol: str = None, start_time: int = None, 
+def get_position_history(symbol: str = None, start_time: int = None,
                          end_time: int = None, limit: int = 100) -> list:
     """
     Get position/trading history from Binance.
@@ -242,8 +250,8 @@ def get_position_history(symbol: str = None, start_time: int = None,
         params["startTime"] = start_time
     if end_time:
         params["endTime"] = end_time
-    
-    r = requests.get(f"{BASE_URL}/api/v3/myTrades?{_sign(params)}",
+
+    r = requests.get(f"{BASE_URL}{API_PREFIX}/myTrades?{_sign(params)}",
                      headers=_headers(), timeout=10)
     return r.json() if r.status_code == 200 else []
 
@@ -260,7 +268,7 @@ def get_account_positions() -> list:
     # Get current prices
     try:
         prices = {}
-        r = requests.get(f"{BASE_URL}/api/v3/ticker/price", timeout=5)
+        r = requests.get(f"{BASE_URL}{API_PREFIX}/ticker/price", timeout=5)
         if r.status_code == 200:
             for p in r.json():
                 prices[p["symbol"]] = float(p["price"])
@@ -286,14 +294,14 @@ def get_account_positions() -> list:
 def cancel_order(symbol: str, order_id: int) -> dict:
     params = {"symbol": symbol, "orderId": order_id,
               "timestamp": _ts(), "recvWindow": 10000}
-    r = requests.delete(f"{BASE_URL}/api/v3/order?{_sign(params)}",
+    r = requests.delete(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
                         headers=_headers(), timeout=10)
     return r.json()
 
 
 def cancel_all_orders(symbol: str = SYMBOL) -> dict:
     params = {"symbol": symbol, "timestamp": _ts(), "recvWindow": 10000}
-    r = requests.delete(f"{BASE_URL}/api/v3/openOrders?{_sign(params)}",
+    r = requests.delete(f"{BASE_URL}{API_PREFIX}/openOrders?{_sign(params)}",
                         headers=_headers(), timeout=10)
     return r.json()
 

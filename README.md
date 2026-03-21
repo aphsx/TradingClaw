@@ -1,8 +1,10 @@
 # Regime Detection Trading System v3
-## Docker + MySQL + Redis + Next.js + Socket.IO + Binance API
+## Docker + MySQL + Redis + Next.js + Socket.IO + Binance API (Spot & Futures)
 
 ระบบเทรด Crypto ที่ใช้ ML ตรวจจับ Market Regime แล้วสลับ Strategy อัตโนมัติ
 พร้อม **real-time position monitoring** ผ่าน Socket.IO และ **ข้อมูลเทรดจริงจาก Binance**
+
+**รองรับทั้ง Binance Spot และ Binance Futures**
 
 ---
 
@@ -69,7 +71,7 @@ open http://localhost:3000
 ## Trading Modes
 
 ```bash
-# Live: ดึงข้อมูลจริง + ยิง order จริง
+# Live: ดึงข้อมูลจริง + ยิง order จริง (Spot หรือ Futures)
 TRADING_MODE=live docker compose up
 
 # Paper: ดึงข้อมูลจริง + ไม่ยิง order (จำลอง)
@@ -78,6 +80,23 @@ TRADING_MODE=paper docker compose up
 # Backtest: synthetic data + backtest only
 TRADING_MODE=backtest docker compose up
 ```
+
+### Binance Futures Configuration
+
+```bash
+# .env file
+USE_FUTURES=true      # ใช้ Futures API แทน Spot
+USE_TESTNET=true      # ใช้ Testnet สำหรับทดสอบ (แนะนำ!)
+TRADING_MODE=live     # ยิง order จริง (บน Testnet = เงินปลอม)
+```
+
+**Futures API Endpoints:**
+- Testnet: `https://testnet.binancefuture.com`
+- Mainnet: `https://fapi.binance.com`
+
+**Spot API Endpoints:**
+- Testnet: `https://testnet.binance.vision`
+- Mainnet: `https://api.binance.com`
 
 ---
 
@@ -210,6 +229,13 @@ SELECT regime_name, COUNT(*) FROM regimes GROUP BY regime_name;
 ## ⚠️ สำคัญ
 
 1. **เปลี่ยน API Key** ใน `.env` ก่อนใช้งาน!
-2. ระบบเหมาะสำหรับ **Demo account** หรือ **Paper mode** ก่อน
-3. ทดสอบ backtest ให้ดีก่อนเทรดจริง
-4. Crypto trading มีความเสี่ยงสูง
+2. **Futures Demo Trading:**
+   - ตั้งค่า `USE_FUTURES=true` และ `USE_TESTNET=true`
+   - ใช้ API keys จาก [Binance Futures Testnet](https://testnet.binancefuture.com)
+   - ทดสอบใน Testnet ก่อนเทรดจริงเสมอ
+3. **Spot Demo Trading:**
+   - ตั้งค่า `USE_FUTURES=false` และ `USE_TESTNET=true`
+   - ใช้ API keys จาก [Binance Spot Testnet](https://testnet.binance.vision)
+4. ระบบเหมาะสำหรับ **Demo account** หรือ **Paper mode** ก่อน
+5. ทดสอบ backtest ให้ดีก่อนเทรดจริง
+6. Crypto trading มีความเสี่ยงสูง

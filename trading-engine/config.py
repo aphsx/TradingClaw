@@ -8,7 +8,16 @@ load_dotenv()
 API_KEY = os.getenv("BINANCE_API_KEY", "")
 SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
 USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"
-BASE_URL = "https://testnet.binance.vision" if USE_TESTNET else "https://api.binance.com"
+USE_FUTURES = os.getenv("USE_FUTURES", "false").lower() == "true"
+
+# Binance Futures uses different API endpoints than Spot
+# Futures Testnet: https://testnet.binancefuture.com
+# Futures Mainnet: https://fapi.binance.com
+if USE_FUTURES:
+    BASE_URL = "https://testnet.binancefuture.com" if USE_TESTNET else "https://fapi.binance.com"
+else:
+    # Spot API
+    BASE_URL = "https://testnet.binance.vision" if USE_TESTNET else "https://api.binance.com"
 
 # ─── Database ───
 DB_HOST = os.getenv("DB_HOST", "localhost")
