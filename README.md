@@ -47,13 +47,18 @@
 ## Quick Start
 
 ```bash
-# 1. แก้ .env ใส่ API key
-nano .env
+# 1. เริ่ม infra (MySQL + Redis)
+docker compose -f docker-compose.infra.yml up -d
 
-# 2. Start ทุกอย่าง
-docker compose up --build
+# 2. รัน trading engine  (Terminal 1)
+cd trading-engine
+python main.py
 
-# 3. เปิด Dashboard
+# 3. รัน dashboard  (Terminal 2)
+cd dashboard
+npm run dev
+
+# 4. เปิด Dashboard
 open http://localhost:3000
 ```
 
