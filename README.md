@@ -1,8 +1,8 @@
 # Regime Detection Trading System v3
-## Docker + MySQL + Redis + Next.js + Binance API
+## Docker + MySQL + Redis + Next.js + Socket.IO + Binance API
 
 ระบบเทรด Crypto ที่ใช้ ML ตรวจจับ Market Regime แล้วสลับ Strategy อัตโนมัติ
-พร้อม **real-time position monitoring** และ **ข้อมูลเทรดจริงจาก Binance**
+พร้อม **real-time position monitoring** ผ่าน Socket.IO และ **ข้อมูลเทรดจริงจาก Binance**
 
 ---
 
@@ -10,36 +10,38 @@
 
 | เรื่อง | v2 | v3 |
 |--------|----|----|
-| Position monitor | ไม่มี | Redis real-time (ทุก 15 วินาที) |
+| Position monitor | ไม่มี | Redis + Socket.IO real-time |
 | ข้อมูล order | คำนวณเอง | จาก Binance API จริง (order ID, fill price, commission) |
 | Backtest ↔ Live | ปนกัน | แยก `source` column ชัดเจน |
 | Dashboard เปิดใหม่ | มี trade ปลอม | ว่างเปล่า จนกว่าจะเทรดจริง |
 | SL/TP | คำนวณใน engine | ยิง order จริงบน Binance แล้ว monitor fill |
+| Manual positions | ไม่มี | แสดง manual orders & holdings จาก Binance |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Docker Compose                            │
-├────────────┬────────────┬───────────────┬───────────────────┤
-│  MySQL 8   │  Redis 7   │  Trading      │  Next.js          │
-│  :3306     │  :6379     │  Engine       │  Dashboard :3000   │
-│            │            │  (Python)     │                    │
-│ positions  │ pos:open:* │              │  Live Trades        │
-│ signals    │ monitor:*  │  Main Loop:  │  Open Positions     │
-│ candles    │            │  ① Fetch     │  (auto-refresh 10s) │
-│ regimes    │ Pub/Sub:   │  ② Features  │                    │
-│ equity     │ positions  │  ③ Regime ML │  Backtest History   │
-│ logs       │            │  ④ Signals   │  (separate tab)     │
-│            │            │  ⑤ Order     │                    │
-│            │            │              │  Binance Details:   │
-│            │            │  Monitor:    │  · Order ID         │
-│            │            │  · Price     │  · Fill Price       │
-│            │            │  · SL/TP     │  · Commission       │
-│            │            │  · Sync      │  · Commission Asset │
-└────────────┴────────────┴───────────────┴───────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Docker Compose                                    │
+├────────────┬────────────┬───────────────┬───────────────────────────┤
+│  MySQL 8   │  Redis 7   │  Trading      │  Next.js Dashboard :3000   │
+│  :3306     │  :6379     │  Engine       │                           │
+│            │            │  (Python)     │  Live Trades              │
+│ positions  │ pos:open:* │               │  Open Positions           │
+│ signals    │ monitor:*  │  Main Loop:   │    - Bot (auto)           │
+│ candles    │            │  ① Fetch      │    - Manual (Binance)     │
+│ regimes    │ Pub/Sub:   │  ② Features   │  Backtest History         │
+│ equity     │ positions  │  ③ Regime ML  │                           │
+│ logs       │            │  ④ Signals    │  Binance Details:         │
+│            │            │  ⑤ Order      │  · Order ID               │
+│            │            │               │  · Fill Price             │
+│            │            │  Socket.IO    │  · Commission             │
+│            │            │  :8080        │  · Manual Orders          │
+│            │            │               │  · Holdings               │
+│            │            │  HTTP API     │                           │
+│            │            │  :8081        │                           │
+└────────────┴────────────┴───────────────┴───────────────────────────┘
 ```
 
 ---
@@ -129,11 +131,23 @@ TRADING_MODE=backtest docker compose up
 - แสดง **เฉพาะ trade จริง** ที่เกิดบน Binance
 - เปิดใหม่ = ว่างเปล่า (ไม่มี trade ปลอม)
 - แสดง: Order ID, fill price, commission จาก Binance
+- **Real-time updates** ผ่าน Socket.IO
 
 ### 2. Open Positions
+แบ่งเป็น 2 ส่วน:
+
+#### Bot Positions (auto-managed)
 - **Real-time** จาก Redis (auto-refresh ทุก 10 วินาที)
 - แสดง: Entry fill price, current price, unrealized PnL, SL/TP levels
 - ค่า fee จริงจาก Binance
+- Bot จะจัดการ SL/TP ให้อัตโนมัติ
+
+#### Manual Positions & Orders (Binance)
+- แสดงคำสั่งที่เปิดไว้ด้วยตนเอง (ไม่ผ่านบอท)
+- **Open Orders**: คำสั่งที่ยังรอ fill
+- **Holdings**: สินทรัพย์ที่ถืออยู่
+- **Recent Trades**: ประวัติเทรด 24 ชม. ล่าสุด
+- ข้อมูลจาก Binance API โดยตรง (อ่านอย่างเดียว)
 
 ### 3. Backtest History
 - แยกจาก live ชัดเจน
@@ -151,6 +165,26 @@ TRADING_MODE=backtest docker compose up
 | `monitor:equity` | Equity snapshot |
 | `monitor:regime` | Current regime + confidence |
 | `monitor:status` | Engine status (running/error) |
+
+## Socket.IO Events
+
+Dashboard รับข้อมูล real-time ผ่าน Socket.IO (port 8080):
+
+| Event | Description |
+|-------|-------------|
+| `equity_update` | อัพเดท equity, capital, unrealized PnL |
+| `position_update` | Position open/close/update |
+| `regime_update` | เปลี่ยน market regime |
+| `balance_update` | อัพเดท balance |
+
+## HTTP API Endpoints
+
+Trading Engine เปิด HTTP API (port 8081):
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /manual-positions` | Manual positions, open orders, recent trades |
+| `GET /health` | Health check |
 
 ---
 

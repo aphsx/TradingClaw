@@ -59,8 +59,8 @@ export async function GET() {
     const secretKey = process.env.BINANCE_SECRET_KEY;
     
     if (apiKey && secretKey) {
-      // Fetch from trading engine's monitor endpoint
-      const manualRes = await fetch('http://localhost:8080/manual-positions', {
+      // Fetch from trading engine's HTTP API endpoint
+      const manualRes = await fetch('http://localhost:8081/manual-positions', {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       }).catch(() => null);
