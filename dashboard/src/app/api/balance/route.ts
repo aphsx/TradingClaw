@@ -9,6 +9,17 @@ function sign(queryString: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(queryString).digest('hex');
 }
 
+async function getServerTimeOffset(): Promise<number> {
+  try {
+    const res = await fetch(`${BASE_URL}/api/v3/time`, { cache: 'no-store' });
+    if (!res.ok) return 0;
+    const data = await res.json();
+    return Date.now() - data.serverTime;
+  } catch {
+    return 0;
+  }
+}
+
 export async function GET() {
   const apiKey = process.env.BINANCE_API_KEY;
   const secretKey = process.env.BINANCE_SECRET_KEY;
@@ -18,8 +29,9 @@ export async function GET() {
   }
 
   try {
-    // Build query string manually (ensure string types, no extra chars)
-    const timestamp = Date.now();
+    // Get server time offset to fix timestamp issues
+    const offset = await getServerTimeOffset();
+    const timestamp = Date.now() - offset;
     const recvWindow = 10000;
     const queryString = `timestamp=${timestamp}&recvWindow=${recvWindow}`;
     const signature = sign(queryString, secretKey);
