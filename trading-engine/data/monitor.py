@@ -4,6 +4,7 @@ Position Monitor - Real-time position tracking via Redis + Binance
 - Stores live position state in Redis for instant dashboard reads
 - Periodically syncs with Binance to get actual order status
 - Detects SL/TP fills and updates MySQL
+- Emits real-time events via Socket.IO
 """
 import json
 import time
@@ -14,6 +15,7 @@ from typing import Optional
 
 from config import SYMBOL
 from data import binance_client as bnb
+from data.socket_server import emit_balance_update, emit_position_update, emit_equity_update, emit_regime_update
 
 import os
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -48,6 +50,9 @@ def publish_position_open(pos_id: int, data: dict):
     r.set(key, json.dumps(data, default=str))
     r.sadd("pos:open_ids", pos_id)
     r.publish("positions", json.dumps({"event": "open", "id": pos_id, **data}, default=str))
+    
+    # Emit position open via Socket.IO
+    emit_position_update('open', {"id": pos_id, **data})
 
 
 def publish_position_close(pos_id: int, data: dict):
@@ -57,6 +62,9 @@ def publish_position_close(pos_id: int, data: dict):
     r.delete(key)
     r.srem("pos:open_ids", pos_id)
     r.publish("positions", json.dumps({"event": "close", "id": pos_id, **data}, default=str))
+    
+    # Emit position close via Socket.IO
+    emit_position_update('close', {"id": pos_id, **data})
 
 
 def get_open_positions_from_redis() -> list:
@@ -71,6 +79,35 @@ def get_open_positions_from_redis() -> list:
             pos["id"] = int(pid)
             positions.append(pos)
     return positions
+
+
+def get_manual_positions_from_binance() -> list:
+    """
+    Get manual positions from Binance (not opened by this bot).
+    Returns both open orders and current holdings.
+    """
+    try:
+        # Get all open orders
+        open_orders = bnb.get_all_open_orders()
+        
+        # Get account balances/positions
+        account_positions = bnb.get_account_positions()
+        
+        # Get recent trade history (last 24 hours)
+        now = int(time.time() * 1000)
+        yesterday = now - (24 * 60 * 60 * 1000)
+        trade_history = bnb.get_position_history(start_time=yesterday, end_time=now, limit=50)
+        
+        return {
+            "open_orders": open_orders,
+            "account_positions": account_positions,
+            "recent_trades": trade_history,
+            "source": "binance",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        print(f"⚠️ Error fetching manual positions: {e}")
+        return {"open_orders": [], "account_positions": [], "recent_trades": [], "error": str(e)}
 
 
 def update_price(price: float):
@@ -95,29 +132,40 @@ def update_price(price: float):
         total_unrealized += upnl
         # Re-save with updated unrealized
         r.set(f"pos:open:{pos['id']}", json.dumps(pos, default=str))
+        
+        # Emit position update via Socket.IO
+        emit_position_update('update', pos)
 
     return total_unrealized
 
 
 def update_equity(equity: float, capital: float, unrealized: float, n_open: int):
     r = get_redis()
-    r.set("monitor:equity", json.dumps({
+    data = {
         "equity": round(equity, 2),
         "capital": round(capital, 2),
         "unrealized": round(unrealized, 2),
         "open_positions": n_open,
         "timestamp": datetime.utcnow().isoformat(),
-    }))
+    }
+    r.set("monitor:equity", json.dumps(data))
+    
+    # Emit equity update via Socket.IO
+    emit_equity_update(data)
 
 
 def update_regime(regime_name: str, confidence: float, probs: dict):
     r = get_redis()
-    r.set("monitor:regime", json.dumps({
+    data = {
         "regime": regime_name,
         "confidence": round(confidence, 4),
         "probabilities": probs,
         "timestamp": datetime.utcnow().isoformat(),
-    }))
+    }
+    r.set("monitor:regime", json.dumps(data))
+    
+    # Emit regime update via Socket.IO
+    emit_regime_update(data)
 
 
 def set_status(status: str, message: str = ""):

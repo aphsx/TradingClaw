@@ -215,6 +215,74 @@ def get_open_orders(symbol: str = SYMBOL) -> list:
     return r.json() if r.status_code == 200 else []
 
 
+def get_all_open_orders(symbol: str = None) -> list:
+    """Get all open orders across all symbols (or specific symbol)."""
+    params = {"timestamp": _ts(), "recvWindow": 10000}
+    if symbol:
+        params["symbol"] = symbol
+    r = requests.get(f"{BASE_URL}/api/v3/openOrders?{_sign(params)}",
+                     headers=_headers(), timeout=10)
+    return r.json() if r.status_code == 200 else []
+
+
+def get_position_history(symbol: str = None, start_time: int = None, 
+                         end_time: int = None, limit: int = 100) -> list:
+    """
+    Get position/trading history from Binance.
+    This returns filled orders that resulted in position changes.
+    """
+    params = {
+        "timestamp": _ts(),
+        "recvWindow": 10000,
+        "limit": limit,
+    }
+    if symbol:
+        params["symbol"] = symbol
+    if start_time:
+        params["startTime"] = start_time
+    if end_time:
+        params["endTime"] = end_time
+    
+    r = requests.get(f"{BASE_URL}/api/v3/myTrades?{_sign(params)}",
+                     headers=_headers(), timeout=10)
+    return r.json() if r.status_code == 200 else []
+
+
+def get_account_positions() -> list:
+    """
+    Get current account positions from Futures (if using futures)
+    or derive from Spot balances.
+    """
+    # For Spot: positions are derived from balances
+    balances = get_balances()
+    positions = []
+    
+    # Get current prices
+    try:
+        prices = {}
+        r = requests.get(f"{BASE_URL}/api/v3/ticker/price", timeout=5)
+        if r.status_code == 200:
+            for p in r.json():
+                prices[p["symbol"]] = float(p["price"])
+    except:
+        prices = {}
+    
+    for asset, bal in balances.items():
+        if bal["free"] > 0 or bal["locked"] > 0:
+            symbol = f"{asset}USDT"
+            price = prices.get(symbol, 0)
+            positions.append({
+                "asset": asset,
+                "free": bal["free"],
+                "locked": bal["locked"],
+                "total": bal["free"] + bal["locked"],
+                "price_usd": price,
+                "value_usd": price * (bal["free"] + bal["locked"])
+            })
+    
+    return positions
+
+
 def cancel_order(symbol: str, order_id: int) -> dict:
     params = {"symbol": symbol, "orderId": order_id,
               "timestamp": _ts(), "recvWindow": 10000}

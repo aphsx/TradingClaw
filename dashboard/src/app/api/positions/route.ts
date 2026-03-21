@@ -18,7 +18,7 @@ export async function GET() {
     const redisPositions: any[] = [];
     for (const id of ids) {
       const data = await redisGet(`pos:open:${id}`);
-      if (data) redisPositions.push({ id: Number(id), ...data, _from: 'redis' });
+      if (data) redisPositions.push({ id: Number(id), ...data, _from: 'redis', is_bot: true });
     }
 
     monitorStatus = await redisGet('monitor:status');
@@ -45,15 +45,37 @@ export async function GET() {
          FROM positions WHERE status='OPEN' AND source='LIVE'
          ORDER BY entry_time DESC`
       );
-      open_positions = dbOpen || [];
+      open_positions = dbOpen.map((p: any) => ({ ...p, is_bot: true })) || [];
       source = 'mysql';
     } catch (e: any) {
       errors.push(`DB: ${e.message}`);
     }
   }
 
+  // Manual positions from Binance — always fetch (non-fatal)
+  let manualPositions = null;
+  try {
+    const apiKey = process.env.BINANCE_API_KEY;
+    const secretKey = process.env.BINANCE_SECRET_KEY;
+    
+    if (apiKey && secretKey) {
+      // Fetch from trading engine's monitor endpoint
+      const manualRes = await fetch('http://localhost:8080/manual-positions', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      }).catch(() => null);
+      
+      if (manualRes?.ok) {
+        manualPositions = await manualRes.json();
+      }
+    }
+  } catch (e: any) {
+    // Silently fail — manual positions are optional
+  }
+
   return NextResponse.json({
     open_positions,
+    manual_positions: manualPositions,
     source,
     monitor: {
       status: monitorStatus,

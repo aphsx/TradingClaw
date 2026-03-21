@@ -49,6 +49,8 @@ def run_live():
     import data.database as db
     import data.binance_client as bnb
     import data.monitor as mon
+    from data.socket_server import run_socket_server
+    from data.http_api import run_http_server
     from data.fetcher import fetch_klines
     from core.features import calculate_features, get_regime_features
     from core.regime_detector import RegimeDetector, REGIME_NAMES
@@ -61,6 +63,12 @@ def run_live():
 
     wait_for_db()
     wait_for_redis()
+    
+    # Start Socket.IO server for real-time dashboard updates
+    run_socket_server(port=8080)
+    
+    # Start HTTP API server for manual positions
+    run_http_server(port=8081)
 
     # Test Binance
     conn = bnb.test_connection()
