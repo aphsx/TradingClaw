@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
+from config import LEVERAGE, MAX_MARGIN_RATIO, EMERGENCY_MARGIN_RATIO, LIQUIDATION_SAFETY_PCT
 
 
 class FeeFilter:
@@ -471,3 +472,59 @@ class RiskManager:
         # For hourly data: 24 hours/day * 252 trading days/year
         sharpe = (returns.mean() / returns.std()) * np.sqrt(24 * 252)
         return round(sharpe, 2)
+
+    def calculate_liquidation_price(self, entry_price: float, direction: str,
+                                     leverage: int, margin_type: str = "ISOLATED") -> float:
+        """Calculate approximate liquidation price for a futures position."""
+        lev = leverage or LEVERAGE
+        if margin_type == "ISOLATED":
+            if direction == "LONG":
+                return entry_price * (1 - 1.0 / lev + 0.004)  # 0.4% maintenance margin
+            else:
+                return entry_price * (1 + 1.0 / lev - 0.004)
+        else:
+            # CROSSED: liquidation depends on total account, approximate
+            return 0  # Can't calculate without full account state
+
+    def check_margin_ratio(self, account_data: dict) -> dict:
+        """Check if margin ratio is safe. Returns status and recommended action."""
+        total_margin = float(account_data.get("totalMaintainMargin", 0))
+        total_balance = float(account_data.get("totalMarginBalance", 0))
+        if total_balance == 0:
+            return {"ratio": 0, "status": "unknown"}
+        ratio = total_margin / total_balance
+        if ratio >= EMERGENCY_MARGIN_RATIO:
+            return {"ratio": ratio, "status": "emergency", "action": "close_all"}
+        elif ratio >= MAX_MARGIN_RATIO:
+            return {"ratio": ratio, "status": "warning", "action": "reduce_size"}
+        return {"ratio": ratio, "status": "safe", "action": "none"}
+
+    def validate_stop_vs_liquidation(self, entry_price: float, stop_loss: float,
+                                       direction: str, leverage: int) -> float:
+        """Ensure stop loss triggers BEFORE liquidation. Returns adjusted SL if needed."""
+        liq_price = self.calculate_liquidation_price(entry_price, direction, leverage)
+        if liq_price == 0:
+            return stop_loss  # Can't validate for CROSSED
+
+        if direction == "LONG":
+            # SL must be ABOVE liquidation by safety margin
+            safe_sl = liq_price * (1 + LIQUIDATION_SAFETY_PCT)
+            if stop_loss < safe_sl:
+                return safe_sl
+        else:
+            safe_sl = liq_price * (1 - LIQUIDATION_SAFETY_PCT)
+            if stop_loss > safe_sl:
+                return safe_sl
+        return stop_loss
+
+    def check_funding_cost(self, symbol: str, position_value: float) -> dict:
+        """Estimate daily funding cost for a position."""
+        try:
+            from data import binance_client as bnb
+            mark = bnb.get_mark_price(symbol)
+            rate = float(mark.get("lastFundingRate", 0))
+            daily_cost = abs(position_value * rate * 3)  # 3 funding periods per day
+            annual_cost_pct = abs(rate * 3 * 365) * 100
+            return {"rate_8h": rate, "daily_cost": daily_cost, "annual_pct": annual_cost_pct}
+        except:
+            return {"rate_8h": 0, "daily_cost": 0, "annual_pct": 0}

@@ -94,3 +94,14 @@ MAX_CORRELATED_POSITIONS = 2      # Max positions with correlation > 0.7
 # ─── Volatility Adjustment ───
 VOLATILITY_SCALE_HIGH = 1.5       # Scale down position if vol > 1.5x average
 VOLATILITY_SCALE_LOW = 0.5        # Scale up position if vol < 0.5x average
+
+# ─── Futures Settings ───
+LEVERAGE = int(os.getenv("LEVERAGE", "5"))          # Default 5x leverage
+MARGIN_TYPE = os.getenv("MARGIN_TYPE", "ISOLATED")  # ISOLATED or CROSSED
+MAX_MARGIN_RATIO = 0.75                              # Warn when margin ratio > 75%
+EMERGENCY_MARGIN_RATIO = 0.90                        # Force close all at 90%
+LIQUIDATION_SAFETY_PCT = 0.15                        # SL must be 15% away from liquidation
+
+# ─── Funding Rate ───
+MAX_FUNDING_RATE = 0.001       # Skip entry if funding > 0.1% per 8h
+FUNDING_CHECK_INTERVAL = 300   # Check funding every 5 min

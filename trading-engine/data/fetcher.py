@@ -329,18 +329,46 @@ def get_data(use_api: bool = True, days: int = LOOKBACK_DAYS) -> pd.DataFrame:
     return df
 
 
+def fetch_funding_rates(symbol: str = SYMBOL, limit: int = 100) -> pd.DataFrame:
+    """Fetch funding rate history."""
+    from data import binance_client as bnb
+    rates = bnb.get_funding_rate(symbol, limit)
+    if not rates:
+        return pd.DataFrame()
+    df = pd.DataFrame(rates)
+    df['fundingTime'] = pd.to_datetime(df['fundingTime'], unit='ms')
+    df['fundingRate'] = df['fundingRate'].astype(float)
+    df.set_index('fundingTime', inplace=True)
+    return df
+
+
+def fetch_mark_price_klines(symbol: str = SYMBOL, interval: str = "1h", limit: int = 500) -> pd.DataFrame:
+    """Fetch mark price klines (more accurate for futures SL/TP)."""
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    r = requests.get(f"{BASE_URL}/fapi/v1/markPriceKlines", params=params, timeout=10)
+    if r.status_code != 200:
+        return pd.DataFrame()
+    data = r.json()
+    df = pd.DataFrame(data, columns=["open_time","open","high","low","close","volume","close_time","na1","na2","na3","na4","na5"])
+    df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
+    for col in ['open','high','low','close']:
+        df[col] = df[col].astype(float)
+    df.set_index('open_time', inplace=True)
+    return df
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("TESTING BINANCE API CONNECTION")
     print("=" * 60)
-    
+
     results = test_connection()
     print(json.dumps(results, indent=2, default=str))
-    
+
     print("\n" + "=" * 60)
     print("TESTING DATA FETCH")
     print("=" * 60)
-    
+
     df = get_data(use_api=True, days=7)
     if len(df) > 0:
         print(f"\nData shape: {df.shape}")

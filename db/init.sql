@@ -168,3 +168,29 @@ CREATE TABLE IF NOT EXISTS system_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_log_time (created_at)
 ) ENGINE=InnoDB;
+
+-- ─── Funding Rates Log ───
+CREATE TABLE IF NOT EXISTS funding_rates (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL,
+    timestamp DATETIME NOT NULL,
+    funding_rate DECIMAL(12,8) NOT NULL,
+    mark_price DECIMAL(20,8) DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_funding (symbol, timestamp),
+    INDEX idx_funding_sym_ts (symbol, timestamp)
+) ENGINE=InnoDB;
+
+-- ─── Margin Health Log ───
+CREATE TABLE IF NOT EXISTS margin_health_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    timestamp DATETIME NOT NULL,
+    total_wallet_balance DECIMAL(20,8),
+    total_initial_margin DECIMAL(20,8),
+    total_maintain_margin DECIMAL(20,8),
+    margin_ratio DECIMAL(6,4),
+    total_unrealized_pnl DECIMAL(20,8),
+    available_balance DECIMAL(20,8),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_margin_ts (timestamp)
+) ENGINE=InnoDB;

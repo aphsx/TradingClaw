@@ -166,26 +166,26 @@ def place_limit_order(symbol: str, side: str, quantity: float,
 
 def place_stop_loss_order(symbol: str, side: str, quantity: float,
                           stop_price: float) -> dict:
-    """Place a STOP_LOSS_LIMIT to act as our SL."""
+    """Place stop loss. Uses STOP_MARKET for futures (better fills, no limit price needed)."""
     client_oid = f"regime_sl_{uuid.uuid4().hex[:12]}"
-    # Stop loss limit needs a price slightly worse than stopPrice
-    offset = stop_price * 0.001  # 0.1% slippage allowance
-    limit_price = stop_price - offset if side == "SELL" else stop_price + offset
-    params = {
-        "symbol": symbol,
-        "side": side,
-        "type": "STOP_LOSS_LIMIT",
-        "quantity": f"{quantity:.6f}",
-        "price": f"{limit_price:.2f}",
-        "stopPrice": f"{stop_price:.2f}",
-        "timeInForce": "GTC",
-        "newClientOrderId": client_oid,
-        "newOrderRespType": "FULL",
-        "timestamp": _ts(),
-        "recvWindow": 10000,
-    }
-    r = requests.post(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
-                      headers=_headers(), timeout=10)
+    if USE_FUTURES:
+        params = {
+            "symbol": symbol, "side": side, "type": "STOP_MARKET",
+            "quantity": f"{quantity:.6f}", "stopPrice": f"{stop_price:.2f}",
+            "newClientOrderId": client_oid, "timestamp": _ts(), "recvWindow": 10000,
+        }
+    else:
+        # Spot: STOP_LOSS_LIMIT (keep existing logic)
+        offset = stop_price * 0.001
+        limit_price = stop_price - offset if side == "SELL" else stop_price + offset
+        params = {
+            "symbol": symbol, "side": side, "type": "STOP_LOSS_LIMIT",
+            "quantity": f"{quantity:.6f}", "price": f"{limit_price:.2f}",
+            "stopPrice": f"{stop_price:.2f}", "timeInForce": "GTC",
+            "newClientOrderId": client_oid, "newOrderRespType": "FULL",
+            "timestamp": _ts(), "recvWindow": 10000,
+        }
+    r = requests.post(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}", headers=_headers(), timeout=10)
     resp = r.json()
     resp["_http_status"] = r.status_code
     resp["_client_oid"] = client_oid
@@ -194,22 +194,25 @@ def place_stop_loss_order(symbol: str, side: str, quantity: float,
 
 def place_take_profit_order(symbol: str, side: str, quantity: float,
                             stop_price: float) -> dict:
+    """Place take profit. Uses TAKE_PROFIT_MARKET for futures."""
     client_oid = f"regime_tp_{uuid.uuid4().hex[:12]}"
-    offset = stop_price * 0.001
-    limit_price = stop_price + offset if side == "SELL" else stop_price - offset
-    params = {
-        "symbol": symbol,
-        "side": side,
-        "type": "TAKE_PROFIT_LIMIT",
-        "quantity": f"{quantity:.6f}",
-        "price": f"{limit_price:.2f}",
-        "stopPrice": f"{stop_price:.2f}",
-        "timeInForce": "GTC",
-        "newClientOrderId": client_oid,
-        "newOrderRespType": "FULL",
-        "timestamp": _ts(),
-        "recvWindow": 10000,
-    }
+    if USE_FUTURES:
+        params = {
+            "symbol": symbol, "side": side, "type": "TAKE_PROFIT_MARKET",
+            "quantity": f"{quantity:.6f}", "stopPrice": f"{stop_price:.2f}",
+            "newClientOrderId": client_oid, "timestamp": _ts(), "recvWindow": 10000,
+        }
+    else:
+        # Spot: TAKE_PROFIT_LIMIT (keep existing logic)
+        offset = stop_price * 0.001
+        limit_price = stop_price + offset if side == "SELL" else stop_price - offset
+        params = {
+            "symbol": symbol, "side": side, "type": "TAKE_PROFIT_LIMIT",
+            "quantity": f"{quantity:.6f}", "price": f"{limit_price:.2f}",
+            "stopPrice": f"{stop_price:.2f}", "timeInForce": "GTC",
+            "newClientOrderId": client_oid, "newOrderRespType": "FULL",
+            "timestamp": _ts(), "recvWindow": 10000,
+        }
     r = requests.post(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
                       headers=_headers(), timeout=10)
     resp = r.json()
@@ -281,38 +284,55 @@ def get_position_history(symbol: str = None, start_time: int = None,
 
 
 def get_account_positions() -> list:
-    """
-    Get current account positions from Futures (if using futures)
-    or derive from Spot balances.
-    """
-    # For Spot: positions are derived from balances
-    balances = get_balances()
-    positions = []
-    
-    # Get current prices
-    try:
-        prices = {}
-        r = requests.get(f"{BASE_URL}{API_PREFIX}/ticker/price", timeout=5)
-        if r.status_code == 200:
-            for p in r.json():
-                prices[p["symbol"]] = float(p["price"])
-    except:
-        prices = {}
-    
-    for asset, bal in balances.items():
-        if bal["free"] > 0 or bal["locked"] > 0:
-            symbol = f"{asset}USDT"
-            price = prices.get(symbol, 0)
-            positions.append({
-                "asset": asset,
-                "free": bal["free"],
-                "locked": bal["locked"],
-                "total": bal["free"] + bal["locked"],
-                "price_usd": price,
-                "value_usd": price * (bal["free"] + bal["locked"])
-            })
-    
-    return positions
+    """Get current positions. Uses /fapi/v2/positionRisk for futures."""
+    if USE_FUTURES:
+        risks = get_position_risk()
+        positions = []
+        for r in risks:
+            amt = float(r.get("positionAmt", 0))
+            if amt != 0:
+                positions.append({
+                    "symbol": r["symbol"],
+                    "direction": "LONG" if amt > 0 else "SHORT",
+                    "quantity": abs(amt),
+                    "entry_price": float(r.get("entryPrice", 0)),
+                    "mark_price": float(r.get("markPrice", 0)),
+                    "liquidation_price": float(r.get("liquidationPrice", 0)),
+                    "unrealized_pnl": float(r.get("unRealizedProfit", 0)),
+                    "leverage": int(r.get("leverage", 1)),
+                    "margin_type": r.get("marginType", ""),
+                    "isolated_margin": float(r.get("isolatedMargin", 0)),
+                })
+        return positions
+    else:
+        # Spot logic: derive from balances
+        balances = get_balances()
+        positions = []
+
+        # Get current prices
+        try:
+            prices = {}
+            r = requests.get(f"{BASE_URL}{API_PREFIX}/ticker/price", timeout=5)
+            if r.status_code == 200:
+                for p in r.json():
+                    prices[p["symbol"]] = float(p["price"])
+        except:
+            prices = {}
+
+        for asset, bal in balances.items():
+            if bal["free"] > 0 or bal["locked"] > 0:
+                symbol = f"{asset}USDT"
+                price = prices.get(symbol, 0)
+                positions.append({
+                    "asset": asset,
+                    "free": bal["free"],
+                    "locked": bal["locked"],
+                    "total": bal["free"] + bal["locked"],
+                    "price_usd": price,
+                    "value_usd": price * (bal["free"] + bal["locked"])
+                })
+
+        return positions
 
 
 def cancel_order(symbol: str, order_id: int) -> dict:
@@ -391,3 +411,65 @@ def test_connection() -> dict:
         result["price"] = {"error": str(e)}
 
     return result
+
+
+# ═══════════════════════════════════════
+# FUTURES SPECIFIC
+# ═══════════════════════════════════════
+
+def set_leverage(symbol: str, leverage: int) -> dict:
+    """Set leverage for a symbol. Must be called before opening position."""
+    params = {"symbol": symbol, "leverage": leverage, "timestamp": _ts(), "recvWindow": 10000}
+    r = requests.post(f"{BASE_URL}/fapi/v1/leverage?{_sign(params)}", headers=_headers(), timeout=10)
+    return r.json()
+
+
+def set_margin_type(symbol: str, margin_type: str = "ISOLATED") -> dict:
+    """Set margin type for a symbol. ISOLATED or CROSSED."""
+    params = {"symbol": symbol, "marginType": margin_type, "timestamp": _ts(), "recvWindow": 10000}
+    r = requests.post(f"{BASE_URL}/fapi/v1/marginType?{_sign(params)}", headers=_headers(), timeout=10)
+    resp = r.json()
+    # Binance returns error -4046 if margin type already set — that's OK
+    if resp.get("code") == -4046:
+        return {"success": True, "msg": "Already set"}
+    return resp
+
+
+def get_position_risk(symbol: str = None) -> list:
+    """Get position risk info including liquidation price, margin ratio, leverage.
+    Returns list of position dicts with: symbol, positionAmt, entryPrice, markPrice,
+    unRealizedProfit, liquidationPrice, leverage, marginType, isolatedMargin, etc.
+    """
+    params = {"timestamp": _ts(), "recvWindow": 10000}
+    if symbol:
+        params["symbol"] = symbol
+    r = requests.get(f"{BASE_URL}/fapi/v2/positionRisk?{_sign(params)}", headers=_headers(), timeout=10)
+    return r.json() if r.status_code == 200 else []
+
+
+def get_futures_account() -> dict:
+    """Get full futures account info: totalWalletBalance, totalUnrealizedProfit,
+    totalMarginBalance, totalInitialMargin, totalMaintainMargin, etc."""
+    params = {"timestamp": _ts(), "recvWindow": 10000}
+    r = requests.get(f"{BASE_URL}/fapi/v2/account?{_sign(params)}", headers=_headers(), timeout=10)
+    return r.json()
+
+
+def get_funding_rate(symbol: str = SYMBOL, limit: int = 1) -> list:
+    """Get funding rate history. Latest first."""
+    params = {"symbol": symbol, "limit": limit}
+    r = requests.get(f"{BASE_URL}/fapi/v1/fundingRate", params=params, timeout=5)
+    return r.json() if r.status_code == 200 else []
+
+
+def get_mark_price(symbol: str = SYMBOL) -> dict:
+    """Get mark price, funding rate, and next funding time."""
+    r = requests.get(f"{BASE_URL}/fapi/v1/premiumIndex", params={"symbol": symbol}, timeout=5)
+    return r.json() if r.status_code == 200 else {}
+
+
+def get_futures_balance() -> list:
+    """Get futures account balance for all assets."""
+    params = {"timestamp": _ts(), "recvWindow": 10000}
+    r = requests.get(f"{BASE_URL}/fapi/v2/balance?{_sign(params)}", headers=_headers(), timeout=10)
+    return r.json() if r.status_code == 200 else []

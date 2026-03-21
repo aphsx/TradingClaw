@@ -13,6 +13,7 @@ from typing import Optional
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
+from config import MAX_FUNDING_RATE
 
 
 @dataclass

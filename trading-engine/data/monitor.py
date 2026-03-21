@@ -41,6 +41,9 @@ def get_redis():
 # monitor:equity           → current equity snapshot
 # monitor:regime           → current regime info
 # monitor:status           → "running" / "stopped" / "error"
+# monitor:margin_ratio     → current margin ratio
+# monitor:funding_rate     → current funding rate per symbol
+# monitor:liquidation      → liquidation prices per position
 
 
 def publish_position_open(pos_id: int, data: dict):
@@ -299,3 +302,31 @@ def _handle_exit_fill(pos: dict, order_resp: dict, reason: str, db_module):
 
     print(f"✅ Position #{pos['id']} closed: {reason} @ ${exit_p:,.2f} "
           f"PnL=${net_pnl:.2f} Fee=${exit_comm:.6f} {parsed.get('commission_asset','')}")
+
+
+def update_margin_ratio(account_data: dict):
+    """Store margin ratio in Redis for dashboard."""
+    r = get_redis()
+    total_margin = float(account_data.get("totalMaintainMargin", 0))
+    total_balance = float(account_data.get("totalMarginBalance", 0))
+    ratio = total_margin / total_balance if total_balance > 0 else 0
+    data = {
+        "margin_ratio": round(ratio, 4),
+        "total_wallet": round(float(account_data.get("totalWalletBalance", 0)), 2),
+        "total_unrealized": round(float(account_data.get("totalUnrealizedProfit", 0)), 2),
+        "total_margin_balance": round(total_balance, 2),
+        "total_initial_margin": round(float(account_data.get("totalInitialMargin", 0)), 2),
+        "total_maint_margin": round(total_margin, 2),
+        "available_balance": round(float(account_data.get("availableBalance", 0)), 2),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    r.set("monitor:margin", json.dumps(data))
+
+
+def update_funding_rates(funding_data: dict):
+    """Store funding rates in Redis."""
+    r = get_redis()
+    r.set("monitor:funding", json.dumps({
+        **funding_data,
+        "timestamp": datetime.utcnow().isoformat(),
+    }))

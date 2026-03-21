@@ -119,6 +119,21 @@ def run_live():
     is_trained = False
     last_signal_time = None
 
+    # ─── Set leverage and margin type for all symbols ───
+    if USE_FUTURES:
+        print(f"\n⚙️  Configuring futures leverage and margin...")
+        for sym in SYMBOLS:
+            try:
+                bnb.set_leverage(sym, LEVERAGE)
+                print(f"✅ {sym}: Leverage set to {LEVERAGE}x")
+            except Exception as e:
+                print(f"⚠️ {sym}: Failed to set leverage: {e}")
+            try:
+                bnb.set_margin_type(sym, MARGIN_TYPE)
+                print(f"✅ {sym}: Margin type set to {MARGIN_TYPE}")
+            except Exception as e:
+                print(f"⚠️ {sym}: Margin type error (may already be set): {e}")
+
     mon.set_status("running", f"Live trading {SYMBOL}")
     db.log("INFO", "engine", "Live started", {"symbol": SYMBOL})
 
@@ -130,6 +145,26 @@ def run_live():
                     # Update price
                     price = bnb.get_price(SYMBOL)
                     mon.update_price(price)
+
+                    # Check margin ratio for futures
+                    if USE_FUTURES:
+                        try:
+                            account = bnb.get_futures_account()
+                            margin_check = risk_mgr.check_margin_ratio(account)
+                            mon.update_margin_ratio(account)
+                            if margin_check["status"] == "emergency":
+                                print(f"🚨 EMERGENCY: Margin ratio {margin_check['ratio']:.1%} — CLOSING ALL!")
+                                # Close all positions
+                                for pos in mon.get_open_positions_from_redis():
+                                    close_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
+                                    try:
+                                        bnb.place_market_order(pos['symbol'], close_side, float(pos['quantity']))
+                                    except Exception as e:
+                                        print(f"⚠️ Emergency close error: {e}")
+                            elif margin_check["status"] == "warning":
+                                print(f"⚠️ WARNING: Margin ratio {margin_check['ratio']:.1%}")
+                        except Exception as e:
+                            print(f"⚠️ Margin check error: {e}")
 
                     # Get open positions from Redis
                     open_positions = mon.get_open_positions_from_redis()
@@ -331,6 +366,18 @@ def run_live():
             price = last['close']
             print(f"\n📊 {SYMBOL}: ${price:,.2f} | ATR: {last['atr_pct']:.2f}% "
                   f"| RSI: {last['rsi_14']:.0f} | ADX: {last['adx']:.0f}")
+
+            # Check funding rates for each symbol (futures)
+            if USE_FUTURES:
+                for sym in SYMBOLS:
+                    try:
+                        mark = bnb.get_mark_price(sym)
+                        rate = float(mark.get("lastFundingRate", 0))
+                        mon.update_funding_rates({"symbol": sym, "rate": rate,
+                                                   "mark_price": float(mark.get("markPrice", 0)),
+                                                   "next_funding": mark.get("nextFundingTime")})
+                    except:
+                        pass
 
             # Update equity in Redis
             open_count = len(mon.get_open_positions_from_redis())

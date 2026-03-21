@@ -241,3 +241,17 @@ def save_regimes(regimes_df, symbol, timeframe):
                    "pt":float(row.get('prob_trending',0)),
                    "pr":float(row.get('prob_ranging',0)),
                    "pv":float(row.get('prob_volatile',0))})
+
+
+def save_funding_rate(symbol: str, timestamp, rate: float, mark_price: float = 0):
+    """Save funding rate to DB for audit."""
+    try:
+        with get_engine().begin() as c:
+            c.execute(text(
+                """INSERT INTO funding_rates (symbol, timestamp, funding_rate, mark_price)
+                   VALUES (:s, :ts, :r, :mp)
+                   ON DUPLICATE KEY UPDATE funding_rate=VALUES(funding_rate)"""),
+                {"s": symbol, "ts": timestamp, "r": rate, "mp": mark_price}
+            )
+    except Exception as e:
+        print(f"⚠️ Save funding rate error: {e}")
