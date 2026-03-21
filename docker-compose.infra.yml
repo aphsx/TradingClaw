@@ -1,13 +1,11 @@
 # ─────────────────────────────────────────────────────────
-#  DEV MODE — Infra + Engine in Docker, Dashboard local
-#
-#  ✅ Engine code changes → NO rebuild needed
-#     เปลี่ยน Python file → docker restart regime_engine
-#     เปลี่ยน requirements.txt → docker compose -f docker-compose.dev.yml up --build trading-engine
+#  INFRA ONLY — MySQL + Redis
+#  ใช้เมื่อต้องการรันทุกอย่าง local (engine + dashboard)
 #
 #  Usage:
-#    docker compose -f docker-compose.dev.yml up -d
-#    cd dashboard && npm run dev
+#    docker compose -f docker-compose.infra.yml up -d
+#    cd trading-engine  →  python main.py
+#    cd dashboard       →  npm run dev
 # ─────────────────────────────────────────────────────────
 
 version: "3.8"
@@ -46,31 +44,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-
-  trading-engine:
-    build: ./trading-engine
-    container_name: regime_engine
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      - DB_HOST=db
-      - DB_PORT=3306
-      - DB_NAME=${MYSQL_DATABASE:-regime_trader}
-      - DB_USER=${MYSQL_USER:-trader}
-      - DB_PASSWORD=${MYSQL_PASSWORD:-trader_pass_2026}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
-      - TRADING_MODE=${TRADING_MODE:-live}
-      - SYMBOL=${SYMBOL:-BTCUSDT}
-      - TIMEFRAME=${TIMEFRAME:-1h}
-    volumes:
-      - ./trading-engine:/app   # ← code changes apply without rebuild, just restart container
 
 volumes:
   mysql_data:

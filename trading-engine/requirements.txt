@@ -6,3 +6,4 @@ mysqlclient>=2.2
 SQLAlchemy>=2.0
 redis>=5.0
 schedule>=1.2
+python-dotenv>=1.0

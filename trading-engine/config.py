@@ -1,4 +1,8 @@
 import os
+from dotenv import load_dotenv
+
+# Load .env file when running locally (no-op inside Docker where env vars are injected)
+load_dotenv()
 
 # ─── Binance ───
 API_KEY = os.getenv("BINANCE_API_KEY", "")
