@@ -33,16 +33,19 @@ function Badge({ children, color }: any) {
 export default function Dashboard({ data }: { data: any }) {
   const [tab, setTab] = useState<'live' | 'positions' | 'backtest'>('live');
   const [liveData, setLiveData] = useState<any>(null);
+  const [balanceData, setBalanceData] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   // Auto-refresh positions every 10s
   const fetchLive = useCallback(async () => {
     try {
-      const [posRes, statsRes] = await Promise.all([
+      const [posRes, statsRes, balRes] = await Promise.all([
         fetch('/api/positions').then(r => r.json()),
         fetch('/api/stats?source=LIVE').then(r => r.json()),
+        fetch('/api/balance').then(r => r.json()),
       ]);
       setLiveData({ positions: posRes, stats: statsRes });
+      if (!balRes.error) setBalanceData(balRes);
     } catch {}
   }, []);
 
@@ -72,6 +75,14 @@ export default function Dashboard({ data }: { data: any }) {
   const openPositions = liveData?.positions?.open_positions || data?.openPositions || [];
   const engineStatus = monitor.status?.status || 'unknown';
 
+  // Balance — direct from Binance (always available, regardless of engine state)
+  // Falls back to Redis equity snapshot if Binance call hasn't resolved yet
+  const redisEquity = monitor.equity || {};
+  const usdtFree = balanceData?.usdt_free ?? null;
+  const usdtLocked = balanceData?.usdt_locked ?? null;
+  const usdtTotal = balanceData?.usdt_total ?? redisEquity.equity ?? null;
+  const unrealizedPnl = redisEquity.unrealized ?? null;
+
   const REGIME_COLORS: Record<string, string> = {
     Trending: '#22c55e', Ranging: '#3b82f6', Volatile: '#f59e0b'
   };
@@ -88,7 +99,44 @@ export default function Dashboard({ data }: { data: any }) {
           <h1 className="text-2xl font-bold">Regime Detection Trading System</h1>
           <p className="text-sm text-gray-500">BTCUSDT · Binance · Real-time Monitor</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
+          {/* Balance card — always visible, data from Binance API */}
+          <div className="flex items-center gap-3 bg-[#12121a] border border-[#1e1e2e] rounded-lg px-4 py-2">
+            <DollarSign size={14} className="text-green-400 shrink-0" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 leading-none mb-0.5">USDT Balance</div>
+              <div className="text-base font-bold text-green-400 leading-none">
+                {usdtTotal !== null
+                  ? `$${usdtTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : <span className="text-gray-600 text-sm">Loading…</span>}
+              </div>
+            </div>
+            {usdtFree !== null && (
+              <div className="border-l border-[#1e1e2e] pl-3">
+                <div className="text-[10px] uppercase tracking-wider text-gray-500 leading-none mb-0.5">Available</div>
+                <div className="text-sm font-semibold text-gray-300 leading-none">
+                  ${usdtFree.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </div>
+            )}
+            {usdtLocked !== null && usdtLocked > 0 && (
+              <div className="border-l border-[#1e1e2e] pl-3">
+                <div className="text-[10px] uppercase tracking-wider text-gray-500 leading-none mb-0.5">In orders</div>
+                <div className="text-sm font-semibold text-amber-400 leading-none">
+                  ${usdtLocked.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </div>
+            )}
+            {unrealizedPnl !== null && (
+              <div className="border-l border-[#1e1e2e] pl-3">
+                <div className="text-[10px] uppercase tracking-wider text-gray-500 leading-none mb-0.5">Unrealized</div>
+                <div className={`text-sm font-semibold leading-none ${unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Engine status */}
           <div className="flex items-center gap-2 bg-[#12121a] border border-[#1e1e2e] rounded-lg px-3 py-2">
             <div className={`w-2 h-2 rounded-full ${
