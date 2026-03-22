@@ -485,13 +485,16 @@ def run_live():
                         if corr_result['correlated_with']:
                             print(f"   ℹ️ Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
 
-                        # ── Position size (Kelly + vol + heat + drawdown + regime) ──
+                        # ── Position size ──
+                        # Kelly sizing (tier-aware risk%) → ATR-based SL → notional caps
+                        # Only apply drawdown safety brake — keep full tier risk% intact
                         qty = risk_mgr.calculate_position_size(sig)
-                        qty *= risk_mgr.get_heat_size_multiplier(open_pos)
-                        qty *= risk_mgr.get_drawdown_size_multiplier()
-                        qty *= risk_mgr.get_regime_size_multiplier(rname)
-                        qty *= max(sig.confidence, 0.3)
+                        dd_mult = risk_mgr.get_drawdown_size_multiplier()
+                        qty *= dd_mult
                         qty = round(qty, 6)
+                        tier = risk_mgr.get_tier_info()
+                        print(f"   💰 Tier: {tier['tier']} | Risk: {tier['risk_pct']} "
+                              f"(${tier['risk_amount_usd']}) | DD: {dd_mult:.2f}x | Qty: {qty}")
                         if qty <= 0:
                             print("   ⛔ Quantity zero after adjustments")
                             continue
@@ -638,7 +641,7 @@ def run_live():
             # ── Equity update ──
             price = bnb.get_price(SYMBOL)
             unrealized = mon.update_price(price)
-            mon.update_equity(INITIAL_CAPITAL + unrealized, INITIAL_CAPITAL, unrealized, len(open_pos))
+            mon.update_equity(risk_mgr.capital + unrealized, risk_mgr.initial_capital, unrealized, len(open_pos))
 
         except Exception as e:
             print(f"❌ Loop error: {e}")
