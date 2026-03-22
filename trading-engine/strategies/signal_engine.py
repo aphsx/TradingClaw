@@ -143,6 +143,17 @@ class SignalEngine:
         if abs(composite) < COMPOSITE_ENTRY_THRESHOLD:
             return []
 
+        # ─── Signal confirmation: composite must CROSS threshold (not just be above it) ───
+        # Prevents entering mid-trend on a signal that's been above threshold for many bars.
+        # Require a crossover: prev bar was below threshold, current bar is above.
+        if len(scores_df) >= 2:
+            prev_composite = float(scores_df['composite'].iloc[-2])
+            just_crossed = abs(prev_composite) < COMPOSITE_ENTRY_THRESHOLD
+            # Allow entry if this is a fresh cross OR if score strengthened significantly
+            score_surge = abs(composite) - abs(prev_composite) > COMPOSITE_ENTRY_THRESHOLD * 0.5
+            if not just_crossed and not score_surge:
+                return []  # Signal is stale (already above threshold for multiple bars)
+
         direction = "LONG" if composite > 0 else "SHORT"
         confidence = min(abs(composite) / COMPOSITE_STRONG_THRESHOLD, 1.0)
 

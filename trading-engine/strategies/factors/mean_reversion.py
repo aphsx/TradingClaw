@@ -22,15 +22,16 @@ class MeanReversionFactor:
         scores += self._rsi_divergence_score(df) * 0.35
         scores += self._vwap_zscore_score(df) * 0.25
 
-        # If 4h strongly trending, dampen mean reversion (trend overrides)
-        if df_4h is not None and not df_4h.empty:
-            for bar_idx in df.index:
-                row_4h = df_4h[df_4h.index <= bar_idx]
-                if row_4h.empty:
-                    continue
-                adx_4h = float(row_4h.iloc[-1].get('adx', 0) if 'adx' in row_4h.columns else 0)
-                if adx_4h > 35:
-                    scores.loc[bar_idx] *= 0.3  # Strongly trending 4h = dampen range trades
+        # If 4h strongly trending, dampen mean reversion via merge_asof (O(N))
+        if df_4h is not None and not df_4h.empty and 'adx' in df_4h.columns:
+            aligned = pd.merge_asof(
+                df[['close']].reset_index(), df_4h[['adx']].reset_index(),
+                left_on=df.index.name or 'index', right_on=df_4h.index.name or 'index',
+                direction='backward',
+            ).set_index(df.index.name or 'index')
+            adx_4h = aligned['adx'].reindex(scores.index).fillna(0)
+            dampen_mask = adx_4h > 35
+            scores = scores.where(~dampen_mask, scores * 0.3)
 
         return scores.clip(-1.0, 1.0)
 

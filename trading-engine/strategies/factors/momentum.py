@@ -92,16 +92,21 @@ class MomentumFactor:
             mom_std = mom.rolling(50, min_periods=10).std().fillna(1)
             score = (score + (mom / (mom_std * 2 + 1e-10)).clip(-1.0, 1.0)) / 2
 
-        # 4h ROC confirmation
+        # 4h ROC confirmation — O(N) via merge_asof (was O(N²))
         if df_4h is not None and not df_4h.empty and 'momentum_10' in df_4h.columns:
-            for bar_idx in df.index:
-                row_4h = df_4h[df_4h.index <= bar_idx]
-                if row_4h.empty:
-                    continue
-                mom_4h = row_4h.iloc[-1].get('momentum_10', 0)
-                mom_4h = float(mom_4h) if not pd.isna(mom_4h) else 0
-                if np.sign(mom_4h) == np.sign(score.loc[bar_idx]):
-                    score.loc[bar_idx] *= 1.2  # Confirmation bonus
+            idx_name = df.index.name or 'index'
+            idx_name_4h = df_4h.index.name or 'index'
+            aligned = pd.merge_asof(
+                score.rename('score').reset_index(),
+                df_4h[['momentum_10']].reset_index(),
+                left_on=idx_name,
+                right_on=idx_name_4h,
+                direction='backward',
+            ).set_index(idx_name)
+            mom_4h = aligned['momentum_10'].reindex(score.index).fillna(0)
+            # Amplify by 20% when 4h momentum agrees with 1h score direction
+            confirmation_mask = np.sign(mom_4h) == np.sign(score)
+            score = score.where(~confirmation_mask, score * 1.2)
 
         return score.clip(-1.0, 1.0)
 

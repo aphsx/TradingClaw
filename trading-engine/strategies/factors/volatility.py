@@ -82,28 +82,34 @@ class VolatilityFactor:
 
     def _rv_hv_score(self, df: pd.DataFrame) -> pd.Series:
         """
-        RV/HV ratio: >1.5 = spiking (caution, reduce directional bias)
-        <0.7 = calm before storm (slight compression bias)
+        RV/HV ratio — continuous gradient instead of hard thresholds:
+          ratio << 1  → compression (positive bias toward breakout)
+          ratio == 1  → neutral (0)
+          ratio >> 1  → spiking (negative bias, uncertainty)
+        Uses smooth tanh mapping so score changes continuously.
         """
         if 'rv_hv_ratio' not in df.columns:
             return pd.Series(0.0, index=df.index)
 
         rv_hv = df['rv_hv_ratio'].fillna(1.0)
-        # High RV/HV = uncertainty, reduce score magnitude
-        # Low RV/HV = compression, neutral but watch for breakout
-        score = pd.Series(0.0, index=df.index)
-        score[rv_hv > 1.5] = 0.0   # Spiking: no directional bias from vol
-        score[rv_hv < 0.7] = 0.3   # Compression: slight breakout bias (direction from trend)
+        # Centre around 1, scale so ±1.0 ratio deviation → ±0.5 score
+        # tanh(-x) where x = (rv_hv - 1) gives: low ratio → positive, high ratio → negative
+        centered = (rv_hv - 1.0).clip(-2.0, 2.0)
+        score = pd.Series(np.tanh(-centered * 0.8) * 0.4, index=df.index)
         return score
 
     def _atr_regime_score(self, df: pd.DataFrame) -> pd.Series:
-        """ATR regime score: used more for sizing than direction."""
+        """
+        ATR regime score — continuous gradient instead of hard thresholds.
+        Low vol (vr < 1) → slight positive (breakout potential)
+        High vol (vr > 1) → slight negative (mean reversion potential)
+        """
         if 'volatility_ratio' not in df.columns:
             return pd.Series(0.0, index=df.index)
 
         vr = df['volatility_ratio'].fillna(1.0)
-        # In low-vol regime, breakout potential is higher
-        score = pd.Series(0.0, index=df.index)
-        score[vr < 0.7] = 0.3   # Low vol: breakout potential
-        score[vr > 1.5] = -0.2  # High vol: mean reversion potential
+        # Smooth inverse: low vol = positive bias, high vol = negative
+        # tanh(-(vr-1)) ranges from +1 (vr→0) to -1 (vr→∞)
+        centered = (vr - 1.0).clip(-2.0, 2.0)
+        score = pd.Series(np.tanh(-centered * 1.0) * 0.35, index=df.index)
         return score

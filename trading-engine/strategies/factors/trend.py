@@ -55,18 +55,16 @@ class TrendFactor:
             above = (close > emas[50]).astype(float)
             score += (above * 2 - 1) * 0.2
 
-        # 4h EMA confirmation if available
-        if df_4h is not None and not df_4h.empty:
-            for bar_idx in df.index:
-                row_4h = df_4h[df_4h.index <= bar_idx]
-                if row_4h.empty:
-                    continue
-                r4 = row_4h.iloc[-1]
-                if 'ema_9' in r4 and 'ema_21' in r4:
-                    if r4['ema_9'] > r4['ema_21']:
-                        score.loc[bar_idx] += 0.2
-                    elif r4['ema_9'] < r4['ema_21']:
-                        score.loc[bar_idx] -= 0.2
+        # 4h EMA confirmation via merge_asof (O(N) instead of O(N²))
+        if df_4h is not None and not df_4h.empty and 'ema_9' in df_4h.columns and 'ema_21' in df_4h.columns:
+            aligned = pd.merge_asof(
+                df[['close']].reset_index(), df_4h[['ema_9', 'ema_21']].reset_index(),
+                left_on=df.index.name or 'index', right_on=df_4h.index.name or 'index',
+                direction='backward',
+            ).set_index(df.index.name or 'index')
+            htf_bull = (aligned['ema_9'] > aligned['ema_21']).astype(float) * 0.2
+            htf_bear = (aligned['ema_9'] < aligned['ema_21']).astype(float) * 0.2
+            score = score + htf_bull.reindex(score.index, fill_value=0) - htf_bear.reindex(score.index, fill_value=0)
 
         return score.clip(-1.0, 1.0)
 
