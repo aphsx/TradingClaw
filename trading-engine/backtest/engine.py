@@ -59,7 +59,8 @@ class BacktestEngine:
         # Step 3: Train
         print("\n🧠 Training regime detector...")
         train_stats = self.detector.fit(train_df, train_feat)
-        print(f"   CV Accuracy: {train_stats['cv_accuracy']}")
+        print(f"   CV Accuracy:      {train_stats['cv_accuracy']}")
+        print(f"   Holdout Accuracy: {train_stats.get('holdout_accuracy', 'N/A')}")
 
         # Step 4: Predict
         print("\n🔮 Predicting regimes...")
@@ -103,6 +104,7 @@ class BacktestEngine:
         executed = 0
 
         for idx, bar in test_df.iterrows():
+            # check_exits applies SLIPPAGE to make SL/TP prices realistic
             self.risk_mgr.check_exits(bar, idx)
 
             # Write closed positions to DB

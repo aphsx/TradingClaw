@@ -157,6 +157,10 @@ class RangeStrategy:
             close = df.loc[idx, 'close']
             atr = df.loc[idx, 'atr_14']
             rsi = df.loc[idx, 'rsi_14']
+            # Use 1.5σ bands for entry trigger (wider zone → more signals)
+            # Use 2σ outer bands as TP target for proper R:R
+            bb_lower_trigger = df.loc[idx, 'bb_lower_1_5'] if 'bb_lower_1_5' in df.columns else df.loc[idx, 'bb_lower']
+            bb_upper_trigger = df.loc[idx, 'bb_upper_1_5'] if 'bb_upper_1_5' in df.columns else df.loc[idx, 'bb_upper']
             bb_lower = df.loc[idx, 'bb_lower']
             bb_upper = df.loc[idx, 'bb_upper']
             bb_mid = df.loc[idx, 'bb_mid']
@@ -174,12 +178,11 @@ class RangeStrategy:
                     # Only trade range if 4h ADX < 30 (not strong trend)
                     allow_range = adx_4h < 30
 
-            # LONG: Price at lower BB + RSI oversold
-            # TP at bb_upper (opposite band) for proper R:R; bb_mid TP was too close
-            # and got filtered out by fee filter almost every time
-            if allow_range and close <= bb_lower and rsi < RANGE_RSI_OVERSOLD:
+            # LONG: Price touches lower 1.5σ BB + RSI oversold
+            # TP at bb_upper (opposite 2σ band) for proper R:R
+            if allow_range and close <= bb_lower_trigger and rsi < RANGE_RSI_OVERSOLD:
                 sl = close - atr * RANGE_ATR_SL_MULT
-                tp = bb_upper  # Target = opposite (upper) band for adequate R:R
+                tp = bb_upper  # Target = opposite (upper) 2σ band for adequate R:R
                 expected_profit = (tp - close) / close * 100
                 bb_deviation = (close - bb_mid) / (bb_upper - bb_mid) if (bb_upper - bb_mid) != 0 else 0
                 confidence = min(abs(bb_deviation) / 2, 1.0)
@@ -197,10 +200,10 @@ class RangeStrategy:
                     expected_profit_pct=expected_profit
                 ))
 
-            # SHORT: Price at upper BB + RSI overbought
-            elif allow_range and close >= bb_upper and rsi > RANGE_RSI_OVERBOUGHT:
+            # SHORT: Price touches upper 1.5σ BB + RSI overbought
+            elif allow_range and close >= bb_upper_trigger and rsi > RANGE_RSI_OVERBOUGHT:
                 sl = close + atr * RANGE_ATR_SL_MULT
-                tp = bb_lower  # Target = opposite (lower) band for adequate R:R
+                tp = bb_lower  # Target = opposite (lower) 2σ band for adequate R:R
                 expected_profit = (close - tp) / close * 100
                 bb_deviation = (close - bb_mid) / (bb_upper - bb_mid) if (bb_upper - bb_mid) != 0 else 0
                 confidence = min(abs(bb_deviation) / 2, 1.0)

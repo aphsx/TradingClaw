@@ -83,45 +83,59 @@ class RegimeDetector:
         """
         Train the regime detector:
         1. Generate rule-based labels
-        2. Train Random Forest on those labels
-        3. Also fit K-Means for comparison
+        2. Split into train (80%) + holdout (20%) for out-of-sample accuracy
+        3. Train Random Forest on train set
+        4. Also fit K-Means for comparison
         """
         # Get rule-based labels
         rule_labels = self._rule_based_regime(df)
-        
+
         # Align features and labels
         common_idx = features.index.intersection(rule_labels.index)
         X = features.loc[common_idx].dropna()
         y = rule_labels.loc[X.index]
-        
-        # Scale features
-        X_scaled = self.scaler.fit_transform(X)
-        
-        # Train Random Forest
-        self.rf_model.fit(X_scaled, y)
-        
-        # Cross-validation score
-        cv_scores = cross_val_score(self.rf_model, X_scaled, y, cv=5, scoring='accuracy')
-        
+
+        # ── Train / Holdout split (80/20) for out-of-sample accuracy ──
+        split = int(len(X) * 0.8)
+        X_train, X_holdout = X.iloc[:split], X.iloc[split:]
+        y_train, y_holdout = y.iloc[:split], y.iloc[split:]
+
+        # Scale features (fit on train only)
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_holdout_scaled = self.scaler.transform(X_holdout)
+
+        # Train Random Forest on train set
+        self.rf_model.fit(X_train_scaled, y_train)
+
+        # Cross-validation score (within train set)
+        cv_scores = cross_val_score(self.rf_model, X_train_scaled, y_train, cv=5, scoring='accuracy')
+
+        # Out-of-sample holdout accuracy
+        holdout_preds = self.rf_model.predict(X_holdout_scaled)
+        holdout_correct = (holdout_preds == y_holdout.values).sum()
+        holdout_accuracy = holdout_correct / max(len(y_holdout), 1)
+
         # Feature importance
         self.feature_importance = pd.Series(
             self.rf_model.feature_importances_,
-            index=X.columns
+            index=X_train.columns
         ).sort_values(ascending=False)
-        
-        # Also fit K-Means (unsupervised comparison)
-        self.kmeans.fit(X_scaled)
-        
+
+        # Also fit K-Means (unsupervised comparison) on full scaled data
+        X_all_scaled = self.scaler.transform(X)
+        self.kmeans.fit(X_all_scaled)
+
         self.is_fitted = True
-        
+
         stats = {
             "cv_accuracy": f"{cv_scores.mean():.3f} ± {cv_scores.std():.3f}",
+            "holdout_accuracy": f"{holdout_accuracy:.3f}  ({holdout_correct}/{len(y_holdout)} correct)",
             "regime_distribution": {
                 REGIME_NAMES[r]: int((y == r).sum()) for r in [TRENDING, RANGING, VOLATILE]
             },
             "top_features": self.feature_importance.head(5).to_dict()
         }
-        
+
         return stats
     
     def predict(self, features: pd.DataFrame) -> pd.Series:

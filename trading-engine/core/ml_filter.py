@@ -40,7 +40,7 @@ class MLSignalFilter:
                 features['rsi'] = recent['rsi_14'].iloc[-1] if 'rsi_14' in recent.columns else 50
                 features['atr_pct'] = recent['atr_pct'].iloc[-1] if 'atr_pct' in recent.columns else 0
                 features['adx'] = recent['adx'].iloc[-1] if 'adx' in recent.columns else 0
-                features['volume_ratio'] = recent['volume_ma_ratio'].iloc[-1] if 'volume_ma_ratio' in recent.columns else 1
+                features['volume_ratio'] = recent['volume_ratio'].iloc[-1] if 'volume_ratio' in recent.columns else 1
                 features['momentum'] = recent['momentum_10'].iloc[-1] if 'momentum_10' in recent.columns else 0
                 features['bb_width'] = recent['bb_width'].iloc[-1] if 'bb_width' in recent.columns else 0
                 features['vwap_dist'] = recent['vwap_distance'].iloc[-1] if 'vwap_distance' in recent.columns else 0

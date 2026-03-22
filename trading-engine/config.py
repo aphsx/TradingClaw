@@ -49,7 +49,8 @@ FEE_MULTIPLIER = 3.0
 
 # ─── Risk ───
 INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "10000"))
-RISK_PER_TRADE = 0.02
+# At 5x leverage, 1% of margin = 5% actual exposure → safer for futures
+RISK_PER_TRADE = 0.01
 MAX_DAILY_LOSS = 0.05
 MAX_DRAWDOWN = 0.15
 MAX_OPEN_TRADES = 3
@@ -63,13 +64,16 @@ TREND_ATR_TP_MULT = 3.0
 # ─── Range Strategy ───
 RANGE_BB_PERIOD = 20
 RANGE_BB_STD = 2.0
-RANGE_RSI_OVERSOLD = 30
-RANGE_RSI_OVERBOUGHT = 70
-RANGE_ATR_SL_MULT = 1.0
+RANGE_BB_STD_RANGE = 1.5   # 1.5σ trigger zone for range entries (more signals)
+RANGE_RSI_OVERSOLD = 35    # Widened from 30: easier to trigger, still meaningful
+RANGE_RSI_OVERBOUGHT = 65  # Widened from 70
+# 1.5x ATR for SL: crypto 5x lev needs more room than 1.0x
+RANGE_ATR_SL_MULT = 1.5
 RANGE_ATR_TP_MULT = 1.5
 
 # ─── Volatile Strategy ───
-VOL_VOLUME_SPIKE = 2.0
+# Require stronger volume confirmation (2.5x vs 2.0x) to cut false positives
+VOL_VOLUME_SPIKE = 2.5
 VOL_ATR_SL_MULT = 2.0
 VOL_ATR_TP_MULT = 4.0
 

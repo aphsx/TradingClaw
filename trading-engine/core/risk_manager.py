@@ -296,41 +296,49 @@ class RiskManager:
         return position
     
     def check_exits(self, current_bar: pd.Series, current_time: pd.Timestamp):
-        """Check all open positions for exit conditions."""
-        positions_to_close = []
+        """Check all open positions for exit conditions.
         
+        Exit prices include SLIPPAGE in the adverse direction to simulate
+        realistic fills (SL fills worse, TP fills worse).
+        """
+        positions_to_close = []
+
         for pos in self.open_positions:
             high = current_bar['high']
             low = current_bar['low']
             close = current_bar['close']
             signal = pos.signal
-            
+
             exit_price = None
             exit_reason = ""
-            
+
             if signal.direction == "LONG":
                 # Check stop loss
                 if low <= signal.stop_loss:
-                    exit_price = signal.stop_loss
+                    # SL: fill below stop (adverse slip)
+                    exit_price = signal.stop_loss * (1 - SLIPPAGE)
                     exit_reason = "Stop Loss"
                 # Check take profit
                 elif high >= signal.take_profit:
-                    exit_price = signal.take_profit
+                    # TP: fill below TP (adverse slip)
+                    exit_price = signal.take_profit * (1 - SLIPPAGE)
                     exit_reason = "Take Profit"
-            
+
             elif signal.direction == "SHORT":
                 # Check stop loss
                 if high >= signal.stop_loss:
-                    exit_price = signal.stop_loss
+                    # SL: fill above stop (adverse slip)
+                    exit_price = signal.stop_loss * (1 + SLIPPAGE)
                     exit_reason = "Stop Loss"
                 # Check take profit
                 elif low <= signal.take_profit:
-                    exit_price = signal.take_profit
+                    # TP: fill above TP (adverse slip)
+                    exit_price = signal.take_profit * (1 + SLIPPAGE)
                     exit_reason = "Take Profit"
-            
+
             if exit_price is not None:
                 positions_to_close.append((pos, exit_price, exit_reason, current_time))
-        
+
         for pos, exit_price, exit_reason, exit_time in positions_to_close:
             self._close_position(pos, exit_price, exit_reason, exit_time)
     
