@@ -117,10 +117,13 @@ def get_symbol_info(symbol: str = SYMBOL) -> dict:
 # ORDER PLACEMENT
 # ═══════════════════════════════════════
 
-def place_market_order(symbol: str, side: str, quantity: float) -> dict:
+def place_market_order(symbol: str, side: str, quantity: float,
+                       reduce_only: bool = False) -> dict:
     """
     Place a MARKET order. Returns full Binance response including:
     orderId, clientOrderId, fills (with price, qty, commission, commissionAsset)
+
+    reduce_only=True: closes an existing position (required for futures exit orders).
     """
     client_oid = f"regime_{uuid.uuid4().hex[:16]}"
     params = {
@@ -133,6 +136,9 @@ def place_market_order(symbol: str, side: str, quantity: float) -> dict:
         "timestamp": _ts(),
         "recvWindow": 10000,
     }
+    # reduceOnly is only valid for futures orders
+    if reduce_only and USE_FUTURES:
+        params["reduceOnly"] = "true"
     r = requests.post(f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}",
                       headers=_headers(), timeout=10)
     resp = r.json()

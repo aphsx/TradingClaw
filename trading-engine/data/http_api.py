@@ -22,6 +22,7 @@ from data.monitor import (
     get_open_positions_from_redis,
     publish_position_open,
     publish_position_close,
+    cleanup_ghost_positions as _cleanup_ghost_positions,
 )
 
 
@@ -299,42 +300,6 @@ def _import_binance_position(pos: dict) -> int:
     
     print(f"✅ Imported position: #{pos_id} {direction} {symbol} qty={quantity}")
     return pos_id
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Ghost position cleanup
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _cleanup_ghost_positions() -> list:
-    """
-    Remove Redis positions that no longer exist on Binance.
-    Returns list of removed position IDs.
-    """
-    removed = []
-    try:
-        bot_positions   = get_open_positions_from_redis()
-        binance_live    = bnb.get_account_positions()          # actual open positions
-
-        # Build set of (symbol, direction) pairs that actually exist on Binance
-        live_keys = {(p['symbol'], p['direction']) for p in binance_live}
-
-        for pos in bot_positions:
-            # Only reconcile LIVE / MANUAL_ADOPTED positions — skip paper/backtest
-            if pos.get('source') not in ('LIVE', 'MANUAL', 'MANUAL_ADOPTED'):
-                continue
-            key = (pos.get('symbol'), pos.get('direction'))
-            if key not in live_keys:
-                pid = pos.get('id')
-                publish_position_close(int(pid), {
-                    'exit_price': 0,
-                    'reason':     'Ghost cleanup (not found on Binance)',
-                    'pnl':        0,
-                })
-                removed.append(pid)
-                print(f"🧹 Ghost position removed: #{pid} {key}")
-    except Exception as e:
-        print(f"⚠️ cleanup_ghost_positions: {e}")
-    return removed
 
 
 # ══════════════════════════════════════════════════════════════════════════════

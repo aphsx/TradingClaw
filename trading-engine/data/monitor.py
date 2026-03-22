@@ -200,7 +200,8 @@ def sync_open_positions_with_binance(db_module) -> list:
     positions = get_open_positions_from_redis()
 
     for pos in positions:
-        if pos.get("source") != "LIVE":
+        # Sync LIVE and MANUAL_ADOPTED (both have real SL/TP orders on Binance)
+        if pos.get("source") not in ("LIVE", "MANUAL_ADOPTED"):
             continue
 
         try:

@@ -45,8 +45,9 @@ export async function GET() {
         `SELECT id, source, symbol, direction, strategy, regime, status,
                 entry_price, entry_time, quantity,
                 entry_order_id, entry_fill_price, entry_commission, entry_commission_asset,
-                stop_loss, take_profit, risk_reward
-         FROM positions WHERE status='OPEN' AND source='LIVE'
+                stop_loss, take_profit, risk_reward, confidence
+         FROM positions
+         WHERE status='OPEN' AND source IN ('LIVE','MANUAL_ADOPTED','MANUAL_IMPORTED')
          ORDER BY entry_time DESC`
       );
       open_positions = dbOpen.map((p: any) => ({ ...p, is_bot: true })) || [];
