@@ -111,9 +111,17 @@ export default function Dashboard({ data }: { data: any }) {
 
   // ── Socket.IO — real-time price / position updates ──────────────────────
   useEffect(() => {
-    const socket = io('http://localhost:8080', { transports: ['websocket'] });
-    socket.on('connect',    () => setSocketConnected(true));
-    socket.on('disconnect', () => setSocketConnected(false));
+    const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8080';
+    const socket = io(SOCKET_URL, {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 5,       // stop spamming after 5 tries
+      reconnectionDelay: 3000,       // 3s between retries
+      reconnectionDelayMax: 15000,   // cap at 15s
+      timeout: 5000,
+    });
+    socket.on('connect',       () => setSocketConnected(true));
+    socket.on('disconnect',    () => setSocketConnected(false));
+    socket.on('connect_error', () => setSocketConnected(false));
 
     // Live position updates (open / update / close)
     socket.on('position_update', (msg: any) => {

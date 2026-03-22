@@ -47,8 +47,13 @@ export async function GET() {
     const data = await res.json();
 
     if (!res.ok) {
+      // HTTP 401 or code -2015 → API key expired/invalid (testnet keys expire ~30 days)
+      const isExpired = res.status === 401 || data.code === -2015;
+      const errMsg = isExpired
+        ? 'API key expired — ไปที่ testnet.binancefuture.com → API Management → สร้าง key ใหม่ แล้วอัพเดท .env'
+        : (data.msg || 'Binance API error');
       return NextResponse.json(
-        { error: data.msg || 'Binance error', binance_code: data.code, status: res.status },
+        { error: errMsg, binance_code: data.code, http_status: res.status, expired: isExpired },
         { status: res.status }
       );
     }
