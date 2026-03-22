@@ -77,6 +77,10 @@ class MLSignalFilter:
                 features['rv_hv_ratio'] = g('rv_hv_ratio', 1)
                 features['rsi_divergence'] = g('rsi_divergence')
 
+                # Issue #10: OI score from signal dict (passed via composite_score context)
+                # oi_score is injected into the signal dict by the signal engine when available
+                features['oi_score'] = float(signal.get('oi_score', 0) or 0)
+
                 # Derived / interaction features
                 atr_pct = features['atr_pct']
                 avg_atr = float(recent['atr_pct'].mean()) if 'atr_pct' in recent.columns else 1

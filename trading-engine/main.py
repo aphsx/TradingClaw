@@ -80,7 +80,7 @@ def _with_retry(fn, *args, retries=3, **kwargs):
 _REGIME_NAMES = {0: 'Trending-Up', 1: 'Ranging', 2: 'Volatile', 3: 'Trending-Down'}
 
 
-def _signal_to_dict(sig) -> dict:
+def _signal_to_dict(sig, oi_score: float = 0.0) -> dict:
     # Resolve regime int → name so ml_filter.predict() regime_map can match it.
     # Without this fix Signal.regime (int 0-3) becomes "0","1"… which the ML mapper
     # can't find in {'Trending-Up':0, 'Ranging':1, …} and defaults everything to 1.
@@ -98,6 +98,7 @@ def _signal_to_dict(sig) -> dict:
         'composite_score': getattr(sig, 'composite_score', 0),
         'regime': regime_name,
         'strategy': sig.strategy,
+        'oi_score': oi_score,   # Issue #10: OI score for ML feature extraction
     }
 
 
@@ -168,6 +169,14 @@ def run_live():
     loop_count   = 0
     bars_since_retrain = {sym: 0 for sym in SYMBOLS}
     CAPITAL_SYNC_EVERY = 50  # Re-sync balance every N loops (~50 min on 1h tf)
+
+    # ── Issue #1: ML Cold Start — pretrain on backtest trades before first live trade ──
+    # pretrain_from_backtest() exists in MLSignalFilter but was never called at startup.
+    # Without this, ML passes every signal through for the first ML_MIN_SAMPLES=50 trades.
+    # We pretrain now so the filter is active from minute 1.
+    if db_ready if 'db_ready' in dir() else False:
+        pass  # handled below after first data fetch
+    _ml_pretrained_attempted = False
 
     # ── Pending signal outcome tracker (ML bias fix) ──
     # All generated signals (including rejected) are tracked here.
@@ -416,15 +425,30 @@ def run_live():
             if outcome is None:
                 continue  # Still pending — price hasn't touched SL or TP yet
 
-            # Log simulated outcome to DB for ML training
+            # Issue #3: Persist simulated outcome to DB so ML can train on it
             try:
                 sim_pnl = (tp - pending['entry'] if outcome == 1 else sl - pending['entry'])
                 if direction == 'SHORT':
                     sim_pnl = -sim_pnl
+                sig_dict = pending.get('signal', {})
+                db.save_simulated_outcome(
+                    symbol      = sym,
+                    direction   = direction,
+                    strategy    = sig_dict.get('strategy', 'SIM'),
+                    regime      = sig_dict.get('regime', 'Ranging'),
+                    entry_price = pending['entry'],
+                    entry_time  = pending['created_at'],
+                    stop_loss   = sl,
+                    take_profit = tp,
+                    risk_reward = sig_dict.get('risk_reward', 0),
+                    confidence  = sig_dict.get('confidence', 0.5),
+                    sim_pnl     = round(sim_pnl, 4),
+                    outcome     = outcome,
+                    composite_score = sig_dict.get('composite_score', 0),
+                )
                 db.log("DEBUG", "ml_signal", f"Simulated outcome sig={sig_key}",
                        {"outcome": outcome, "sim_pnl": round(sim_pnl, 4),
-                        "direction": direction, "age_h": round(age_h, 1),
-                        "adverse": round(adverse, 4), "favorable": round(favorable, 4)})
+                        "direction": direction, "age_h": round(age_h, 1)})
             except Exception:
                 pass
             resolved.append(sig_key)
@@ -508,6 +532,29 @@ def run_live():
                     except Exception:
                         pass
 
+            # ── Issue #6: Pre-compute BTC composite score as cross-symbol macro bias ──
+            # BTC leads the crypto market — blend a small portion into all other signals.
+            # Computed once per loop before the per-symbol signal loop.
+            _btc_composite_last = 0.0
+            _BTC_SYMBOL = 'BTCUSDT'
+            if _BTC_SYMBOL in multi_data and not multi_data[_BTC_SYMBOL].empty:
+                try:
+                    btc_df_raw = multi_data[_BTC_SYMBOL]
+                    btc_df_feat = calculate_features(btc_df_raw)
+                    if len(btc_df_feat) >= 60:
+                        btc_scores = sig_engine.compute_composite(
+                            btc_df_feat,
+                            regime=detector.get_current_regime(
+                                get_regime_features(btc_df_feat).dropna()
+                            ).get('regime', -1) if len(btc_df_feat) >= 50 else -1,
+                            symbol=_BTC_SYMBOL,
+                            btc_composite=0.0,   # BTC doesn't get blended with itself
+                        )
+                        _btc_composite_last = float(btc_scores['composite'].iloc[-1])
+                        print(f"🔗 BTC composite: {_btc_composite_last:+.3f} (macro bias for other pairs)")
+                except Exception as e:
+                    print(f"⚠️ BTC cross-symbol bias: {e}")
+
             for current_symbol in SYMBOLS:
                 print(f"\n== {current_symbol} ==")
 
@@ -564,6 +611,27 @@ def run_live():
                 mon.update_regime(rname, rconf, current_regime['probabilities'])
 
                 # ── ML filter training ──
+                # Issue #1: Cold-start pretrain from backtest on first loop, before live filter
+                if not _ml_pretrained_attempted and current_symbol == SYMBOLS[0]:
+                    _ml_pretrained_attempted = True
+                    try:
+                        bt_trades = db.get_recent_trades(limit=500, source='BACKTEST')
+                        if bt_trades is not None and len(bt_trades) >= ML_MIN_SAMPLES:
+                            ml_filter.pretrain_from_backtest(bt_trades, df)
+                            ml_trained = True
+                            print(f"🤖 ML cold-start: pretrained on {len(bt_trades)} backtest trades")
+                        else:
+                            n = len(bt_trades) if bt_trades is not None else 0
+                            print(f"⚠️ ML cold-start: only {n} backtest trades (need {ML_MIN_SAMPLES})")
+                            # Also try SIMULATED outcomes from pending outcome tracker
+                            sim_trades = db.get_recent_trades(limit=500, source='SIMULATED')
+                            if sim_trades is not None and len(sim_trades) >= ML_MIN_SAMPLES:
+                                ml_filter.pretrain_from_backtest(sim_trades, df)
+                                ml_trained = True
+                                print(f"🤖 ML cold-start: pretrained on {len(sim_trades)} simulated trades")
+                    except Exception as e:
+                        print(f"⚠️ ML cold-start: {e}")
+
                 if not ml_trained or loop_count % 20 == 0:
                     if current_symbol == SYMBOLS[0]:
                         try:
@@ -573,13 +641,16 @@ def run_live():
                                 ml_trained = True
                             else:
                                 n = len(recent_trades) if recent_trades is not None else 0
-                                print(f"⚠️ ML: {n}/{ML_MIN_SAMPLES} trades")
+                                print(f"⚠️ ML: {n}/{ML_MIN_SAMPLES} live trades")
                         except Exception as e:
                             print(f"⚠️ ML train: {e}")
 
                 # ── Generate signals via multi-factor engine ──
+                # Issue #6: pass BTC composite bias for non-BTC symbols
+                _btc_bias = 0.0 if current_symbol == _BTC_SYMBOL else _btc_composite_last
                 signals = sig_engine.generate_signals(
-                    df, df_4h=df_4h, regime=regime_id, symbol=current_symbol
+                    df, df_4h=df_4h, regime=regime_id, symbol=current_symbol,
+                    btc_composite=_btc_bias,
                 )
 
                 last_bar = df.index[-1]
@@ -588,13 +659,18 @@ def run_live():
                 # ── Track ALL new signals for ML outcome logging (bias fix) ──
                 # Signals that get rejected by any filter still need their outcomes
                 # tracked so ML can learn from complete data, not just executed trades.
+                # Compute OI score for this symbol (Issue #10: pass to ML features)
+                _oi_score_last = float(
+                    sig_engine.oi_factor.score(df, symbol=current_symbol).iloc[-1]
+                ) if len(df) > 0 else 0.0
+
                 if last_bar != last_signal_time.get(current_symbol):
                     for raw_sig in new_sigs:
                         _sig_id_counter += 1
                         # Issue #1: initialize adverse/favorable extremes to entry price
                         # so the first bar's high/low extend them correctly
                         _pending_outcomes[f"{current_symbol}_{_sig_id_counter}"] = {
-                            'signal':   _signal_to_dict(raw_sig),
+                            'signal':   _signal_to_dict(raw_sig, oi_score=_oi_score_last),
                             'entry':    raw_sig.entry_price,
                             'sl':       raw_sig.stop_loss,
                             'tp':       raw_sig.take_profit,
@@ -632,7 +708,7 @@ def run_live():
                                   f"— reducing size to {transition_size_mult:.0%}")
 
                         # ── ML Filter ──
-                        sig_dict = _signal_to_dict(sig)
+                        sig_dict = _signal_to_dict(sig, oi_score=_oi_score_last)
                         ml_result = ml_filter.predict(sig_dict, df)
                         print(f"   🤖 ML: {ml_result['reason']}")
                         if not ml_result['pass']:

@@ -209,27 +209,103 @@ def get_closed_trades(source="LIVE", limit=100):
     ), get_engine(), params={"s":source,"lim":limit})
 
 
-def get_recent_trades(limit=200, source="LIVE"):
-    """Fetch recent closed trades for ML filter training.
-    Returns DataFrame with columns: entry_time, direction, regime, confidence, risk_reward, pnl
+def save_simulated_outcome(symbol: str, direction: str, strategy: str, regime,
+                           entry_price: float, entry_time, stop_loss: float,
+                           take_profit: float, risk_reward: float, confidence: float,
+                           sim_pnl: float, outcome: int,
+                           expected_profit_pct: float = 0.0,
+                           composite_score: float = 0.0):
+    """
+    Issue #3 fix — Persist simulated signal outcomes to DB so ML can train on them.
+
+    Simulated outcomes = signals that were NOT executed (rejected by filters) but whose
+    SL/TP would have been hit based on subsequent price action (tracked via bar high/low).
+    Stored as source='SIMULATED' so they are included in ML training but excluded from
+    live PnL accounting.
+
+    The positions table is reused: entry is the signal entry, exit is sim SL or TP,
+    pnl is the simulated P&L, status is always 'CLOSED'.
     """
     try:
-        return pd.read_sql(text(
-            """SELECT entry_time, direction, strategy, regime, confidence, risk_reward, pnl
-               FROM positions
-               WHERE status='CLOSED' AND source=:s
-               ORDER BY exit_time DESC LIMIT :lim"""
-        ), get_engine(), params={"s": source, "lim": limit})
+        with get_engine().begin() as c:
+            c.execute(text("""
+                INSERT INTO positions
+                    (source, symbol, direction, strategy, regime, status,
+                     entry_price, entry_time, quantity, stop_loss, take_profit,
+                     risk_reward, confidence, pnl, total_fees)
+                VALUES
+                    ('SIMULATED', :sym, :dir, :strat, :reg, 'CLOSED',
+                     :ep, :et, 0.0, :sl, :tp,
+                     :rr, :conf, :pnl, 0.0)
+            """), {
+                "sym": symbol, "dir": direction, "strat": strategy, "reg": str(regime),
+                "ep": entry_price, "et": entry_time,
+                "sl": stop_loss, "tp": take_profit,
+                "rr": risk_reward, "conf": confidence, "pnl": sim_pnl,
+            })
+    except Exception as e:
+        # Gracefully ignore if schema doesn't support all fields
+        try:
+            with get_engine().begin() as c:
+                c.execute(text("""
+                    INSERT INTO positions
+                        (source, symbol, direction, strategy, regime, status,
+                         entry_price, entry_time, quantity, stop_loss, take_profit, pnl)
+                    VALUES
+                        ('SIMULATED', :sym, :dir, :strat, :reg, 'CLOSED',
+                         :ep, :et, 0.0, :sl, :tp, :pnl)
+                """), {
+                    "sym": symbol, "dir": direction, "strat": strategy or "SIMULATED",
+                    "reg": str(regime), "ep": entry_price, "et": entry_time,
+                    "sl": stop_loss, "tp": take_profit, "pnl": sim_pnl,
+                })
+        except Exception:
+            pass  # Never block main loop for simulated outcome save failures
+
+
+def get_recent_trades(limit=200, source="LIVE"):
+    """
+    Fetch recent closed trades for ML filter training.
+    Returns DataFrame with columns: entry_time, direction, regime, confidence, risk_reward, pnl.
+
+    Issue #3 fix: source can now be 'LIVE', 'BACKTEST', or 'SIMULATED'.
+    Pass source='ALL' to include all three (used for ML training when live data is sparse).
+    """
+    try:
+        if source == "ALL":
+            query = """SELECT entry_time, direction, strategy, regime, confidence,
+                              risk_reward, pnl
+                       FROM positions
+                       WHERE status='CLOSED' AND source IN ('LIVE','BACKTEST','SIMULATED')
+                       ORDER BY exit_time DESC LIMIT :lim"""
+            params = {"lim": limit}
+        else:
+            query = """SELECT entry_time, direction, strategy, regime, confidence,
+                              risk_reward, pnl
+                       FROM positions
+                       WHERE status='CLOSED' AND source=:s
+                       ORDER BY exit_time DESC LIMIT :lim"""
+            params = {"s": source, "lim": limit}
+
+        return pd.read_sql(text(query), get_engine(), params=params)
+
     except Exception as e:
         print(f"⚠️ get_recent_trades error: {e}")
         # Fallback without confidence column for old schema
         try:
-            return pd.read_sql(text(
-                """SELECT entry_time, direction, strategy, regime, risk_reward, pnl
-                   FROM positions
-                   WHERE status='CLOSED' AND source=:s
-                   ORDER BY exit_time DESC LIMIT :lim"""
-            ), get_engine(), params={"s": source, "lim": limit})
+            if source == "ALL":
+                query = """SELECT entry_time, direction, strategy, regime, risk_reward, pnl
+                           FROM positions
+                           WHERE status='CLOSED' AND source IN ('LIVE','BACKTEST','SIMULATED')
+                           ORDER BY exit_time DESC LIMIT :lim"""
+                params = {"lim": limit}
+            else:
+                query = """SELECT entry_time, direction, strategy, regime, risk_reward, pnl
+                           FROM positions
+                           WHERE status='CLOSED' AND source=:s
+                           ORDER BY exit_time DESC LIMIT :lim"""
+                params = {"s": source, "lim": limit}
+            return pd.read_sql(text(query), get_engine(), params=params)
         except Exception:
             return None
 

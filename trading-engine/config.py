@@ -134,8 +134,19 @@ MAX_FUNDING_RATE = 0.001       # Skip entry if funding > 0.1% per 8h
 FUNDING_CHECK_INTERVAL = 300   # Check funding every 5 min
 
 # ─── Multi-Factor Signal Engine ───
-COMPOSITE_ENTRY_THRESHOLD = 0.40    # Min |composite score| to enter
-COMPOSITE_STRONG_THRESHOLD = 0.70   # Score >= this = high-confidence (full size)
+COMPOSITE_ENTRY_THRESHOLD = 0.40    # Min |composite score| to enter (default fallback)
+COMPOSITE_STRONG_THRESHOLD = 0.70   # Score >= this = high-confidence (fires immediately)
+
+# Issue #4: Regime-specific entry thresholds.
+# Volatile: higher threshold because noise floor is higher (more false positives).
+# Ranging:  lower threshold because MeanReversion signals are structurally weaker.
+# Trending: standard — trend signals are the most reliable.
+COMPOSITE_THRESHOLD_BY_REGIME = {
+    0: 0.40,  # Trending-Up:   standard (trend signals are reliable)
+    1: 0.33,  # Ranging:       lower   (MR signals are directionally weaker)
+    2: 0.50,  # Volatile:      higher  (noise floor is high → demand more conviction)
+    3: 0.40,  # Trending-Down: standard
+}
 
 # Factor group weights (default; adjusted by regime at runtime)
 FACTOR_WEIGHT_TREND     = 0.25
