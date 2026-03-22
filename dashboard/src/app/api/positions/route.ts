@@ -56,22 +56,19 @@ export async function GET() {
     }
   }
 
-  // Manual positions from Binance — always fetch (non-fatal)
-  let manualPositions = null;
+  // All Binance positions (bot-managed + manual) — always fetch (non-fatal)
+  let binancePositions: any[] = [];
   try {
-    const apiKey = process.env.BINANCE_API_KEY;
-    const secretKey = process.env.BINANCE_SECRET_KEY;
-    
-    if (apiKey && secretKey) {
-      // Fetch from trading engine's HTTP API endpoint
-      const manualRes = await fetch('http://localhost:8081/manual-positions', {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      }).catch(() => null);
-      
-      if (manualRes?.ok) {
-        manualPositions = await manualRes.json();
-      }
+    const engineRes = await fetch('http://localhost:8081/manual-positions', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(4000),
+    }).catch(() => null);
+
+    if (engineRes?.ok) {
+      const engineData = await engineRes.json();
+      // New http_api.py returns binance_positions directly
+      binancePositions = engineData.binance_positions || [];
     }
   } catch (e: any) {
     // Silently fail — manual positions are optional
@@ -79,7 +76,7 @@ export async function GET() {
 
   return NextResponse.json({
     open_positions,
-    manual_positions: manualPositions,
+    binance_positions: binancePositions,   // all actual Binance positions (tagged bot_managed)
     source,
     monitor: {
       status: monitorStatus,

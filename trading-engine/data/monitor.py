@@ -330,3 +330,37 @@ def update_funding_rates(funding_data: dict):
         **funding_data,
         "timestamp": datetime.utcnow().isoformat(),
     }))
+
+
+def cleanup_ghost_positions() -> list:
+    """
+    Remove Redis positions whose symbol/direction no longer exists on Binance.
+    Only checks LIVE and MANUAL_ADOPTED positions.
+    Returns list of removed position IDs.
+    """
+    removed = []
+    try:
+        from data import binance_client as bnb
+        bot_positions = get_open_positions_from_redis()
+        if not bot_positions:
+            return []
+
+        binance_live = bnb.get_account_positions()   # actual open on Binance
+        live_keys = {(p["symbol"], p["direction"]) for p in binance_live}
+
+        for pos in bot_positions:
+            if pos.get("source") not in ("LIVE", "MANUAL", "MANUAL_ADOPTED"):
+                continue
+            key = (pos.get("symbol"), pos.get("direction"))
+            if key not in live_keys:
+                pid = pos.get("id")
+                publish_position_close(int(pid), {
+                    "exit_price": 0,
+                    "reason":     "Ghost cleanup (not found on Binance)",
+                    "pnl":        0,
+                })
+                removed.append(pid)
+                print(f"🧹 Ghost position removed: #{pid} {key}")
+    except Exception as e:
+        print(f"⚠️ cleanup_ghost_positions: {e}")
+    return removed

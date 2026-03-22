@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { io } from 'socket.io-client';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
 } from 'recharts';
 import {
   TrendingUp, Activity, DollarSign, Target, ShieldAlert,
-  RefreshCw, Eye, Zap, Radio, ExternalLink, AlertTriangle
+  RefreshCw, Eye, Zap, Radio, ExternalLink, AlertTriangle, X, Bot, Wifi, WifiOff
 } from 'lucide-react';
 
 function Card({ children, className = '' }: any) {
@@ -53,6 +54,19 @@ function MarginBar({ ratio }: { ratio: number }) {
   );
 }
 
+/** Format a UTC timestamp for display in Bangkok time (UTC+7) */
+function fmtTime(ts: string | number | undefined): string {
+  if (!ts) return '—';
+  try {
+    return new Date(ts).toLocaleString('th-TH', {
+      timeZone: 'Asia/Bangkok',
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
+      hour12: false,
+    });
+  } catch { return String(ts); }
+}
+
 export default function Dashboard({ data }: { data: any }) {
   const [tab, setTab] = useState<'live' | 'positions' | 'futures' | 'backtest'>('live');
   const [liveData, setLiveData] = useState<any>(null);
@@ -60,6 +74,8 @@ export default function Dashboard({ data }: { data: any }) {
   const [balanceError, setBalanceError] = useState<string | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [socketConnected, setSocketConnected] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null); // pos id being closed/adopted
 
   const fetchLive = useCallback(async () => {
     try {
@@ -93,10 +109,97 @@ export default function Dashboard({ data }: { data: any }) {
     return () => clearInterval(interval);
   }, [fetchLive]);
 
+  // ── Socket.IO — real-time price / position updates ──────────────────────
+  useEffect(() => {
+    const socket = io('http://localhost:8080', { transports: ['websocket'] });
+    socket.on('connect',    () => setSocketConnected(true));
+    socket.on('disconnect', () => setSocketConnected(false));
+
+    // Live position updates (open / update / close)
+    socket.on('position_update', (msg: any) => {
+      const { event, data: d } = msg;
+      setLiveData((prev: any) => {
+        if (!prev?.positions) return prev;
+        let positions: any[] = prev.positions.open_positions || [];
+        if (event === 'open')   positions = [...positions, d];
+        if (event === 'close')  positions = positions.filter((p: any) => p.id !== d.id);
+        if (event === 'update') positions = positions.map((p: any) => p.id === d.id ? { ...p, ...d } : p);
+        return { ...prev, positions: { ...prev.positions, open_positions: positions } };
+      });
+    });
+
+    // Equity / PnL snapshot
+    socket.on('equity_update', (msg: any) => {
+      setLiveData((prev: any) => {
+        if (!prev?.positions) return prev;
+        return { ...prev, positions: { ...prev.positions, monitor: { ...prev.positions.monitor, equity: msg.data } } };
+      });
+    });
+
+    // Regime change
+    socket.on('regime_update', (msg: any) => {
+      setLiveData((prev: any) => {
+        if (!prev?.positions) return prev;
+        return { ...prev, positions: { ...prev.positions, monitor: { ...prev.positions.monitor, regime: msg.data } } };
+      });
+    });
+
+    return () => { socket.disconnect(); };
+  }, []);
+
   const refresh = async () => {
     setRefreshing(true);
     await fetchLive();
     setTimeout(() => setRefreshing(false), 600);
+  };
+
+  // ── Close a position via market order ─────────────────────────────────────
+  const closePosition = async (pos: any) => {
+    const label = `${pos.direction} ${pos.symbol || 'BTCUSDT'}`;
+    if (!window.confirm(`ปิด ${label} @ market?\n(ปริมาณ ${Number(pos.quantity).toFixed(5)})`)) return;
+    const key = String(pos.id ?? pos.symbol);
+    setActionLoading(key);
+    try {
+      const res = await fetch('/api/close-position', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol:      pos.symbol || 'BTCUSDT',
+          direction:   pos.direction,
+          quantity:    pos.quantity,
+          position_id: pos.id,
+        }),
+      });
+      const d = await res.json();
+      if (d.success) { await fetchLive(); }
+      else alert('ปิดไม่สำเร็จ: ' + (d.error || 'unknown error'));
+    } catch (e: any) { alert('Error: ' + e.message); }
+    finally { setActionLoading(null); }
+  };
+
+  // ── Adopt a manual Binance position into bot management ───────────────────
+  const adoptPosition = async (pos: any) => {
+    const entry = pos.entry_price || pos.mark_price;
+    const key   = `${pos.symbol}-${pos.direction}`;
+    setActionLoading(key);
+    try {
+      const res = await fetch('/api/adopt-position', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol:      pos.symbol,
+          direction:   pos.direction,
+          quantity:    pos.quantity,
+          entry_price: entry,
+        }),
+      });
+      const d = await res.json();
+      if (d.success) {
+        alert(`✅ Bot จะดูแล ${pos.direction} ${pos.symbol}\nSL: $${d.stop_loss?.toLocaleString()}  TP1: $${d.take_profit?.toLocaleString()}`);
+        await fetchLive();
+      } else alert('Adopt ไม่สำเร็จ: ' + (d.error || 'unknown error'));
+    } catch (e: any) { alert('Error: ' + e.message); }
+    finally { setActionLoading(null); }
   };
 
   const trades = data?.liveTrades || [];
@@ -108,8 +211,14 @@ export default function Dashboard({ data }: { data: any }) {
 
   const monitor = liveData?.positions?.monitor || {};
   const regime = monitor.regime || {};
-  const openPositions = liveData?.positions?.open_positions || data?.openPositions || [];
+  const openPositions: any[] = liveData?.positions?.open_positions || data?.openPositions || [];
   const engineStatus = monitor.status?.status || 'unknown';
+
+  // All actual Binance futures positions (tagged with bot_managed)
+  const binancePositions: any[] = liveData?.positions?.binance_positions || [];
+  // Positions opened manually (not yet managed by the bot)
+  const botKeys = new Set(openPositions.map((p: any) => `${p.symbol}-${p.direction}`));
+  const unmanaged = binancePositions.filter((p: any) => !p.bot_managed && !botKeys.has(`${p.symbol}-${p.direction}`));
 
   // Redis margin + funding data
   const marginData = monitor.margin || {};
@@ -206,6 +315,17 @@ export default function Dashboard({ data }: { data: any }) {
               <span className="text-xs text-red-400">DB offline</span>
             </div>
           )}
+
+          {/* Socket.IO indicator */}
+          <div className={`flex items-center gap-2 bg-[#12121a] border rounded-lg px-3 py-2 ${socketConnected ? 'border-green-900/40' : 'border-[#1e1e2e]'}`}
+            title={socketConnected ? 'Real-time connected' : 'Real-time disconnected'}>
+            {socketConnected
+              ? <Wifi size={13} className="text-green-400" />
+              : <WifiOff size={13} className="text-gray-600" />}
+            <span className={`text-xs ${socketConnected ? 'text-green-400' : 'text-gray-600'}`}>
+              {socketConnected ? 'Live' : 'Polling'}
+            </span>
+          </div>
 
           <div className="flex items-center gap-2 bg-[#12121a] border border-[#1e1e2e] rounded-lg px-3 py-2">
             <div className={`w-2 h-2 rounded-full ${
@@ -305,9 +425,7 @@ export default function Dashboard({ data }: { data: any }) {
                     <tbody>
                       {trades.map((t: any) => (
                         <tr key={t.id} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
-                          <td className="py-2 pr-3 text-gray-400 text-xs">
-                            {t.entry_time ? new Date(t.entry_time).toLocaleDateString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
-                          </td>
+                          <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(t.entry_time)}</td>
                           <td className="py-2 pr-3">
                             <Badge color={t.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{t.direction}</Badge>
                           </td>
@@ -339,12 +457,17 @@ export default function Dashboard({ data }: { data: any }) {
 
       {/* ═══ OPEN POSITIONS TAB ═══ */}
       {tab === 'positions' && (
-        <Card>
+        <>
+        <Card className="mb-4">
           <div className="flex items-center justify-between mb-4">
-            <div className="text-sm font-semibold">Open positions (live)</div>
+            <div className="text-sm font-semibold">
+              Bot positions
+              <span className="ml-2 text-gray-500 font-normal text-xs">(จัดการโดย bot)</span>
+            </div>
             <div className="flex items-center gap-2 text-xs text-gray-500">
-              <Eye size={12} />
-              Auto-refresh 10s
+              {socketConnected
+                ? <><Wifi size={11} className="text-green-400" /><span className="text-green-400">Real-time</span></>
+                : <><Eye size={12} /><span>Auto-refresh 10s</span></>}
               {monitor.last_price && (
                 <span className="ml-2 font-mono">BTC ${Number(monitor.last_price).toLocaleString()}</span>
               )}
@@ -352,7 +475,7 @@ export default function Dashboard({ data }: { data: any }) {
           </div>
 
           {openPositions.length === 0 ? (
-            <div className="text-center py-16 text-gray-500">
+            <div className="text-center py-10 text-gray-500">
               <Activity size={40} className="mx-auto mb-3 opacity-30" />
               <p>No open positions</p>
               <p className="text-xs mt-1">
@@ -374,7 +497,8 @@ export default function Dashboard({ data }: { data: any }) {
                     <th className="text-center pb-3 pr-4">TP Status</th>
                     <th className="text-right pb-3 pr-4">Score</th>
                     <th className="text-right pb-3 pr-4">Qty</th>
-                    <th className="text-left pb-3">Since</th>
+                    <th className="text-left pb-3 pr-4">Since</th>
+                    <th className="text-center pb-3">Close</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -419,8 +543,15 @@ export default function Dashboard({ data }: { data: any }) {
                           {score !== null ? (score >= 0 ? '+' : '') + score.toFixed(2) : '—'}
                         </td>
                         <td className="py-3 pr-4 text-right text-gray-400">{Number(p.quantity).toFixed(5)}</td>
-                        <td className="py-3 text-gray-500 text-xs">
-                          {p.entry_time ? new Date(p.entry_time).toLocaleDateString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                        <td className="py-3 pr-4 text-gray-500 text-xs">{fmtTime(p.entry_time)}</td>
+                        <td className="py-3 text-center">
+                          <button
+                            onClick={() => closePosition(p)}
+                            disabled={actionLoading === String(p.id)}
+                            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 transition disabled:opacity-40"
+                            title="ปิด position นี้ @ market">
+                            <X size={13} />
+                          </button>
                         </td>
                       </tr>
                     );
@@ -430,6 +561,75 @@ export default function Dashboard({ data }: { data: any }) {
             </div>
           )}
         </Card>
+
+        {/* ── Unmanaged (manual) Binance positions ── */}
+        {unmanaged.length > 0 && (
+          <Card>
+            <div className="flex items-center gap-2 mb-4">
+              <Bot size={15} className="text-amber-400" />
+              <span className="text-sm font-semibold">Position บน Binance ที่ bot ยังไม่จัดการ</span>
+              <span className="text-xs text-amber-400/70 ml-1">({unmanaged.length})</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm whitespace-nowrap">
+                <thead>
+                  <tr className="text-gray-500 text-xs uppercase tracking-wider">
+                    <th className="text-left pb-3 pr-4">Symbol / Dir</th>
+                    <th className="text-right pb-3 pr-4">Entry</th>
+                    <th className="text-right pb-3 pr-4">Mark</th>
+                    <th className="text-right pb-3 pr-4">Unrealized</th>
+                    <th className="text-right pb-3 pr-4">Leverage</th>
+                    <th className="text-right pb-3 pr-4">Qty</th>
+                    <th className="text-center pb-3 pr-4">ให้ Bot จัดการ</th>
+                    <th className="text-center pb-3">ปิด</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unmanaged.map((p: any, i: number) => {
+                    const upnl = Number(p.unrealized_pnl || 0);
+                    const aKey = `${p.symbol}-${p.direction}`;
+                    return (
+                      <tr key={i} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
+                        <td className="py-3 pr-4">
+                          <div className="flex items-center gap-2">
+                            <Badge color={p.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{p.direction}</Badge>
+                            <span className="text-gray-400 text-xs">{p.symbol}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 pr-4 text-right">${Number(p.entry_price).toLocaleString()}</td>
+                        <td className="py-3 pr-4 text-right font-medium">${Number(p.mark_price || 0).toLocaleString()}</td>
+                        <td className={`py-3 pr-4 text-right font-bold ${upnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {upnl >= 0 ? '+' : ''}${upnl.toFixed(2)}
+                        </td>
+                        <td className="py-3 pr-4 text-right text-gray-400">{p.leverage}x</td>
+                        <td className="py-3 pr-4 text-right text-gray-400">{Number(p.quantity).toFixed(5)}</td>
+                        <td className="py-3 pr-4 text-center">
+                          <button
+                            onClick={() => adoptPosition(p)}
+                            disabled={actionLoading === aKey}
+                            className="flex items-center gap-1.5 mx-auto px-3 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/30 text-amber-400 text-xs font-semibold transition disabled:opacity-40">
+                            <Bot size={12} />
+                            {actionLoading === aKey ? 'กำลัง...' : 'ให้ Bot จัดการ'}
+                          </button>
+                        </td>
+                        <td className="py-3 text-center">
+                          <button
+                            onClick={() => closePosition({ ...p, id: undefined })}
+                            disabled={actionLoading === aKey}
+                            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 transition disabled:opacity-40"
+                            title="ปิด @ market">
+                            <X size={13} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+        </>
       )}
 
       {/* ═══ FUTURES INFO TAB ═══ */}
@@ -573,7 +773,17 @@ export default function Dashboard({ data }: { data: any }) {
                           </div>
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs">
+                      {/* Close button */}
+                      <div className="mt-3 flex justify-end">
+                        <button
+                          onClick={() => closePosition(p)}
+                          disabled={actionLoading === String(p.id)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 text-xs font-semibold transition disabled:opacity-40">
+                          <X size={12} />
+                          {actionLoading === String(p.id) ? 'กำลังปิด...' : 'ปิด Position @ Market'}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs mt-3">
                         <div>
                           <div className="text-gray-500 mb-0.5">Entry</div>
                           <div className="font-mono">${entry.toLocaleString()}</div>
@@ -631,9 +841,7 @@ export default function Dashboard({ data }: { data: any }) {
                 <tbody>
                   {data.btTrades.map((t: any) => (
                     <tr key={t.id} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
-                      <td className="py-2 pr-3 text-gray-400 text-xs">
-                        {t.entry_time ? new Date(t.entry_time).toLocaleDateString() : ''}
-                      </td>
+                      <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(t.entry_time)}</td>
                       <td className="py-2 pr-3">
                         <Badge color={t.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{t.direction}</Badge>
                       </td>

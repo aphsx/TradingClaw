@@ -174,6 +174,7 @@ def run_live():
     # MONITOR THREAD
     # ──────────────────────────
     def monitor_loop():
+        _ghost_check_counter = 0
         while True:
             try:
                 with _position_lock:
@@ -290,6 +291,17 @@ def run_live():
                             db.log("INFO", "monitor", f"Synced {len(closed)} closes", {"ids": closed})
                     except Exception as e:
                         print(f"⚠️ Sync: {e}")
+
+                    # Ghost cleanup every ~5 min (300s / MONITOR_INTERVAL_SECONDS)
+                    _ghost_check_counter += 1
+                    if _ghost_check_counter >= max(1, int(300 / max(MONITOR_INTERVAL_SECONDS, 1))):
+                        _ghost_check_counter = 0
+                        try:
+                            removed = mon.cleanup_ghost_positions()
+                            if removed:
+                                db.log("INFO", "monitor", f"Ghost cleanup removed {len(removed)}", {"ids": removed})
+                        except Exception as e:
+                            print(f"⚠️ Ghost cleanup: {e}")
 
             except Exception as e:
                 print(f"⚠️ Monitor loop: {e}")
