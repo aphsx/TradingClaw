@@ -111,6 +111,9 @@ CREATE TABLE IF NOT EXISTS positions (
     take_profit DECIMAL(20,8),
     risk_reward DECIMAL(10,4),
 
+    -- Confidence
+    confidence DECIMAL(5,4),
+
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 

@@ -6,6 +6,7 @@ Port 8081 — exposes trading engine data to the Next.js dashboard.
 Endpoints:
   GET  /health
   GET  /manual-positions    — all Binance positions + bot Redis positions
+  GET  /sync-binance        — sync Binance positions to bot (import unmanaged)
   GET  /cleanup-ghosts      — remove stale Redis positions not on Binance
   POST /adopt-position      — let bot manage a manually-opened Binance position
   POST /close-position      — close a position via Binance market order
@@ -90,6 +91,36 @@ class RequestHandler(BaseHTTPRequestHandler):
                 removed = _cleanup_ghost_positions()
                 self._json(200, {'removed': removed})
 
+            elif self.path == '/sync-binance':
+                # Import all unmanaged Binance positions to bot
+                bot_positions = get_open_positions_from_redis()
+                binance_positions = bnb.get_account_positions()
+
+                bot_keys = {
+                    (p.get('symbol'), p.get('direction'))
+                    for p in bot_positions
+                }
+
+                imported = []
+                for pos in binance_positions:
+                    key = (pos.get('symbol'), pos.get('direction'))
+                    if key not in bot_keys and float(pos.get('quantity', 0)) > 0:
+                        # Import this position
+                        pos_id = _import_binance_position(pos)
+                        imported.append({
+                            'position_id': pos_id,
+                            'symbol': pos['symbol'],
+                            'direction': pos['direction'],
+                            'quantity': pos['quantity'],
+                            'entry_price': pos['entry_price'],
+                        })
+
+                self._json(200, {
+                    'imported': imported,
+                    'count': len(imported),
+                    'message': f'Imported {len(imported)} position(s)'
+                })
+
             else:
                 self._json(404, {'error': 'Not found'})
 
@@ -137,6 +168,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 direction   = body.get('direction', '')
                 quantity    = float(body.get('quantity', 0))
                 entry_price = float(body.get('entry_price', 0))
+                confidence  = float(body.get('confidence', 0.5))
 
                 if not symbol or not direction or quantity <= 0 or entry_price <= 0:
                     return self._json(400, {
@@ -153,8 +185,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                     take_profit  = round(entry_price * 0.96, 2)
                     take_profit2 = round(entry_price * 0.94, 2)
 
-                # Unique ID based on timestamp
-                pos_id = int(time.time() * 1000)
+                # Save to DB
+                import data.database as db
+                now = datetime.utcnow()
+                pos_id = db.open_position_live(
+                    signal_id=None, symbol=symbol,
+                    direction=direction, strategy='MANUAL_ADOPTED',
+                    regime=0, entry_price=entry_price,
+                    entry_time=now, quantity=quantity,
+                    order_data={'fill_price': entry_price, 'status': 'MANUAL'},
+                    stop_loss=stop_loss, take_profit=take_profit,
+                    risk_reward=2.0, confidence=confidence,
+                )
+
+                # Also publish to Redis for monitor
                 pos_data = {
                     'symbol':          symbol,
                     'direction':       direction,
@@ -167,10 +211,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     'strategy':        'MANUAL_ADOPTED',
                     'regime':          'Unknown',
                     'source':          'MANUAL',
-                    'entry_time':      datetime.utcnow().isoformat(),
+                    'entry_time':      now.isoformat(),
                     'tp1_hit':         False,
                     'tp2_hit':         False,
                     'composite_score': 0.0,
+                    'confidence':      confidence,
                 }
                 publish_position_open(pos_id, pos_data)
 
@@ -187,6 +232,73 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         except Exception as e:
             self._json(500, {'error': str(e)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Binance position import
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _import_binance_position(pos: dict) -> int:
+    """
+    Import a Binance position into bot management.
+    Creates DB record and publishes to Redis.
+    """
+    import data.database as db
+    
+    symbol = pos['symbol']
+    direction = pos['direction']
+    quantity = float(pos['quantity'])
+    entry_price = float(pos['entry_price'])
+    mark_price = float(pos.get('mark_price', entry_price))
+    
+    # Default SL/TP: 2% SL, 4% TP (2R), 6% TP2 (3R)
+    if direction == 'LONG':
+        stop_loss = round(entry_price * 0.98, 2)
+        take_profit = round(entry_price * 1.04, 2)
+        take_profit2 = round(entry_price * 1.06, 2)
+    else:
+        stop_loss = round(entry_price * 1.02, 2)
+        take_profit = round(entry_price * 0.96, 2)
+        take_profit2 = round(entry_price * 0.94, 2)
+    
+    now = datetime.utcnow()
+    
+    # Save to DB
+    pos_id = db.open_position_live(
+        signal_id=None, symbol=symbol,
+        direction=direction, strategy='MANUAL_IMPORTED',
+        regime=0, entry_price=entry_price,
+        entry_time=now, quantity=quantity,
+        order_data={'fill_price': entry_price, 'status': 'IMPORTED'},
+        stop_loss=stop_loss, take_profit=take_profit,
+        risk_reward=2.0, confidence=0.5,
+    )
+    
+    # Publish to Redis for monitor
+    pos_data = {
+        'symbol': symbol,
+        'direction': direction,
+        'quantity': quantity,
+        'entry_price': entry_price,
+        'entry_fill_price': entry_price,
+        'stop_loss': stop_loss,
+        'take_profit': take_profit,
+        'take_profit_2': take_profit2,
+        'strategy': 'MANUAL_IMPORTED',
+        'regime': 'Unknown',
+        'source': 'MANUAL',
+        'entry_time': now.isoformat(),
+        'tp1_hit': False,
+        'tp2_hit': False,
+        'composite_score': 0.0,
+        'confidence': 0.5,
+        'unrealized_pnl': float(pos.get('unrealized_pnl', 0)),
+        'current_price': mark_price,
+    }
+    publish_position_open(pos_id, pos_data)
+    
+    print(f"✅ Imported position: #{pos_id} {direction} {symbol} qty={quantity}")
+    return pos_id
 
 
 # ══════════════════════════════════════════════════════════════════════════════

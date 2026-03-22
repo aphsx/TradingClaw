@@ -324,7 +324,7 @@ def run_live():
             # ── Fetch multi-symbol prices for correlation ──
             multi_data = {}
             try:
-                multi_data = fetch_multi_symbol(SYMBOLS, interval=TIMEFRAME, days=30)
+                multi_data = fetch_multi_symbol(SYMBOLS, interval=TIMEFRAME, lookback_days=30)
                 for sym, sym_df in multi_data.items():
                     if not sym_df.empty and 'close' in sym_df.columns:
                         corr_mgr.update_prices(sym, sym_df['close'])
@@ -551,6 +551,7 @@ def run_live():
                                 stop_loss=sig.stop_loss, take_profit=sig.take_profit,
                                 risk_reward=sig.risk_reward,
                                 sl_order_id=sl_oid, tp_order_id=tp_oid,
+                                confidence=sig.confidence,
                             )
 
                             mon.publish_position_open(pos_id, {

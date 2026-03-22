@@ -7,7 +7,7 @@ import {
 } from 'recharts';
 import {
   TrendingUp, Activity, DollarSign, Target, ShieldAlert,
-  RefreshCw, Eye, Zap, Radio, ExternalLink, AlertTriangle, X, Bot, Wifi, WifiOff
+  RefreshCw, Eye, Zap, Radio, ExternalLink, AlertTriangle, X, Bot, Wifi, WifiOff, Download
 } from 'lucide-react';
 
 function Card({ children, className = '' }: any) {
@@ -201,6 +201,23 @@ export default function Dashboard({ data }: { data: any }) {
     } catch (e: any) { alert('Error: ' + e.message); }
     finally { setActionLoading(null); }
   };
+  // ── Sync all Binance positions to bot ──────────────────────────────────────
+  const syncBinance = async () => {
+    if (!window.confirm('Import all unmanaged Binance positions to bot?\nBot will set default SL/TP for each position.')) return;
+    setActionLoading('sync');
+    try {
+      const res = await fetch('/api/sync-binance');
+      const d = await res.json();
+      if (d.count > 0) {
+        alert(`✅ Imported ${d.count} position(s):\n${d.imported.map((p: any) => `${p.direction} ${p.symbol} qty=${p.quantity}`).join('\n')}`);
+        await fetchLive();
+      } else {
+        alert('ℹ️ No unmanaged positions found');
+      }
+    } catch (e: any) { alert('Error: ' + e.message); }
+    finally { setActionLoading(null); }
+  };
+
 
   const trades = data?.liveTrades || [];
   const totalTrades = trades.length;
@@ -343,7 +360,17 @@ export default function Dashboard({ data }: { data: any }) {
             </div>
           )}
 
-          <button onClick={refresh} className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${refreshing ? 'animate-spin' : ''}`}>
+          
+          <button 
+            onClick={syncBinance} 
+            disabled={actionLoading === 'sync'}
+            className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${actionLoading === 'sync' ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title="Sync Binance Positions"
+          >
+            <Download size={16} />
+          </button>
+
+<button onClick={refresh} className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${refreshing ? 'animate-spin' : ''}`}>
             <RefreshCw size={16} />
           </button>
         </div>

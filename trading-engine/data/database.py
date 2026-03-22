@@ -92,7 +92,7 @@ def open_position_live(signal_id, symbol, direction, strategy, regime,
                        entry_price, entry_time, quantity,
                        order_data: dict,
                        stop_loss, take_profit, risk_reward,
-                       sl_order_id=None, tp_order_id=None):
+                       sl_order_id=None, tp_order_id=None, confidence=None):
     """
     Open a LIVE position with real Binance order data.
     order_data = parsed output from binance_client.parse_order_response()
@@ -104,12 +104,12 @@ def open_position_live(signal_id, symbol, direction, strategy, regime,
                 entry_price, entry_time, quantity,
                 entry_order_id, entry_client_oid, entry_fill_price, entry_fill_qty,
                 entry_commission, entry_commission_asset, entry_status, entry_raw,
-                stop_loss, take_profit, risk_reward
+                stop_loss, take_profit, risk_reward, confidence
             ) VALUES (
                 'LIVE', :sid, :sym, :dir, :strat, :reg, 'OPEN',
                 :ep, :et, :qty,
                 :eoid, :ecoid, :efp, :efq, :ecomm, :eca, :es, :eraw,
-                :sl, :tp, :rr
+                :sl, :tp, :rr, :conf
             )
         """), {
             "sid":signal_id, "sym":symbol, "dir":direction,
@@ -124,6 +124,7 @@ def open_position_live(signal_id, symbol, direction, strategy, regime,
             "es":order_data.get("status"),
             "eraw":json.dumps(order_data.get("raw"), default=str),
             "sl":stop_loss, "tp":take_profit, "rr":risk_reward,
+            "conf":confidence,
         })
         pos_id = r.lastrowid
 
@@ -221,7 +222,16 @@ def get_recent_trades(limit=200, source="LIVE"):
         ), get_engine(), params={"s": source, "lim": limit})
     except Exception as e:
         print(f"⚠️ get_recent_trades error: {e}")
-        return None
+        # Fallback without confidence column for old schema
+        try:
+            return pd.read_sql(text(
+                """SELECT entry_time, direction, strategy, regime, risk_reward, pnl
+                   FROM positions
+                   WHERE status='CLOSED' AND source=:s
+                   ORDER BY exit_time DESC LIMIT :lim"""
+            ), get_engine(), params={"s": source, "lim": limit})
+        except Exception:
+            return None
 
 
 # ═══════════════════════════════════════

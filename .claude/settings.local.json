@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -d /c/Users/aphis/Desktop/TradingClaw/*/)",
+      "Bash(wc -l /c/Users/aphis/Desktop/TradingClaw/dashboard/src/app/api/*/route.ts)",
+      "Bash(docker info:*)",
+      "Bash(curl -s http://localhost:8080/health)",
+      "Bash(python -m json.tool)",
+      "Bash(docker exec:*)"
+    ]
+  }
+}
