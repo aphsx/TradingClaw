@@ -107,7 +107,8 @@ def _signal_to_dict(sig, oi_score: float = 0.0) -> dict:
 # ═══════════════════════════════════════
 def run_live():
     import data.database as db
-    import data.binance_client as bnb
+    import data.ccxt_client as bnb          # ← CCXT: place_market_order, fetch_order, fetchMyTrades
+    import data.binance_client as _bnb_raw  # ← keep for OI / L/S ratio (no CCXT equivalent)
     import data.monitor as mon
     from data.socket_server import run_socket_server
     from data.http_api import run_http_server

@@ -93,7 +93,11 @@ export default function Dashboard({ data }: { data: any }) {
     try {
       const balRes = await fetch('/api/balance').then(r => r.json());
       if (balRes.error) {
-        setBalanceError(`${balRes.error}${balRes.binance_code ? ` (code ${balRes.binance_code})` : ''}`);
+        // expired=true → API key expired, show actionable message
+        const msg = balRes.expired
+          ? '⚠️ API Key หมดอายุ — ไปที่ testnet.binancefuture.com → API Management → สร้าง key ใหม่ แล้วอัพเดท .env'
+          : `${balRes.error}${balRes.binance_code ? ` (${balRes.binance_code})` : ''}`;
+        setBalanceError(msg);
       } else {
         setBalanceData(balRes);
         setBalanceError(null);
@@ -449,38 +453,66 @@ export default function Dashboard({ data }: { data: any }) {
                         <th className="text-left pb-3 pr-3">Time</th>
                         <th className="text-left pb-3 pr-3">Dir</th>
                         <th className="text-left pb-3 pr-3">Strategy</th>
-                        <th className="text-right pb-3 pr-3">Fill</th>
-                        <th className="text-right pb-3 pr-3">Exit</th>
+                        <th className="text-right pb-3 pr-3" title="Real fill price from CCXT fetchMyTrades">Entry Fill</th>
+                        <th className="text-right pb-3 pr-3" title="Real exit fill price from CCXT fetchMyTrades">Exit Fill</th>
                         <th className="text-right pb-3 pr-3">Qty</th>
                         <th className="text-right pb-3 pr-3">PnL</th>
-                        <th className="text-right pb-3 pr-3">Fee</th>
-                        <th className="text-left pb-3">Reason</th>
+                        <th className="text-right pb-3 pr-3" title="Entry fee + Exit fee (USDT)">Fees</th>
+                        <th className="text-left pb-3 pr-3">Reason</th>
+                        <th className="text-left pb-3 text-[10px]" title="Entry Order ID / Exit Order ID">Order IDs</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {trades.map((t: any) => (
+                      {trades.map((t: any) => {
+                        const entryFee = Number(t.entry_commission || 0);
+                        const exitFee  = Number(t.exit_commission  || 0);
+                        const totalFee = Number(t.total_fees || entryFee + exitFee);
+                        const feeAsset = t.entry_commission_asset || t.exit_commission_asset || 'USDT';
+                        return (
                         <tr key={t.id} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
                           <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(t.entry_time)}</td>
                           <td className="py-2 pr-3">
                             <Badge color={t.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{t.direction}</Badge>
                           </td>
                           <td className="py-2 pr-3 text-gray-300 text-xs">{t.strategy?.replace(/_/g, ' ')}</td>
-                          <td className="py-2 pr-3 text-right">${Number(t.entry_fill_price || t.entry_price).toLocaleString()}</td>
-                          <td className="py-2 pr-3 text-right">${Number(t.exit_fill_price || t.exit_price).toLocaleString()}</td>
-                          <td className="py-2 pr-3 text-right text-gray-400">{Number(t.quantity).toFixed(5)}</td>
+                          {/* Real fill prices from CCXT fetchMyTrades */}
+                          <td className="py-2 pr-3 text-right font-mono text-xs">
+                            <span title={t.entry_fill_price ? `Real fill: $${Number(t.entry_fill_price).toLocaleString()}` : 'No fill data'}>
+                              ${Number(t.entry_fill_price || t.entry_price).toLocaleString()}
+                              {t.entry_fill_price && t.entry_fill_price !== t.entry_price && (
+                                <span className="text-amber-400/60 ml-1 text-[10px]">≠sig</span>
+                              )}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-3 text-right font-mono text-xs">
+                            ${Number(t.exit_fill_price || t.exit_price).toLocaleString()}
+                          </td>
+                          <td className="py-2 pr-3 text-right text-gray-400 text-xs">{Number(t.quantity).toFixed(5)}</td>
                           <td className={`py-2 pr-3 text-right font-medium ${Number(t.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                             ${Number(t.pnl).toFixed(2)}
                           </td>
-                          <td className="py-2 pr-3 text-right text-amber-400/70 text-xs">
-                            {t.entry_commission ? `${Number(t.entry_commission).toFixed(6)} ${t.entry_commission_asset || ''}` : '—'}
+                          {/* Total fees (entry + exit commission from CCXT) */}
+                          <td className="py-2 pr-3 text-right text-amber-400/70 text-xs"
+                              title={`Entry: ${entryFee.toFixed(6)} ${feeAsset} | Exit: ${exitFee.toFixed(6)} ${feeAsset}`}>
+                            {totalFee > 0 ? `${totalFee.toFixed(4)} ${feeAsset}` : '—'}
                           </td>
-                          <td className="py-2">
+                          <td className="py-2 pr-3">
                             <span className={`text-xs ${t.exit_reason === 'Take Profit' ? 'text-green-400' : t.exit_reason === 'Stop Loss' ? 'text-red-400' : 'text-gray-400'}`}>
                               {t.exit_reason || '—'}
                             </span>
                           </td>
+                          {/* Order IDs from CCXT */}
+                          <td className="py-2 text-[10px] text-gray-600 font-mono">
+                            {t.entry_order_id && (
+                              <div title="Entry Order ID">↑ {String(t.entry_order_id).slice(-8)}</div>
+                            )}
+                            {t.exit_order_id && (
+                              <div title="Exit Order ID">↓ {String(t.exit_order_id).slice(-8)}</div>
+                            )}
+                          </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

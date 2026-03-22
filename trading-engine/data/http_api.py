@@ -17,7 +17,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 import threading
 
-import data.binance_client as bnb
+import data.ccxt_client as bnb    # CCXT: place_market_order, get_account_positions, get_price
 from data.monitor import (
     get_open_positions_from_redis,
     publish_position_open,

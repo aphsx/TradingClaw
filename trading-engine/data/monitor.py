@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 from config import SYMBOL
-from data import binance_client as bnb
+from data import ccxt_client as bnb      # CCXT: get_order, get_order_trades, parse_order_response
 from data.socket_server import emit_balance_update, emit_position_update, emit_equity_update, emit_regime_update
 
 import os
