@@ -125,7 +125,11 @@ export default function Dashboard({ data }: { data: any }) {
   const marginBalance = balanceData?.margin_balance ?? null;
 
   const REGIME_COLORS: Record<string, string> = {
-    Trending: '#22c55e', Ranging: '#3b82f6', Volatile: '#f59e0b'
+    'Trending-Up': '#22c55e',
+    'Trending-Down': '#ef4444',
+    'Ranging': '#3b82f6',
+    'Volatile': '#f59e0b',
+    'Trending': '#22c55e',  // legacy fallback
   };
 
   const pnlData = trades.map((t: any, i: number) => ({
@@ -366,7 +370,9 @@ export default function Dashboard({ data }: { data: any }) {
                     <th className="text-right pb-3 pr-4">Current</th>
                     <th className="text-right pb-3 pr-4">Unrealized</th>
                     <th className="text-right pb-3 pr-4">SL</th>
-                    <th className="text-right pb-3 pr-4">TP</th>
+                    <th className="text-right pb-3 pr-4">TP1 / TP2</th>
+                    <th className="text-center pb-3 pr-4">TP Status</th>
+                    <th className="text-right pb-3 pr-4">Score</th>
                     <th className="text-right pb-3 pr-4">Qty</th>
                     <th className="text-left pb-3">Since</th>
                   </tr>
@@ -375,6 +381,8 @@ export default function Dashboard({ data }: { data: any }) {
                   {openPositions.map((p: any, i: number) => {
                     const upnl = Number(p.unrealized_pnl || 0);
                     const pnlPct = Number(p.pnl_pct || 0);
+                    const score = p.composite_score != null ? Number(p.composite_score) : null;
+                    const scoreColor = score === null ? '#666' : score >= 0.6 ? '#22c55e' : score >= 0.4 ? '#86efac' : score <= -0.6 ? '#ef4444' : score <= -0.4 ? '#f87171' : '#9ca3af';
                     return (
                       <tr key={i} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
                         <td className="py-3 pr-4">
@@ -395,7 +403,21 @@ export default function Dashboard({ data }: { data: any }) {
                           <span className="text-xs opacity-60 ml-1">({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)</span>
                         </td>
                         <td className="py-3 pr-4 text-right text-red-400/70">${Number(p.stop_loss).toLocaleString()}</td>
-                        <td className="py-3 pr-4 text-right text-green-400/70">${Number(p.take_profit).toLocaleString()}</td>
+                        <td className="py-3 pr-4 text-right">
+                          <div className="text-green-400/70">${Number(p.take_profit).toLocaleString()}</div>
+                          {p.take_profit_2 ? (
+                            <div className="text-green-400/40 text-[10px] mt-0.5">${Number(p.take_profit_2).toLocaleString()}</div>
+                          ) : null}
+                        </td>
+                        <td className="py-3 pr-4 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${p.tp1_hit ? 'bg-green-500/20 text-green-400' : 'bg-gray-700/30 text-gray-600'}`}>TP1</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${p.tp2_hit ? 'bg-green-500/20 text-green-400' : 'bg-gray-700/30 text-gray-600'}`}>TP2</span>
+                          </div>
+                        </td>
+                        <td className="py-3 pr-4 text-right font-mono text-xs" style={{ color: scoreColor }}>
+                          {score !== null ? (score >= 0 ? '+' : '') + score.toFixed(2) : '—'}
+                        </td>
                         <td className="py-3 pr-4 text-right text-gray-400">{Number(p.quantity).toFixed(5)}</td>
                         <td className="py-3 text-gray-500 text-xs">
                           {p.entry_time ? new Date(p.entry_time).toLocaleDateString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
@@ -523,6 +545,9 @@ export default function Dashboard({ data }: { data: any }) {
                   const slDistance = isLong ? ((sl - entry) / entry * 100) : ((entry - sl) / entry * 100);
                   const liqDistance = isLong ? ((liqPrice - entry) / entry * 100) : ((entry - liqPrice) / entry * 100);
 
+                  const fScore = p.composite_score != null ? Number(p.composite_score) : null;
+                  const fScoreColor = fScore === null ? '#666' : fScore >= 0.6 ? '#22c55e' : fScore >= 0.4 ? '#86efac' : fScore <= -0.6 ? '#ef4444' : fScore <= -0.4 ? '#f87171' : '#9ca3af';
+                  const tp2Val = p.take_profit_2 ? Number(p.take_profit_2) : null;
                   return (
                     <div key={i} className="bg-[#0e0e18] rounded-lg p-4">
                       <div className="flex items-center justify-between mb-3">
@@ -530,12 +555,25 @@ export default function Dashboard({ data }: { data: any }) {
                           <Badge color={isLong ? '#22c55e' : '#ef4444'}>{p.direction}</Badge>
                           <span className="font-semibold text-sm">{p.symbol || 'BTCUSDT'}</span>
                           <span className="text-xs text-gray-500">{p.strategy?.replace(/_/g, ' ')}</span>
+                          {/* TP1 / TP2 hit badges */}
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${p.tp1_hit ? 'bg-green-500/20 text-green-400' : 'bg-gray-700/30 text-gray-600'}`}>TP1</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${p.tp2_hit ? 'bg-green-500/20 text-green-400' : 'bg-gray-700/30 text-gray-600'}`}>TP2</span>
                         </div>
-                        <div className={`font-bold ${upnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {upnl >= 0 ? '+' : ''}${upnl.toFixed(2)}
+                        <div className="flex items-center gap-3">
+                          {fScore !== null && (
+                            <div className="text-right">
+                              <div className="text-[10px] text-gray-500 mb-0.5">Signal Score</div>
+                              <div className="font-mono text-sm font-bold" style={{ color: fScoreColor }}>
+                                {fScore >= 0 ? '+' : ''}{fScore.toFixed(2)}
+                              </div>
+                            </div>
+                          )}
+                          <div className={`font-bold ${upnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {upnl >= 0 ? '+' : ''}${upnl.toFixed(2)}
+                          </div>
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs">
                         <div>
                           <div className="text-gray-500 mb-0.5">Entry</div>
                           <div className="font-mono">${entry.toLocaleString()}</div>
@@ -545,9 +583,15 @@ export default function Dashboard({ data }: { data: any }) {
                           <div className="font-mono text-red-400">${sl.toLocaleString()} <span className="text-gray-600">({slDistance.toFixed(1)}%)</span></div>
                         </div>
                         <div>
-                          <div className="text-gray-500 mb-0.5">Take Profit</div>
+                          <div className="text-gray-500 mb-0.5">TP1 (33%)</div>
                           <div className="font-mono text-green-400">${tp.toLocaleString()}</div>
                         </div>
+                        {tp2Val && (
+                          <div>
+                            <div className="text-gray-500 mb-0.5">TP2 (33%)</div>
+                            <div className="font-mono text-green-300">${tp2Val.toLocaleString()}</div>
+                          </div>
+                        )}
                         <div>
                           <div className="text-gray-500 mb-0.5">Est. Liquidation</div>
                           <div className="font-mono text-orange-400">${liqPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })} <span className="text-gray-600">({liqDistance.toFixed(1)}%)</span></div>
@@ -615,7 +659,7 @@ export default function Dashboard({ data }: { data: any }) {
       )}
 
       <div className="mt-8 text-center text-xs text-gray-600">
-        v4 · Binance USDM Futures · ML Filter · Correlation Manager · Kelly Sizing
+        v5 · Binance USDM Futures · HMM Regime · Multi-Factor Signals · Partial TP · Portfolio Heat
       </div>
     </div>
   );

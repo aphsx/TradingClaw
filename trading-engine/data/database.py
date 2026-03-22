@@ -52,17 +52,37 @@ def save_candles(df, symbol, timeframe):
 # SIGNALS
 # ═══════════════════════════════════════
 def save_signal(signal, symbol, source="LIVE", run_id=None, fee_filtered=True):
-    with get_engine().begin() as c:
-        r = c.execute(text("""
-            INSERT INTO signals (source,run_id,symbol,timestamp,direction,strategy,regime,
-                entry_price,stop_loss,take_profit,atr,confidence,expected_profit_pct,fee_filtered)
-            VALUES(:src,:rid,:sym,:ts,:dir,:strat,:reg,:ep,:sl,:tp,:atr,:conf,:epp,:ff)
-        """), {"src":source,"rid":run_id,"sym":symbol,"ts":signal.timestamp,
-               "dir":signal.direction,"strat":signal.strategy,"reg":signal.regime,
-               "ep":signal.entry_price,"sl":signal.stop_loss,"tp":signal.take_profit,
-               "atr":signal.atr,"conf":signal.confidence,"epp":signal.expected_profit_pct,
-               "ff":fee_filtered})
-        return r.lastrowid
+    tp2 = getattr(signal, 'take_profit_2', None)
+    score = getattr(signal, 'composite_score', None)
+    # Try v5 INSERT with new columns first; fall back if DB schema is old
+    try:
+        with get_engine().begin() as c:
+            r = c.execute(text("""
+                INSERT INTO signals (source,run_id,symbol,timestamp,direction,strategy,regime,
+                    entry_price,stop_loss,take_profit,take_profit_2,atr,confidence,
+                    expected_profit_pct,fee_filtered,composite_score)
+                VALUES(:src,:rid,:sym,:ts,:dir,:strat,:reg,:ep,:sl,:tp,:tp2,:atr,:conf,:epp,:ff,:cs)
+            """), {"src":source,"rid":run_id,"sym":symbol,"ts":signal.timestamp,
+                   "dir":signal.direction,"strat":signal.strategy,"reg":signal.regime,
+                   "ep":signal.entry_price,"sl":signal.stop_loss,"tp":signal.take_profit,
+                   "tp2":tp2,"atr":signal.atr,"conf":signal.confidence,
+                   "epp":signal.expected_profit_pct,"ff":fee_filtered,"cs":score})
+            return r.lastrowid
+    except Exception as e:
+        # Columns may not exist in older schema — fall back without new v5 columns
+        if 'take_profit_2' in str(e) or 'composite_score' in str(e):
+            with get_engine().begin() as c:
+                r = c.execute(text("""
+                    INSERT INTO signals (source,run_id,symbol,timestamp,direction,strategy,regime,
+                        entry_price,stop_loss,take_profit,atr,confidence,expected_profit_pct,fee_filtered)
+                    VALUES(:src,:rid,:sym,:ts,:dir,:strat,:reg,:ep,:sl,:tp,:atr,:conf,:epp,:ff)
+                """), {"src":source,"rid":run_id,"sym":symbol,"ts":signal.timestamp,
+                       "dir":signal.direction,"strat":signal.strategy,"reg":signal.regime,
+                       "ep":signal.entry_price,"sl":signal.stop_loss,"tp":signal.take_profit,
+                       "atr":signal.atr,"conf":signal.confidence,
+                       "epp":signal.expected_profit_pct,"ff":fee_filtered})
+                return r.lastrowid
+        raise
 
 
 # ═══════════════════════════════════════
