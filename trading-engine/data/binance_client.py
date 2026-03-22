@@ -399,6 +399,71 @@ def parse_order_response(resp: dict) -> dict:
     }
 
 
+# ═══════════════════════════════════════
+# OPEN INTEREST + LONG/SHORT RATIO (Issue #5)
+# ═══════════════════════════════════════
+
+def get_open_interest(symbol: str = SYMBOL) -> dict:
+    """
+    Fetch current Open Interest for a futures symbol.
+    Returns {'openInterest': float, 'symbol': str, 'time': int} or {} on error.
+    Futures only (/fapi/v1/openInterest).
+    """
+    if not USE_FUTURES:
+        return {}
+    try:
+        r = requests.get(
+            f"{BASE_URL}/fapi/v1/openInterest",
+            params={"symbol": symbol},
+            timeout=5,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            return {
+                "openInterest": float(data.get("openInterest", 0)),
+                "symbol": data.get("symbol", symbol),
+                "time": data.get("time", 0),
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def get_long_short_ratio(symbol: str = SYMBOL, period: str = "5m") -> dict:
+    """
+    Fetch Global Long/Short Account Ratio for a futures symbol.
+    Returns {'longAccount': float, 'shortAccount': float, 'longShortRatio': float} or {} on error.
+    Endpoint: /futures/data/globalLongShortAccountRatio
+    period: '5m' | '15m' | '30m' | '1h' | '2h' | '4h' | '6h' | '12h' | '1d'
+    """
+    if not USE_FUTURES:
+        return {}
+    try:
+        # This endpoint is on fapi.binance.com (not signed)
+        base = BASE_URL.replace("testnet.binancefuture.com", "fapi.binance.com")
+        r = requests.get(
+            f"{base}/futures/data/globalLongShortAccountRatio",
+            params={"symbol": symbol, "period": period, "limit": 1},
+            timeout=5,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0:
+                latest = data[-1]
+                long_acct  = float(latest.get("longAccount",  0.5))
+                short_acct = float(latest.get("shortAccount", 0.5))
+                ratio      = float(latest.get("longShortRatio", 1.0))
+                return {
+                    "longAccount":     long_acct,
+                    "shortAccount":    short_acct,
+                    "longShortRatio":  ratio,
+                    "longRatio":       long_acct / max(long_acct + short_acct, 1e-10),
+                }
+    except Exception:
+        pass
+    return {}
+
+
 def test_connection() -> dict:
     """Full connection test: ping + account + price."""
     result = {}

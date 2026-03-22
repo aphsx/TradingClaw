@@ -603,15 +603,55 @@ class RiskManager:
         }
 
     def _calculate_sharpe(self, pnl_series: list) -> float:
-        """Calculate Sharpe ratio with proper annualization for hourly data."""
-        if len(pnl_series) < 2:
+        """
+        Issue #2 fix — Sharpe Ratio was computed on dollar PnL, not % returns.
+
+        Dollar PnL has a scale that changes with position size, so
+        mean/std is not comparable across time or strategies.
+
+        Fix: derive daily % returns from the equity curve, then annualise.
+        This matches the standard Sharpe definition used in finance.
+        Crypto trades 24/7 → annualise by 365 days, not 252.
+        """
+        if not self.equity_curve or len(self.equity_curve) < 2:
+            # Fall back to trade-level % returns if equity curve isn't built yet
+            # (e.g. called before record_equity, or in unit tests)
+            if len(pnl_series) < 2:
+                return 0.0
+            # Compute % return per trade relative to initial capital
+            initial = self.initial_capital or 1.0
+            pct_returns = pd.Series(pnl_series) / initial
+            if pct_returns.std() == 0:
+                return 0.0
+            # Per-trade Sharpe: assume ~6 trades/day average for annualisation
+            trades_per_day = 6
+            sharpe = (pct_returns.mean() / pct_returns.std()) * np.sqrt(trades_per_day * 365)
+            return round(sharpe, 2)
+
+        # ── Equity-curve based daily returns ──
+        equity_vals = pd.Series(
+            [e['equity'] for e in self.equity_curve],
+            index=[e['timestamp'] for e in self.equity_curve]
+        )
+        # Resample to daily buckets (use last equity value per UTC day)
+        try:
+            if hasattr(equity_vals.index[0], 'date'):
+                daily = equity_vals.resample('D').last().dropna()
+            else:
+                # Positional index — fall back to raw equity points
+                daily = equity_vals
+        except Exception:
+            daily = equity_vals
+
+        if len(daily) < 2:
             return 0.0
-        returns = pd.Series(pnl_series)
-        if returns.std() == 0:
+
+        daily_returns = daily.pct_change().dropna()
+        if daily_returns.std() == 0:
             return 0.0
-        # Sharpe = mean(returns) / std(returns) * sqrt(periods_per_year)
-        # For hourly data: 24 hours/day * 252 trading days/year
-        sharpe = (returns.mean() / returns.std()) * np.sqrt(24 * 252)
+
+        # Risk-free rate ≈ 0 for crypto (no overnight rate)
+        sharpe = (daily_returns.mean() / daily_returns.std()) * np.sqrt(365)
         return round(sharpe, 2)
 
     def calculate_liquidation_price(self, entry_price: float, direction: str,

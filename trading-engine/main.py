@@ -8,6 +8,7 @@
 ═══════════════════════════════════════════════════════════
 """
 import json, time, sys, os, traceback, threading
+import numpy as np
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -117,6 +118,7 @@ def run_live():
     from core.ml_filter import MLSignalFilter
     from core.correlation import CorrelationManager
     from core.position_manager import PositionManager
+    from core.execution_analytics import ExecutionAnalytics  # Issue #10
     from strategies.signal_engine import SignalEngine
 
     print("=" * 60)
@@ -155,6 +157,7 @@ def run_live():
                                     correlation_threshold=0.7)
     pos_mgr    = PositionManager()
     sig_engine = SignalEngine()
+    exec_analytics = ExecutionAnalytics(window=50)  # Issue #10
 
     # Print tier info so operator knows what risk level is active
     print(f"   {risk_mgr.sync_capital(live_balance)}")
@@ -168,9 +171,12 @@ def run_live():
 
     # ── Pending signal outcome tracker (ML bias fix) ──
     # All generated signals (including rejected) are tracked here.
-    # Each loop checks if tracked signals hit TP or SL → labels them for ML training.
-    # Structure: {sig_id: {'signal': dict, 'price': float, 'sl': float, 'tp': float,
-    #                      'direction': str, 'symbol': str, 'created_at': datetime}}
+    # Each loop checks bar high/low to see if SL/TP was TOUCHED on any bar since creation.
+    # This prevents survivorship bias: a SL that was hit then recovered is still a loss.
+    # Structure: {sig_id: {'signal': dict, 'entry': float, 'sl': float, 'tp': float,
+    #                      'direction': str, 'symbol': str, 'created_at': datetime,
+    #                      'adverse_extreme': float  ← worst price seen since signal (low for LONG, high for SHORT)
+    #                      'favorable_extreme': float ← best price seen since signal}}
     _pending_outcomes: dict = {}
     _OUTCOME_MAX_AGE_HOURS = 48   # Discard unresolved signals after 48h
     _sig_id_counter = 0           # Simple counter for pending signal IDs
@@ -344,42 +350,72 @@ def run_live():
     print("🔍 Monitor thread started")
 
     # ── Pending signal outcome checker ──
-    def resolve_pending_outcomes(current_prices: dict):
+    def resolve_pending_outcomes(bar_ohlcv: dict):
         """
-        Check if any pending (non-executed) signal has hit TP or SL since creation.
-        Updates DB with a simulated outcome so ML filter trains on complete data.
+        Issue #1 fix — Survivorship Bias in ML Training.
 
-        Called once per main loop, after fetching current prices.
+        For every pending signal we track the WORST (adverse) price seen across
+        ALL bars since the signal was created, using bar high/low — not just the
+        spot price at check time.
+
+        This catches the case where price dipped to SL then recovered: the old
+        spot-price-only check would label it a winner, creating optimistic ML data.
+
+        bar_ohlcv: {symbol: {'high': float, 'low': float, 'close': float}}
+        Called once per main loop AFTER fetching fresh OHLCV data.
         """
         now = datetime.utcnow()
         resolved = []
+
         for sig_key, pending in list(_pending_outcomes.items()):
-            age_h = (now - pending['created_at']).total_seconds() / 3600
-            price = current_prices.get(pending['symbol'], 0)
-            if price <= 0:
-                continue
+            sym = pending['symbol']
             direction = pending['direction']
             sl = pending['sl']
             tp = pending['tp']
-            # Simulate outcome: did price reach TP or SL?
+
+            # ── Update high/low extremes from this bar ──
+            bar = bar_ohlcv.get(sym)
+            if bar:
+                bar_high = bar.get('high', 0)
+                bar_low  = bar.get('low', 0)
+                if direction == 'LONG':
+                    # Track lowest price seen (adverse = low, favorable = high)
+                    if bar_low > 0:
+                        pending['adverse_extreme'] = min(pending['adverse_extreme'], bar_low)
+                    if bar_high > 0:
+                        pending['favorable_extreme'] = max(pending['favorable_extreme'], bar_high)
+                else:  # SHORT
+                    # Track highest price seen (adverse = high, favorable = low)
+                    if bar_high > 0:
+                        pending['adverse_extreme'] = max(pending['adverse_extreme'], bar_high)
+                    if bar_low > 0:
+                        pending['favorable_extreme'] = min(pending['favorable_extreme'], bar_low)
+
+            age_h = (now - pending['created_at']).total_seconds() / 3600
+            adverse  = pending['adverse_extreme']
+            favorable = pending['favorable_extreme']
+
+            # ── Check if SL or TP was TOUCHED at any point ──
+            # Order matters: SL check first (worst case realized)
+            outcome = None
             if direction == 'LONG':
-                if price <= sl:
-                    outcome = 0   # Would have been stopped out
-                elif price >= tp:
-                    outcome = 1   # Would have hit TP
+                if adverse > 0 and adverse <= sl:
+                    outcome = 0   # SL was touched → loss
+                elif favorable > 0 and favorable >= tp:
+                    outcome = 1   # TP was touched (and SL wasn't hit first)
                 elif age_h >= _OUTCOME_MAX_AGE_HOURS:
-                    outcome = 0   # Timed out without hitting TP → treat as loss
-                else:
-                    continue      # Still pending
+                    outcome = 0   # Expired without resolution → treat as loss
             else:  # SHORT
-                if price >= sl:
+                if adverse > 0 and adverse >= sl:
                     outcome = 0
-                elif price <= tp:
+                elif favorable > 0 and favorable <= tp:
                     outcome = 1
                 elif age_h >= _OUTCOME_MAX_AGE_HOURS:
                     outcome = 0
-                else:
-                    continue
+
+            if outcome is None:
+                continue  # Still pending — price hasn't touched SL or TP yet
+
             # Log simulated outcome to DB for ML training
             try:
                 sim_pnl = (tp - pending['entry'] if outcome == 1 else sl - pending['entry'])
@@ -387,10 +423,12 @@ def run_live():
                     sim_pnl = -sim_pnl
                 db.log("DEBUG", "ml_signal", f"Simulated outcome sig={sig_key}",
                        {"outcome": outcome, "sim_pnl": round(sim_pnl, 4),
-                        "direction": direction, "age_h": round(age_h, 1)})
+                        "direction": direction, "age_h": round(age_h, 1),
+                        "adverse": round(adverse, 4), "favorable": round(favorable, 4)})
             except Exception:
                 pass
             resolved.append(sig_key)
+
         for k in resolved:
             _pending_outcomes.pop(k, None)
         if resolved:
@@ -426,13 +464,20 @@ def run_live():
             except Exception as e:
                 print(f"⚠️ Multi-symbol fetch: {e}")
 
-            # ── Resolve pending signal outcomes for ML training ──
+            # ── Resolve pending signal outcomes for ML training (Issue #1 fix) ──
+            # Pass bar OHLCV so resolver tracks worst price seen, not just spot price.
             try:
-                current_prices_snap = {
-                    sym: float(multi_data[sym]['close'].iloc[-1])
-                    for sym in SYMBOLS if sym in multi_data and not multi_data[sym].empty
-                }
-                resolve_pending_outcomes(current_prices_snap)
+                bar_ohlcv_snap = {}
+                for sym in SYMBOLS:
+                    sym_df = multi_data.get(sym)
+                    if sym_df is not None and not sym_df.empty:
+                        last_bar = sym_df.iloc[-1]
+                        bar_ohlcv_snap[sym] = {
+                            'high':  float(last_bar.get('high',  last_bar['close'])),
+                            'low':   float(last_bar.get('low',   last_bar['close'])),
+                            'close': float(last_bar['close']),
+                        }
+                resolve_pending_outcomes(bar_ohlcv_snap)
             except Exception as e:
                 print(f"⚠️ Pending outcome check: {e}")
 
@@ -443,6 +488,23 @@ def run_live():
                         mark = bnb.get_mark_price(sym)
                         rate = float(mark.get("lastFundingRate", 0))
                         sig_engine.volume_flow.update_funding(sym, rate)
+                    except Exception:
+                        pass
+
+            # ── Issue #5: Fetch Open Interest + Long/Short Ratio ──
+            if USE_FUTURES:
+                for sym in SYMBOLS:
+                    try:
+                        oi_data = bnb.get_open_interest(sym)
+                        if oi_data.get('openInterest', 0) > 0:
+                            sig_engine.open_interest.update_oi(sym, oi_data['openInterest'])
+                    except Exception:
+                        pass
+                    try:
+                        ls_data = bnb.get_long_short_ratio(sym, period='5m')
+                        if ls_data.get('longRatio') is not None:
+                            sig_engine.open_interest.update_long_short_ratio(
+                                sym, ls_data['longRatio'])
                     except Exception:
                         pass
 
@@ -529,14 +591,19 @@ def run_live():
                 if last_bar != last_signal_time.get(current_symbol):
                     for raw_sig in new_sigs:
                         _sig_id_counter += 1
+                        # Issue #1: initialize adverse/favorable extremes to entry price
+                        # so the first bar's high/low extend them correctly
                         _pending_outcomes[f"{current_symbol}_{_sig_id_counter}"] = {
-                            'signal': _signal_to_dict(raw_sig),
-                            'entry': raw_sig.entry_price,
-                            'sl':    raw_sig.stop_loss,
-                            'tp':    raw_sig.take_profit,
+                            'signal':   _signal_to_dict(raw_sig),
+                            'entry':    raw_sig.entry_price,
+                            'sl':       raw_sig.stop_loss,
+                            'tp':       raw_sig.take_profit,
                             'direction': raw_sig.direction,
-                            'symbol': current_symbol,
+                            'symbol':   current_symbol,
                             'created_at': now,
+                            # Track worst (adverse) and best (favorable) prices seen via bar high/low
+                            'adverse_extreme':  raw_sig.entry_price,  # will move to min(low) for LONG
+                            'favorable_extreme': raw_sig.entry_price, # will move to max(high) for LONG
                         }
 
                 if last_bar == last_signal_time.get(current_symbol):
@@ -550,10 +617,19 @@ def run_live():
                               f"| TP2: ${sig.take_profit_2:,.2f}")
                         print(f"   Strategy: {sig.strategy}")
 
-                        # ── Transitioning regime: reduce confidence ──
+                        # ── Issue #7: Regime Transition Buffer ──
+                        # Instead of hard-skipping all transition signals (which misses
+                        # genuine breakouts), we reduce position size proportionally
+                        # based on how uncertain the HMM regime is.
+                        # transition_size_mult ∈ [0.3, 1.0] — never zero, never full.
+                        transition_size_mult = 1.0
                         if transitioning:
-                            print("   ⚡ Regime transitioning — skip signal")
-                            continue
+                            # Use HMM confidence as the size scale.
+                            # Low confidence (0.5) → 0.4x; high confidence (0.9) → 0.7x.
+                            hmm_conf = current_regime.get('confidence', 0.5)
+                            transition_size_mult = float(np.clip(hmm_conf * 0.80, 0.30, 0.70))
+                            print(f"   ⚡ Regime transitioning (HMM conf={hmm_conf:.0%}) "
+                                  f"— reducing size to {transition_size_mult:.0%}")
 
                         # ── ML Filter ──
                         sig_dict = _signal_to_dict(sig)
@@ -583,16 +659,16 @@ def run_live():
                             print(f"   ℹ️ Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
 
                         # ── Position size ──
-                        # Kelly (tier-aware risk%) × drawdown safety × volatility sizing
+                        # Kelly (tier-aware risk%) × drawdown × volatility × transition reduction
                         qty = risk_mgr.calculate_position_size(sig)
-                        dd_mult = risk_mgr.get_drawdown_size_multiplier()
+                        dd_mult  = risk_mgr.get_drawdown_size_multiplier()
                         vol_mult = getattr(sig, 'vol_size_mult', 1.0)  # From VolatilityFactor
-                        qty *= dd_mult * vol_mult
+                        qty *= dd_mult * vol_mult * transition_size_mult  # Issue #7
                         qty = round(qty, 6)
                         tier = risk_mgr.get_tier_info()
                         print(f"   💰 Tier: {tier['tier']} | Risk: {tier['risk_pct']} "
                               f"(${tier['risk_amount_usd']}) | DD: {dd_mult:.2f}x | "
-                              f"Vol: {vol_mult:.2f}x | Qty: {qty}")
+                              f"Vol: {vol_mult:.2f}x | Trans: {transition_size_mult:.2f}x | Qty: {qty}")
                         if qty <= 0:
                             print("   ⛔ Quantity zero after adjustments")
                             continue
@@ -624,6 +700,21 @@ def run_live():
 
                         parsed = bnb.parse_order_response(order_resp)
                         print(f"   ✅ {parsed.get('status')}: fill=${parsed.get('fill_price'):,.2f}")
+
+                        # Issue #10: record execution quality (expected vs actual fill)
+                        if parsed.get('fill_price') and parsed.get('fill_qty', 0) > 0:
+                            try:
+                                exec_analytics.record(
+                                    symbol=current_symbol,
+                                    expected_price=sig.entry_price,
+                                    actual_fill=float(parsed['fill_price']),
+                                    side=side,
+                                    quantity=float(parsed['fill_qty']),
+                                )
+                                eff_slip = exec_analytics.get_effective_slippage(current_symbol)
+                                print(f"   📊 Exec: effective slippage={eff_slip*100:.3f}%")
+                            except Exception:
+                                pass
 
                         if parsed.get("status") not in ("FILLED", "PAPER"):
                             print(f"   ❌ Not filled: {parsed.get('status')}")

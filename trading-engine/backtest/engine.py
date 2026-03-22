@@ -10,6 +10,7 @@ from config import *
 from core.features import calculate_features, get_regime_features
 from core.regime_detector import RegimeDetector, REGIME_NAMES
 from core.risk_manager import RiskManager
+from core.ml_filter import MLSignalFilter   # Issue #8: same ML filter as live trading
 from strategies.signal_engine import SignalEngine
 
 # DB is optional (for standalone backtest without Docker)
@@ -25,9 +26,12 @@ except Exception:
 
 class BacktestEngine:
     def __init__(self, capital=INITIAL_CAPITAL, use_db=True):
-        self.detector = RegimeDetector()
-        self.risk_mgr = RiskManager(initial_capital=capital)
+        self.detector  = RegimeDetector()
+        self.risk_mgr  = RiskManager(initial_capital=capital)
         self.sig_engine = SignalEngine()
+        # Issue #8: include same MLSignalFilter used in live trading
+        self.ml_filter = MLSignalFilter(
+            min_samples=ML_MIN_SAMPLES, threshold=ML_THRESHOLD)
         from core.correlation import CorrelationManager
         self.corr_mgr = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
                                             correlation_threshold=0.7)
@@ -109,6 +113,48 @@ class BacktestEngine:
             sigs = self.sig_engine.generate_signals(bar_df, regime=regime_id)
             all_signals.extend(sigs)
         print(f"   Raw signals: {len(all_signals)}")
+
+        # Issue #8: train ML filter on train-set trades (if DB available) then apply
+        # This ensures backtest uses the SAME MLSignalFilter logic as live trading.
+        _REGIME_NAMES_BT = {0: 'Trending-Up', 1: 'Ranging', 2: 'Volatile', 3: 'Trending-Down'}
+        ml_trained_bt = False
+        if self.use_db:
+            try:
+                from data.database import get_recent_trades
+                bt_trades = get_recent_trades(limit=200)
+                if bt_trades is not None and len(bt_trades) >= ML_MIN_SAMPLES:
+                    self.ml_filter.train(bt_trades, train_df)
+                    ml_trained_bt = True
+                    print(f"   🤖 ML filter trained on {len(bt_trades)} trades")
+            except Exception as e:
+                print(f"   ⚠️  ML filter train (backtest): {e}")
+
+        # Apply ML filter to backtest signals when trained
+        if ml_trained_bt:
+            def _sig_to_dict_bt(s):
+                return {
+                    'timestamp': s.timestamp, 'time': s.timestamp,
+                    'direction': s.direction, 'entry_price': s.entry_price,
+                    'stop_loss': s.stop_loss, 'take_profit': s.take_profit,
+                    'confidence': s.confidence, 'risk_reward': s.risk_reward,
+                    'expected_profit_pct': s.expected_profit_pct,
+                    'composite_score': getattr(s, 'composite_score', 0),
+                    'regime': _REGIME_NAMES_BT.get(s.regime, 'Ranging'),
+                    'strategy': s.strategy,
+                }
+            ml_passed = []
+            ml_rejected = 0
+            for s in all_signals:
+                try:
+                    res = self.ml_filter.predict(_sig_to_dict_bt(s), train_df)
+                    if res['pass']:
+                        ml_passed.append(s)
+                    else:
+                        ml_rejected += 1
+                except Exception:
+                    ml_passed.append(s)  # On error, keep signal
+            print(f"   🤖 ML filter: {len(ml_passed)} passed, {ml_rejected} rejected")
+            all_signals = ml_passed
 
         # Save signals to DB
         signal_id_map = {}
@@ -209,7 +255,7 @@ class BacktestEngine:
         }
 
         self.test_df = test_df
-        self.test_regimes = test_regimes
+        self.test_regimes = test_regimes_report  # Issue #8: fix NameError (was 'test_regimes')
         self.equity_curve = self.risk_mgr.equity_curve
         self.closed_positions = self.risk_mgr.closed_positions
 

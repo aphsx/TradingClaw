@@ -32,6 +32,7 @@ from strategies.factors.mean_reversion import MeanReversionFactor
 from strategies.factors.momentum import MomentumFactor
 from strategies.factors.volume_flow import VolumeFlowFactor
 from strategies.factors.volatility import VolatilityFactor
+from strategies.factors.open_interest import OpenInterestFactor  # Issue #5
 
 
 # ─── Regime weights ───
@@ -88,6 +89,7 @@ class SignalEngine:
         self.mom_factor = MomentumFactor()
         self.vol_flow_factor = VolumeFlowFactor()
         self.volatility_factor = VolatilityFactor()
+        self.oi_factor = OpenInterestFactor()  # Issue #5
 
         self._total_fees = (TAKER_FEE * 2) + SLIPPAGE
         self._min_profit_pct = self._total_fees * FEE_MULTIPLIER * 100
@@ -97,6 +99,11 @@ class SignalEngine:
         """Expose volume_flow factor for external cache updates."""
         return self.vol_flow_factor
 
+    @property
+    def open_interest(self) -> OpenInterestFactor:
+        """Expose OI factor for external cache updates (Issue #5)."""
+        return self.oi_factor
+
     def compute_composite(self, df: pd.DataFrame, df_4h: pd.DataFrame = None,
                            regime: int = -1, symbol: str = None) -> pd.DataFrame:
         """
@@ -105,27 +112,33 @@ class SignalEngine:
         """
         weights = REGIME_WEIGHTS.get(regime, DEFAULT_WEIGHTS)
 
-        t_scores = self.trend_factor.score(df, df_4h)
+        t_scores  = self.trend_factor.score(df, df_4h)
         mr_scores = self.mr_factor.score(df, df_4h)
         mom_scores = self.mom_factor.score(df, df_4h)
-        vf_raw = self.vol_flow_factor.score(df, df_4h, symbol=symbol)
+        vf_raw    = self.vol_flow_factor.score(df, df_4h, symbol=symbol)
+        # Issue #5: OI factor blended into volume weight (OI takes 10% of volume weight)
+        oi_raw    = self.oi_factor.score(df, symbol=symbol)
         # Volatility NOT included in composite — used only as position size multiplier
-        vol_size = self.volatility_factor.position_size_multiplier(df)
+        vol_size  = self.volatility_factor.position_size_multiplier(df)
 
+        # Volume weight split: 90% to volume_flow, 10% to OI
+        vol_w = weights['volume']
         composite = (
-            t_scores * weights['trend'] +
+            t_scores  * weights['trend'] +
             mr_scores * weights['mean_rev'] +
             mom_scores * weights['momentum'] +
-            vf_raw * weights['volume']
+            vf_raw    * (vol_w * 0.90) +
+            oi_raw    * (vol_w * 0.10)
         )
 
         result = pd.DataFrame({
-            'trend': t_scores,
-            'mean_rev': mr_scores,
-            'momentum': mom_scores,
-            'volume': vf_raw,
+            'trend':      t_scores,
+            'mean_rev':   mr_scores,
+            'momentum':   mom_scores,
+            'volume':     vf_raw,
+            'open_interest': oi_raw,
             'volatility': vol_size,  # Stored for reference; NOT in composite
-            'composite': composite,
+            'composite':  composite,
         }, index=df.index)
 
         return result

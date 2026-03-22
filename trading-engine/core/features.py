@@ -98,10 +98,12 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
         else:
             obv.append(obv[-1])
     df['obv'] = obv
-    # OBV slope via linear regression over 20 bars
-    df['obv_slope'] = df['obv'].rolling(20).apply(
-        lambda x: np.polyfit(range(len(x)), x, 1)[0] / (abs(x.mean()) + 1e-10), raw=True
-    )
+    # Issue #3 fix — OBV slope: O(N) vectorized linear regression instead of O(N²) polyfit.
+    # For a window of n bars with x = [0,1,...,n-1]:
+    #   slope = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+    # With Σx and Σx² constant for fixed n, only Σxy and Σy change per window.
+    # Σxy is computed via rolling weighted sums using cumulative index trick (O(N)).
+    df['obv_slope'] = _vectorized_rolling_slope(df['obv'], window=20)
 
     # ─── Cumulative Volume Delta (CVD) ───
     df['buy_volume'] = df['volume'] * (df['close'] - df['low']) / (df['high'] - df['low'] + 1e-10)
@@ -118,11 +120,16 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
     # BB bandwidth percentile (0-100) over last 100 bars
     df['bb_width_pct'] = df['bb_width'].rolling(100, min_periods=20).rank(pct=True) * 100
 
-    # ─── VWAP (daily reset) ───
+    # Issue #9 fix — VWAP: replace daily UTC-reset with 8h-period reset.
+    # Crypto trades 24/7 — UTC midnight is not a meaningful session boundary.
+    # Binance funding periods fire every 8h (00:00, 08:00, 16:00 UTC), making
+    # 8h the most natural reset point for crypto VWAP.
+    # Fallback: if index is not DatetimeIndex, use rolling 24-bar VWAP.
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     if isinstance(df.index, pd.DatetimeIndex):
-        df['_date'] = df.index.date
-        grp = df.groupby('_date')
+        # Assign each bar to its 8h funding period: floor to 8h bucket
+        df['_period_8h'] = df.index.floor('8h')
+        grp = df.groupby('_period_8h')
         cum_tp_vol = grp.apply(
             lambda g: (g['volume'] * ((g['high'] + g['low'] + g['close']) / 3)).cumsum(),
             include_groups=False
@@ -131,7 +138,7 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
         cum_tp_vol = cum_tp_vol.reset_index(level=0, drop=True).reindex(df.index)
         cum_vol = cum_vol.reset_index(level=0, drop=True).reindex(df.index)
         df['vwap'] = cum_tp_vol / cum_vol
-        df.drop(columns=['_date'], inplace=True)
+        df.drop(columns=['_period_8h'], inplace=True)
     else:
         df['vwap'] = (df['volume'] * typical_price).cumsum() / df['volume'].cumsum()
 
@@ -173,8 +180,8 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
         ((upper_wick > 2 * body_abs) & (upper_wick > lower_wick * 2))    # bearish pin
     ).astype(float)
 
-    # ─── RSI Divergence ───
-    df['rsi_divergence'] = _detect_rsi_divergence(df['close'], df['rsi_14'])
+    # Issue #4 fix — RSI Divergence: vectorized rolling min/max instead of per-bar for loop
+    df['rsi_divergence'] = _detect_rsi_divergence_vec(df['close'], df['rsi_14'])
 
     # ─── Regime composite features ───
     df['trend_strength'] = df['adx']
@@ -300,6 +307,93 @@ def _detect_rsi_divergence(close: pd.Series, rsi: pd.Series, lookback: int = 14)
             rsi_at_price_high = window_rsi.loc[price_max_idx] if price_max_idx in window_rsi.index else window_rsi.max()
             if rsi.iloc[i] < rsi_at_price_high - 3:
                 divergence.iloc[i] = -1.0
+
+    return divergence
+
+
+def _vectorized_rolling_slope(series: pd.Series, window: int = 20) -> pd.Series:
+    """
+    Issue #3 — O(N) vectorized linear regression slope for a rolling window.
+
+    For x = [0, 1, ..., n-1] within each window of size n:
+      slope = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+
+    Since Σx and Σx² are constant for fixed n, only Σxy and Σy vary.
+    Σxy is computed using the identity:
+      Σ_{i=0}^{n-1} i * y_{t-n+1+i}
+      = (Σ_{j=t-n+1}^{t} j*y_j) - (t-n+1) * (Σ_{j=t-n+1}^{t} y_j)
+    where j is the absolute positional index (0..N-1).
+    Both terms are rolling sums → O(N) total.
+
+    Returns slope normalized by |mean(y)| over the window.
+    """
+    n = window
+    # Precompute constant terms for x = [0, ..., n-1]
+    sum_x  = n * (n - 1) / 2                    # = 190 for n=20
+    sum_x2 = n * (n - 1) * (2 * n - 1) / 6     # = 2470 for n=20
+    denom  = n * sum_x2 - sum_x ** 2            # = 13300 for n=20
+
+    vals = series.values
+    N = len(vals)
+
+    # Absolute positional indices (0, 1, ..., N-1)
+    pos = np.arange(N, dtype=float)
+
+    # Rolling sums via numpy cumsum (fastest path)
+    jy = pos * vals                                   # j * y[j]
+    cs_jy = np.concatenate(([0.0], np.nancumsum(jy))) # cumsum with sentinel at [0]
+    cs_y  = np.concatenate(([0.0], np.nancumsum(vals)))
+
+    slopes = np.full(N, np.nan)
+    for t in range(n - 1, N):
+        # Window start position
+        w_start = t - n + 1
+        sum_y  = cs_y[t + 1] - cs_y[w_start]
+        sum_jy = cs_jy[t + 1] - cs_jy[w_start]
+        sum_xy = sum_jy - w_start * sum_y   # rebase j to local index 0..n-1
+
+        raw_slope = (n * sum_xy - sum_x * sum_y) / denom
+
+        # Normalize by |mean(y)| to make it scale-independent (same as old polyfit code)
+        mean_y = sum_y / n
+        slopes[t] = raw_slope / (abs(mean_y) + 1e-10)
+
+    return pd.Series(slopes, index=series.index)
+
+
+def _detect_rsi_divergence_vec(close: pd.Series, rsi: pd.Series,
+                                lookback: int = 14) -> pd.Series:
+    """
+    Issue #4 — RSI divergence: fully vectorized with rolling min/max.
+
+    Original used a per-bar Python for loop → O(N·lookback).
+    Vectorized approach: rolling quantile / rolling min / rolling max → O(N).
+
+    Bullish divergence:  price near rolling low  AND  RSI > rolling_min(RSI) + 3
+    Bearish divergence:  price near rolling high  AND  RSI < rolling_max(RSI) - 3
+
+    "Near" is defined as <= 20th percentile (bullish) or >= 80th percentile (bearish)
+    of the price distribution over the lookback window — matching the original logic.
+    """
+    w = lookback + 1   # window size (same as original: i-lookback to i inclusive)
+
+    divergence = pd.Series(0.0, index=close.index)
+
+    # Drop NaN RSI bars up front
+    valid = rsi.notna()
+
+    price_q20 = close.rolling(w, min_periods=w).quantile(0.2)
+    price_q80 = close.rolling(w, min_periods=w).quantile(0.8)
+    rsi_min   = rsi.rolling(w, min_periods=w).min()
+    rsi_max   = rsi.rolling(w, min_periods=w).max()
+
+    # Bullish: price at/below 20th percentile, RSI above rolling min + 3
+    bullish = valid & (close <= price_q20) & (rsi > rsi_min + 3)
+    divergence[bullish] = 1.0
+
+    # Bearish: price at/above 80th percentile, RSI below rolling max - 3
+    bearish = valid & (close >= price_q80) & (rsi < rsi_max - 3)
+    divergence[bearish] = -1.0
 
     return divergence
 
