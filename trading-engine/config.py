@@ -1,8 +1,13 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env file when running locally (no-op inside Docker where env vars are injected)
-load_dotenv()
+# Load .env from root of project (TradingClaw/.env) — single source of truth.
+# Falls back to trading-engine/.env if root file not found (legacy support).
+# Inside Docker env vars are injected directly, so load_dotenv() is a no-op there.
+_root_env = Path(__file__).resolve().parent.parent / ".env"
+_local_env = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=_root_env if _root_env.exists() else _local_env)
 
 # ─── Binance ───
 API_KEY = os.getenv("BINANCE_API_KEY", "")
