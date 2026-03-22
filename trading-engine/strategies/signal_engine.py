@@ -44,8 +44,12 @@ REGIME_WEIGHTS: Dict[int, Dict[str, float]] = {
     2: dict(trend=0.20, mean_rev=0.20, momentum=0.33, volume=0.27),  # Volatile
     3: dict(trend=0.40, mean_rev=0.10, momentum=0.28, volume=0.22),  # Trending-Down
 }
-DEFAULT_WEIGHTS = dict(trend=FACTOR_WEIGHT_TREND, mean_rev=FACTOR_WEIGHT_MEAN_REV,
-                       momentum=FACTOR_WEIGHT_MOMENTUM, volume=FACTOR_WEIGHT_VOLUME)
+# Auto-normalise DEFAULT_WEIGHTS so they always sum to 1.0 even if config values change.
+# (FACTOR_WEIGHT_VOLATILITY is intentionally excluded — volatility is a size multiplier now.)
+_dw_raw = dict(trend=FACTOR_WEIGHT_TREND, mean_rev=FACTOR_WEIGHT_MEAN_REV,
+               momentum=FACTOR_WEIGHT_MOMENTUM, volume=FACTOR_WEIGHT_VOLUME)
+_dw_total = sum(_dw_raw.values()) or 1.0
+DEFAULT_WEIGHTS = {k: v / _dw_total for k, v in _dw_raw.items()}
 
 
 @dataclass

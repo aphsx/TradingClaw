@@ -35,7 +35,8 @@ class BacktestEngine:
         self.use_db = use_db and HAS_DB
         self._pos_id_counter = 0  # Counter for position IDs (instead of id())
 
-    def run(self, df: pd.DataFrame, train_ratio: float = 0.6) -> dict:
+    def run(self, df: pd.DataFrame, train_ratio: float = 0.6,
+            pretrained: bool = False) -> dict:
         print("\n" + "=" * 60)
         print("🚀 REGIME DETECTION BACKTEST")
         print("=" * 60)
@@ -55,16 +56,25 @@ class BacktestEngine:
             save_candles(df, SYMBOL, TIMEFRAME)
 
         # Step 2: Split
-        split_idx = int(len(df) * train_ratio)
-        train_df, test_df = df.iloc[:split_idx], df.iloc[split_idx:]
-        train_feat, test_feat = regime_features.iloc[:split_idx], regime_features.iloc[split_idx:]
-        print(f"\n📊 Train: {len(train_df)} | Test: {len(test_df)}")
+        if pretrained:
+            # Detector already fitted externally (e.g. walk-forward) — use entire df as test
+            train_df, test_df = df.iloc[:0], df   # Empty train, full test
+            train_feat, test_feat = regime_features.iloc[:0], regime_features
+            train_stats = {'cv_accuracy': 'N/A (pretrained)', 'holdout_accuracy': 'N/A',
+                           'model': 'pretrained'}
+            print(f"\n📊 Pretrained mode | Test: {len(test_df)} bars (no retrain)")
+        else:
+            split_idx = int(len(df) * train_ratio)
+            train_df, test_df = df.iloc[:split_idx], df.iloc[split_idx:]
+            train_feat, test_feat = regime_features.iloc[:split_idx], regime_features.iloc[split_idx:]
+            print(f"\n📊 Train: {len(train_df)} | Test: {len(test_df)}")
 
-        # Step 3: Train
-        print("\n🧠 Training regime detector...")
-        train_stats = self.detector.fit(train_df, train_feat)
-        print(f"   CV Accuracy:      {train_stats['cv_accuracy']}")
-        print(f"   Holdout Accuracy: {train_stats.get('holdout_accuracy', 'N/A')}")
+        # Step 3: Train (skipped when pretrained=True)
+        if not pretrained:
+            print("\n🧠 Training regime detector...")
+            train_stats = self.detector.fit(train_df, train_feat)
+            print(f"   CV Accuracy:      {train_stats['cv_accuracy']}")
+            print(f"   Holdout Accuracy: {train_stats.get('holdout_accuracy', 'N/A')}")
 
         # Step 4: Predict regimes for DB/reporting ONLY (uses full sequence — OK for display)
         # NOTE: signal generation below uses per-bar prediction (no look-ahead).
@@ -265,7 +275,7 @@ class BacktestEngine:
                 self.detector.fit(train_df_features, train_feat)
 
                 # Run test
-                result = self.run(test_df, train_ratio=1.0)  # Use full test set
+                result = self.run(test_df, pretrained=True)  # Use already-fitted detector
                 results.append(result)
             except Exception as e:
                 print(f"Walk-forward window failed: {e}")

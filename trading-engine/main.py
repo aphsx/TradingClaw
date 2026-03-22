@@ -74,7 +74,16 @@ def _with_retry(fn, *args, retries=3, **kwargs):
     return result
 
 
+# Regime int → name map (mirrors core/regime_detector.py REGIME_NAMES)
+# Defined here to avoid circular import with regime_detector ↔ signal_engine.
+_REGIME_NAMES = {0: 'Trending-Up', 1: 'Ranging', 2: 'Volatile', 3: 'Trending-Down'}
+
+
 def _signal_to_dict(sig) -> dict:
+    # Resolve regime int → name so ml_filter.predict() regime_map can match it.
+    # Without this fix Signal.regime (int 0-3) becomes "0","1"… which the ML mapper
+    # can't find in {'Trending-Up':0, 'Ranging':1, …} and defaults everything to 1.
+    regime_name = _REGIME_NAMES.get(sig.regime, getattr(sig, 'regime_name', 'Ranging'))
     return {
         'timestamp': sig.timestamp,
         'time': sig.timestamp,
@@ -86,7 +95,7 @@ def _signal_to_dict(sig) -> dict:
         'risk_reward': sig.risk_reward,
         'expected_profit_pct': sig.expected_profit_pct,
         'composite_score': getattr(sig, 'composite_score', 0),
-        'regime': getattr(sig, 'regime_name', str(sig.regime)),
+        'regime': regime_name,
         'strategy': sig.strategy,
     }
 
