@@ -128,20 +128,34 @@ def run_live():
         for asset, b in list(bals.items())[:5]:
             print(f"   {asset}: {b['free']}")
 
+    # ── Fetch real balance from Binance ──
+    print("\n💰 Fetching live balance from Binance...")
+    live_balance = bnb.get_usdt_balance()
+    if live_balance > 0:
+        print(f"   USDT balance: ${live_balance:.2f}")
+    else:
+        fallback = INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else 1000.0
+        live_balance = fallback
+        print(f"   ⚠️  Could not fetch balance — using fallback ${live_balance:.2f}")
+
     # ── Core components ──
     detector   = RegimeDetector()
-    risk_mgr   = RiskManager(initial_capital=INITIAL_CAPITAL)
+    risk_mgr   = RiskManager(initial_capital=live_balance)
     ml_filter  = MLSignalFilter(min_samples=ML_MIN_SAMPLES, threshold=ML_THRESHOLD)
     corr_mgr   = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
                                     correlation_threshold=0.7)
     pos_mgr    = PositionManager()
     sig_engine = SignalEngine()
 
+    # Print tier info so operator knows what risk level is active
+    print(f"   {risk_mgr.sync_capital(live_balance)}")
+
     is_trained   = False
     ml_trained   = False
     last_signal_time = {sym: None for sym in SYMBOLS}
     loop_count   = 0
     bars_since_retrain = {sym: 0 for sym in SYMBOLS}
+    CAPITAL_SYNC_EVERY = 50  # Re-sync balance every N loops (~50 min on 1h tf)
 
     # ── Set leverage and margin type ──
     if USE_FUTURES:
@@ -320,6 +334,16 @@ def run_live():
             loop_count += 1
             print(f"\n{'─'*55}")
             print(f"⏰ {now.strftime('%Y-%m-%d %H:%M:%S')} UTC  [#{loop_count}]")
+
+            # ── Periodic capital re-sync from Binance ──
+            if loop_count % CAPITAL_SYNC_EVERY == 0:
+                try:
+                    refreshed = bnb.get_usdt_balance()
+                    if refreshed > 0:
+                        msg = risk_mgr.sync_capital(refreshed)
+                        print(msg)
+                except Exception as e:
+                    print(f"⚠️ Capital re-sync: {e}")
 
             # ── Fetch multi-symbol prices for correlation ──
             multi_data = {}

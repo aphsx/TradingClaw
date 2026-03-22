@@ -479,3 +479,28 @@ def get_futures_balance() -> list:
     params = {"timestamp": _ts(), "recvWindow": 10000}
     r = requests.get(f"{BASE_URL}/fapi/v2/balance?{_sign(params)}", headers=_headers(), timeout=10)
     return r.json() if r.status_code == 200 else []
+
+
+def get_usdt_balance() -> float:
+    """
+    Get available USDT balance from Binance (Futures or Spot).
+    Returns 0.0 on any error so callers can fallback gracefully.
+
+    Futures: uses /fapi/v2/balance → availableBalance for USDT
+    Spot:    uses /api/v3/account  → free USDT balance
+    """
+    try:
+        if USE_FUTURES:
+            balances = get_futures_balance()
+            for b in balances:
+                if b.get("asset") == "USDT":
+                    # availableBalance = free margin (after open positions)
+                    # balance = total wallet balance
+                    return float(b.get("availableBalance", b.get("balance", 0)))
+        else:
+            balances = get_balances()
+            usdt = balances.get("USDT", {})
+            return float(usdt.get("free", 0))
+    except Exception:
+        pass
+    return 0.0

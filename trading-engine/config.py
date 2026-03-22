@@ -36,6 +36,21 @@ SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
 TIMEFRAME = os.getenv("TIMEFRAME", "1h")
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "180"))
 
+# ─── Capital Tiers ───────────────────────────────────────────
+# (max_capital_usd, risk_pct, min_notional_usd, label)
+# Risk % scales UP for small accounts so trades are still meaningful.
+# min_notional is the smallest order value the engine will attempt.
+# Binance Futures minimum notional is ~$5 for most pairs.
+CAPITAL_TIERS = [
+    # (max_capital, risk_pct, min_order_usd, label)
+    # min_order คือ order ขั้นต่ำสุดที่ bot จะ place (ยก size ขึ้นมาถึงค่านี้ถ้า Kelly ให้น้อยกว่า)
+    (50,           0.15,  6.0,  "Micro    <$50"),    # $30  → Kelly ~$0.09  → min order $6
+    (200,          0.12, 10.0,  "Small    $50-200"), # $100 → Kelly ~$0.24  → min order $10
+    (500,          0.08, 15.0,  "Medium   $200-500"),# $300 → Kelly ~$0.72  → min order $15
+    (2_000,        0.05, 25.0,  "Standard $500-2k"), # $1k  → Kelly ~$3.0   → min order $25
+    (float("inf"), 0.02, 50.0,  "Large    $2k+"),    # $10k → Kelly ~$40.0  → min order $50
+]
+
 # ─── Regime ───
 ADX_THRESHOLD = 20
 VOLATILITY_THRESHOLD = 1.5
@@ -48,7 +63,10 @@ TOTAL_FEE_PER_TRADE = (TAKER_FEE * 2) + SLIPPAGE
 FEE_MULTIPLIER = 3.0
 
 # ─── Risk ───
-INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "10000"))
+# INITIAL_CAPITAL is used ONLY as a fallback when the live balance
+# cannot be fetched from Binance (e.g. network error at startup).
+# Set to 0 to force auto-detect; any non-zero value acts as a fallback.
+INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "0"))
 # At 5x leverage, 1% of margin = 5% actual exposure → safer for futures
 RISK_PER_TRADE = 0.01
 MAX_DAILY_LOSS = 0.05

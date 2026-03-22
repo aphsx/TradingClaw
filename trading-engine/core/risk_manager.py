@@ -14,7 +14,20 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
 from config import (LEVERAGE, MAX_MARGIN_RATIO, EMERGENCY_MARGIN_RATIO, LIQUIDATION_SAFETY_PCT,
-                    MAX_PORTFOLIO_HEAT, DRAWDOWN_SCALE_LEVELS, DRAWDOWN_SIZE_FACTORS)
+                    MAX_PORTFOLIO_HEAT, DRAWDOWN_SCALE_LEVELS, DRAWDOWN_SIZE_FACTORS,
+                    CAPITAL_TIERS)
+
+
+def get_risk_tier(capital: float) -> dict:
+    """
+    Return risk settings based on account size.
+    Smaller accounts get a higher risk% so trades remain meaningful in dollar terms.
+    """
+    for max_cap, risk_pct, min_notional, label in CAPITAL_TIERS:
+        if capital <= max_cap:
+            return {"risk_pct": risk_pct, "min_notional": min_notional, "label": label}
+    # Fallback (should never reach here due to float('inf') tier)
+    return {"risk_pct": 0.01, "min_notional": 10.0, "label": "Large $2k+"}
 
 
 class FeeFilter:
@@ -87,9 +100,11 @@ class RiskManager:
                  max_drawdown=MAX_DRAWDOWN,
                  max_open_trades=MAX_OPEN_TRADES):
 
-        self.initial_capital = initial_capital
-        self.capital = initial_capital
-        self.peak_capital = initial_capital
+        # Use provided capital; 0 means "not yet synced from exchange"
+        start_capital = initial_capital if initial_capital > 0 else 1000.0
+        self.initial_capital = start_capital
+        self.capital = start_capital
+        self.peak_capital = start_capital
         self.risk_per_trade = risk_per_trade
         self.max_daily_loss = max_daily_loss
         self.max_drawdown = max_drawdown
@@ -106,6 +121,58 @@ class RiskManager:
         self.trade_results = deque(maxlen=100)
         self._current_heat = 0.0  # Portfolio heat tracking
 
+        # Dynamic tier — recalculated whenever capital is synced
+        tier = get_risk_tier(start_capital)
+        self._risk_pct: float = tier["risk_pct"]
+        self._min_notional: float = tier["min_notional"]
+        self._tier_label: str = tier["label"]
+        self._capital_synced: bool = (initial_capital > 0)
+
+    def sync_capital(self, live_balance: float) -> str:
+        """
+        Sync capital with the real Binance balance and recalculate risk tier.
+        Called at startup and periodically during live trading.
+
+        Returns a human-readable summary string for logging.
+        """
+        if live_balance <= 0:
+            return f"⚠️  sync_capital: invalid balance {live_balance} — keeping ${self.capital:.2f}"
+
+        old_capital = self.capital
+        self.capital = live_balance
+
+        # Only set initial/peak on first real sync
+        if not self._capital_synced:
+            self.initial_capital = live_balance
+            self.peak_capital = live_balance
+            self._capital_synced = True
+        else:
+            # Keep peak tracking correct
+            self.peak_capital = max(self.peak_capital, live_balance)
+
+        # Recalculate tier based on new capital
+        tier = get_risk_tier(live_balance)
+        self._risk_pct = tier["risk_pct"]
+        self._min_notional = tier["min_notional"]
+        self._tier_label = tier["label"]
+
+        return (
+            f"💰 Capital synced: ${old_capital:.2f} → ${live_balance:.2f} | "
+            f"Tier: {self._tier_label} | "
+            f"Risk/trade: {self._risk_pct*100:.1f}% | "
+            f"Min notional: ${self._min_notional:.1f}"
+        )
+
+    def get_tier_info(self) -> dict:
+        """Return current tier settings for display/logging."""
+        return {
+            "capital": round(self.capital, 2),
+            "tier": self._tier_label,
+            "risk_pct": f"{self._risk_pct*100:.1f}%",
+            "min_notional_usd": self._min_notional,
+            "risk_amount_usd": round(self.capital * self._risk_pct, 2),
+        }
+
     def reset(self):
         """Reset for new backtest."""
         self.capital = self.initial_capital
@@ -121,31 +188,30 @@ class RiskManager:
 
     def _calculate_kelly_size(self) -> float:
         """Calculate Kelly fraction based on recent trade history.
-        
+
+        Uses self._risk_pct (tier-adjusted) instead of the static RISK_PER_TRADE.
         Returns the fraction of capital to risk per trade (margin side),
         already divided by LEVERAGE so actual notional exposure stays controlled.
-        Cap at RISK_PER_TRADE / 2 so Kelly can be adaptive above the fixed floor.
+        Cap at _risk_pct / 2 so Kelly can be adaptive above the fixed floor.
         """
-        # Cap = half of the default risk so Kelly sizing can roam above/below it
-        kelly_cap = RISK_PER_TRADE / 2
+        risk_pct = self._risk_pct  # tier-aware
+        kelly_cap = risk_pct / 2
 
         if len(self.trade_results) < MIN_WIN_RATE_SAMPLE:
-            # Divide by LEVERAGE: kelly_size is now in "margin" terms
-            return RISK_PER_TRADE / LEVERAGE
+            return risk_pct / LEVERAGE
         recent = list(self.trade_results)[-MIN_WIN_RATE_SAMPLE:]
-        wins = [t for t in recent if t > 0]
+        wins   = [t for t in recent if t > 0]
         losses = [t for t in recent if t <= 0]
         if not wins or not losses:
-            return RISK_PER_TRADE / LEVERAGE
+            return risk_pct / LEVERAGE
         win_rate = len(wins) / len(recent)
-        avg_win = sum(wins) / len(wins)
+        avg_win  = sum(wins) / len(wins)
         avg_loss = abs(sum(losses) / len(losses))
         if avg_loss == 0:
-            return RISK_PER_TRADE / LEVERAGE
-        b = avg_win / avg_loss  # Odds ratio
+            return risk_pct / LEVERAGE
+        b = avg_win / avg_loss
         kelly = (b * win_rate - (1 - win_rate)) / b
-        kelly = max(0, kelly) * KELLY_FRACTION  # Half-Kelly
-        # Cap and convert to margin sizing (divide by leverage)
+        kelly = max(0, kelly) * KELLY_FRACTION
         return min(kelly, kelly_cap) / LEVERAGE
 
     def _get_vol_adjustment(self, current_atr_pct: float, avg_atr_pct: float) -> float:
@@ -209,9 +275,10 @@ class RiskManager:
 
         position_size = min(position_size, max_size_by_notional, max_size_by_margin)
 
-        # Minimum trade size (0.0001 BTC for Binance)
-        if position_size * signal.entry_price < 10:  # Min $10 notional
-            return 0.0
+        # Enforce minimum notional floor — bump size UP instead of rejecting
+        # e.g. $6 minimum: even a $30 account will attempt at least a $6 order
+        if position_size * signal.entry_price < self._min_notional:
+            position_size = self._min_notional / signal.entry_price
 
         return round(position_size, 6)
     
@@ -282,7 +349,8 @@ class RiskManager:
             quantity = round(quantity, 6)
             notional = signal.entry_price * quantity
             entry_fee = notional * TAKER_FEE
-            if notional < 10:
+            # Hard reject only if balance itself is too small to cover even min notional
+            if notional < self._min_notional:
                 return None
         
         position = Position(
