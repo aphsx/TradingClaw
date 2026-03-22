@@ -87,10 +87,17 @@ class TrendStrategy:
             price_above_ema = close - ema_slow.get(idx, close)
             is_pullback = abs(price_above_ema) < pullback_threshold
 
+            # Dynamic SL/TP scaling by current volatility ratio (issue #9)
+            # High vol (>1.5x avg) → wider stops; low vol (<0.5x avg) → tighter stops
+            vol_ratio_idx = df.loc[idx, 'volatility_ratio'] if 'volatility_ratio' in df.columns else 1.0
+            if pd.isna(vol_ratio_idx) or vol_ratio_idx <= 0:
+                vol_ratio_idx = 1.0
+            vol_scale = float(min(max(vol_ratio_idx, 0.8), 1.3))  # Clamp 0.8–1.3×
+
             # LONG signal
             if cross_up.get(idx, False) and close > ema_trend.get(idx, 0) and has_4h_long_confirm and is_pullback:
-                sl = close - atr * TREND_ATR_SL_MULT
-                tp = close + atr * TREND_ATR_TP_MULT
+                sl = close - atr * TREND_ATR_SL_MULT * vol_scale
+                tp = close + atr * TREND_ATR_TP_MULT * vol_scale
                 expected_profit = (tp - close) / close * 100
                 # ema_spread in price terms (not %); threshold 0.1% of price is meaningful
                 ema_spread_pct = (ema_fast.get(idx, 0) - ema_slow.get(idx, 0)) / close
@@ -114,8 +121,8 @@ class TrendStrategy:
 
             # SHORT signal
             elif cross_down.get(idx, False) and close < ema_trend.get(idx, float('inf')) and has_4h_short_confirm and is_pullback:
-                sl = close + atr * TREND_ATR_SL_MULT
-                tp = close - atr * TREND_ATR_TP_MULT
+                sl = close + atr * TREND_ATR_SL_MULT * vol_scale
+                tp = close - atr * TREND_ATR_TP_MULT * vol_scale
                 expected_profit = (close - tp) / close * 100
                 ema_spread_pct = (ema_slow.get(idx, 0) - ema_fast.get(idx, 0)) / close
                 adx_score = min(max((df.loc[idx, 'adx'] - 20) / 40, 0.0), 1.0) if 'adx' in df.columns else 0.5
@@ -178,11 +185,17 @@ class RangeStrategy:
                     # Only trade range if 4h ADX < 30 (not strong trend)
                     allow_range = adx_4h < 30
 
+            # Dynamic vol scaling for Range strategy (issue #9)
+            vol_ratio_idx = df.loc[idx, 'volatility_ratio'] if 'volatility_ratio' in df.columns else 1.0
+            if pd.isna(vol_ratio_idx) or vol_ratio_idx <= 0:
+                vol_ratio_idx = 1.0
+            vol_scale = float(min(max(vol_ratio_idx, 0.8), 1.3))
+
             # LONG: Price touches lower 1.5σ BB + RSI oversold
             # TP at bb_upper (opposite 2σ band) for proper R:R
             if allow_range and close <= bb_lower_trigger and rsi < RANGE_RSI_OVERSOLD:
-                sl = close - atr * RANGE_ATR_SL_MULT
-                tp = bb_upper  # Target = opposite (upper) 2σ band for adequate R:R
+                sl = close - atr * RANGE_ATR_SL_MULT * vol_scale
+                tp = bb_upper  # Target = opposite (upper) 2σ band; not scaled (is a price level)
                 expected_profit = (tp - close) / close * 100
                 bb_deviation = (close - bb_mid) / (bb_upper - bb_mid) if (bb_upper - bb_mid) != 0 else 0
                 confidence = min(abs(bb_deviation) / 2, 1.0)
@@ -202,8 +215,8 @@ class RangeStrategy:
 
             # SHORT: Price touches upper 1.5σ BB + RSI overbought
             elif allow_range and close >= bb_upper_trigger and rsi > RANGE_RSI_OVERBOUGHT:
-                sl = close + atr * RANGE_ATR_SL_MULT
-                tp = bb_lower  # Target = opposite (lower) 2σ band for adequate R:R
+                sl = close + atr * RANGE_ATR_SL_MULT * vol_scale
+                tp = bb_lower  # Target = opposite (lower) 2σ band
                 expected_profit = (close - tp) / close * 100
                 bb_deviation = (close - bb_mid) / (bb_upper - bb_mid) if (bb_upper - bb_mid) != 0 else 0
                 confidence = min(abs(bb_deviation) / 2, 1.0)
@@ -236,7 +249,8 @@ class VolatileStrategy:
     name = "Volatile_Momentum"
     
     @staticmethod
-    def generate_signals(df: pd.DataFrame) -> list:
+    def generate_signals(df: pd.DataFrame, df_4h: pd.DataFrame = None) -> list:
+        # df_4h accepted but not used — VolatileStrategy is momentum-only (no trend confirm needed)
         signals = []
         
         for idx in df.index:
@@ -252,12 +266,18 @@ class VolatileStrategy:
             candle_size = abs(close - open_price) / close * 100
             is_volume_spike = vol_ratio > VOL_VOLUME_SPIKE
             is_big_candle = candle_size > (atr / close * 100) * 0.5
-            
+
+            # Dynamic vol scaling for Volatile strategy (issue #9)
+            vol_ratio_feat = df.loc[idx, 'volatility_ratio'] if 'volatility_ratio' in df.columns else 1.0
+            if pd.isna(vol_ratio_feat) or vol_ratio_feat <= 0:
+                vol_ratio_feat = 1.0
+            vol_scale = float(min(max(vol_ratio_feat, 0.8), 1.3))
+
             # LONG: Bullish momentum burst (needs vol_ratio > 1.5 to be meaningful)
             if (close > open_price and is_volume_spike and is_big_candle
                 and momentum > 0 and vol_ratio > 1.5):
-                sl = close - atr * VOL_ATR_SL_MULT
-                tp = close + atr * VOL_ATR_TP_MULT
+                sl = close - atr * VOL_ATR_SL_MULT * vol_scale
+                tp = close + atr * VOL_ATR_TP_MULT * vol_scale
                 expected_profit = (tp - close) / close * 100
                 confidence = min((vol_ratio - 1.5) / 2.5, 1.0)
 
@@ -277,8 +297,8 @@ class VolatileStrategy:
             # SHORT: Bearish momentum burst (needs vol_ratio > 1.5 to be meaningful)
             elif (close < open_price and is_volume_spike and is_big_candle
                   and momentum < 0 and vol_ratio > 1.5):
-                sl = close + atr * VOL_ATR_SL_MULT
-                tp = close - atr * VOL_ATR_TP_MULT
+                sl = close + atr * VOL_ATR_SL_MULT * vol_scale
+                tp = close - atr * VOL_ATR_TP_MULT * vol_scale
                 expected_profit = (close - tp) / close * 100
                 confidence = min((vol_ratio - 1.5) / 2.5, 1.0)
 

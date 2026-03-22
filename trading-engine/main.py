@@ -144,7 +144,7 @@ def run_live():
 
     is_trained = False
     ml_trained = False
-    last_signal_time = None
+    last_signal_time = {sym: None for sym in SYMBOLS}
     loop_count = 0
 
     # ─── Set leverage and margin type for all symbols ───
@@ -229,6 +229,26 @@ def run_live():
                         except Exception as e:
                             print(f"⚠️ Trail SL error: {e}")
 
+                        # Trailing TP (issue #7)
+                        try:
+                            new_tp = risk_mgr.update_trailing_tp(pos, price)
+                            if new_tp and new_tp != float(pos.get('take_profit', 0)):
+                                print(f"🔄 Trail TP #{pos.get('id')}: {pos.get('take_profit')} → {new_tp:.2f}")
+                                pos['take_profit'] = new_tp
+                                if pos.get('tp_order_id') and TRADING_MODE != "paper":
+                                    try:
+                                        bnb.cancel_order(pos['symbol'], int(pos['tp_order_id']))
+                                    except:
+                                        pass
+                                    tp_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
+                                    new_tp_order = bnb.place_take_profit_order(
+                                        pos['symbol'], tp_side, float(pos['quantity']), new_tp)
+                                    if new_tp_order.get('orderId'):
+                                        pos['tp_order_id'] = new_tp_order['orderId']
+                                        mon.publish_position_open(pos['id'], pos)
+                        except Exception as e:
+                            print(f"⚠️ Trail TP error: {e}")
+
                         # Time-based exit
                         try:
                             if risk_mgr.should_time_exit(pos):
@@ -270,25 +290,8 @@ def run_live():
             print(f"\n{'─'*55}")
             print(f"⏰ {now.strftime('%Y-%m-%d %H:%M:%S')} UTC  [loop #{loop_count}]")
 
-            # ── 1. Fetch 1h + 4h data ──
-            df = fetch_klines(symbol=SYMBOL, interval=TIMEFRAME, days=30)
-            if len(df) < 50:
-                print("⚠️ Not enough 1h data")
-                time.sleep(LOOP_INTERVAL_SECONDS)
-                continue
-
-            df_4h = None
-            try:
-                df_4h = fetch_klines(symbol=SYMBOL, interval="4h", days=60)
-                if len(df_4h) >= 20:
-                    df_4h = calculate_features(df_4h)
-                    print(f"   4h data: {len(df_4h)} candles")
-                else:
-                    df_4h = None
-            except Exception as e:
-                print(f"⚠️ 4h fetch error: {e}")
-
-            # ── 2. Update correlation manager with multi-symbol prices ──
+            # ── 1. Update correlation manager with multi-symbol prices ──
+            multi_data = {}
             try:
                 multi_data = fetch_multi_symbol(SYMBOLS, interval=TIMEFRAME, days=30)
                 for sym, sym_df in multi_data.items():
@@ -297,191 +300,228 @@ def run_live():
             except Exception as e:
                 print(f"⚠️ Multi-symbol fetch: {e}")
 
-            # ── 3. Features + Regime ──
-            df = calculate_features(df)
-            feat = get_regime_features(df).dropna()
-            ci = df.index.intersection(feat.index)
-            df, feat = df.loc[ci], feat.loc[ci]
+            for current_symbol in SYMBOLS:
+                print(f"\n== Evaluating {current_symbol} ==")
+                # ── Fetch 1h + 4h data ──
+                df = multi_data.get(current_symbol)
+                if df is None or len(df) < 50:
+                    df = fetch_klines(symbol=current_symbol, interval=TIMEFRAME, days=30)
+                if len(df) < 50:
+                    print(f"⚠️ Not enough 1h data for {current_symbol}")
+                    continue
 
-            if not is_trained:
-                print("🧠 Training regime detector...")
-                stats = detector.fit(df, feat)
-                print(f"   CV accuracy: {stats['cv_accuracy']}")
-                is_trained = True
-
-            current = detector.get_current_regime(feat)
-            rname = current['regime_name']
-            rconf = current['confidence']
-            print(f"🔮 Regime: {rname} ({rconf:.0%})")
-            mon.update_regime(rname, rconf, current['probabilities'])
-
-            # ── 4. Train ML filter periodically (every 20 loops or on first run) ──
-            if not ml_trained or loop_count % 20 == 0:
+                df_4h = None
                 try:
-                    recent_trades = db.get_recent_trades(limit=200)
-                    if recent_trades is not None and len(recent_trades) >= 50:
-                        ml_filter.train(recent_trades, df)
-                        ml_trained = True
+                    df_4h = fetch_klines(symbol=current_symbol, interval="4h", days=60)
+                    if len(df_4h) >= 20:
+                        df_4h = calculate_features(df_4h)
+                        print(f"   4h data: {len(df_4h)} candles")
                     else:
-                        print(f"⚠️ ML filter: not enough trades ({len(recent_trades) if recent_trades is not None else 0}/50)")
+                        df_4h = None
                 except Exception as e:
-                    print(f"⚠️ ML train error: {e}")
+                    print(f"⚠️ 4h fetch error for {current_symbol}: {e}")
 
-            # ── 5. Generate signals ──
-            regimes = detector.predict(feat)
-            signals = generate_all_signals(df, regimes, df_4h=df_4h)
-            passed, _ = fee_filter.filter_signals(signals)
+                # ── 3. Features + Regime ──
+                df = calculate_features(df)
+                feat = get_regime_features(df).dropna()
+                ci = df.index.intersection(feat.index)
+                df, feat = df.loc[ci], feat.loc[ci]
 
-            # Only process the most recent bar
-            last_bar = df.index[-1]
-            new_sigs = [s for s in passed if s.timestamp == last_bar]
+                if not is_trained:
+                    print("🧠 Training regime detector...")
+                    stats = detector.fit(df, feat)
+                    print(f"   CV accuracy: {stats['cv_accuracy']}")
+                    is_trained = True
 
-            if last_bar == last_signal_time:
-                print("⏸️  Already processed this bar")
-            elif new_sigs:
-                for sig in new_sigs:
-                    print(f"\n📡 SIGNAL: {sig.direction} @ ${sig.entry_price:,.2f}")
-                    print(f"   SL: ${sig.stop_loss:,.2f} | TP: ${sig.take_profit:,.2f}")
-                    print(f"   Strategy: {sig.strategy} | Confidence: {sig.confidence:.0%}")
+                # Issue #8: Weekly retrain
+                if is_trained and loop_count % 168 == 0 and current_symbol == SYMBOLS[0]:
+                    print("🧠 Weekly retraining regime detector...")
+                    stats = detector.fit(df, feat)
+                    print(f"   Retrain: CV={stats['cv_accuracy']}, Holdout={stats.get('holdout_accuracy', 'N/A')}")
 
-                    # ── ML Filter ──
-                    sig_dict = _signal_to_dict(sig)
-                    ml_result = ml_filter.predict(sig_dict, df)
-                    print(f"   🤖 ML: {ml_result['reason']}")
-                    if not ml_result['pass']:
-                        print(f"   ⛔ ML filter rejected")
-                        continue
+                current = detector.get_current_regime(feat)
+                rname = current['regime_name']
+                rconf = current['confidence']
+                print(f"🔮 Regime: {rname} ({rconf:.0%})")
+                mon.update_regime(rname, rconf, current['probabilities'])
 
-                    # ── Max open trades ──
-                    open_pos = mon.get_open_positions_from_redis()
-                    if len(open_pos) >= MAX_OPEN_TRADES:
-                        print(f"   ⛔ Max open trades ({MAX_OPEN_TRADES})")
-                        continue
+                # ── 4. Train ML filter periodically ──
+                if not ml_trained or (loop_count % 20 == 0 and current_symbol == SYMBOLS[0]):
+                    try:
+                        recent_trades = db.get_recent_trades(limit=200)
+                        if recent_trades is not None and len(recent_trades) >= 50:
+                            ml_filter.train(recent_trades, df)
+                            ml_trained = True
+                        else:
+                            if current_symbol == SYMBOLS[0]:
+                                print(f"⚠️ ML filter: not enough trades ({len(recent_trades) if recent_trades is not None else 0}/50)")
+                    except Exception as e:
+                        print(f"⚠️ ML train error: {e}")
 
-                    # ── Correlation check ──
-                    corr_result = corr_mgr.can_open_position(SYMBOL, sig.direction, open_pos)
-                    if not corr_result['allowed']:
-                        print(f"   ⛔ Correlation: {corr_result['reason']}")
-                        continue
-                    if corr_result['correlated_with']:
-                        print(f"   ℹ️ Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
+                # ── 5. Generate signals ──
+                regimes = detector.predict(feat)
+                signals = generate_all_signals(df, regimes, df_4h=df_4h)
+                passed, _ = fee_filter.filter_signals(signals)
 
-                    # ── Position size ──
-                    qty = risk_mgr.calculate_position_size(sig)
-                    if qty <= 0:
-                        print("   ⛔ Quantity too small")
-                        continue
+                last_bar = df.index[-1]
+                new_sigs = [s for s in passed if s.timestamp == last_bar]
 
-                    # ── Funding rate check ──
-                    if USE_FUTURES:
-                        try:
-                            mark = bnb.get_mark_price(SYMBOL)
-                            funding_rate = float(mark.get("lastFundingRate", 0))
-                            if abs(funding_rate) > MAX_FUNDING_RATE:
-                                print(f"   ⛔ Funding rate too high: {funding_rate:.4%}")
-                                continue
-                        except Exception as e:
-                            print(f"   ⚠️ Funding check error: {e}")
+                if last_bar == last_signal_time.get(current_symbol):
+                    print("⏸️  Already processed this bar")
+                elif new_sigs:
+                    for sig in new_sigs:
+                        print(f"\n📡 SIGNAL: {sig.direction} @ ${sig.entry_price:,.2f}")
+                        print(f"   SL: ${sig.stop_loss:,.2f} | TP: ${sig.take_profit:,.2f}")
+                        print(f"   Strategy: {sig.strategy} | Confidence: {sig.confidence:.0%}")
 
-                    # ── Place ENTRY order ──
-                    side = "BUY" if sig.direction == "LONG" else "SELL"
-                    print(f"   🔫 {side} {qty:.6f} {SYMBOL}...")
+                        # ── ML Filter ──
+                        sig_dict = _signal_to_dict(sig)
+                        ml_result = ml_filter.predict(sig_dict, df)
+                        print(f"   🤖 ML: {ml_result['reason']}")
+                        if not ml_result['pass']:
+                            print(f"   ⛔ ML filter rejected")
+                            continue
 
-                    if TRADING_MODE == "paper":
-                        order_resp = {
-                            "orderId": 0, "status": "PAPER",
-                            "fills": [{"price": str(sig.entry_price),
-                                       "qty": str(qty), "commission": "0",
-                                       "commissionAsset": "USDT"}],
-                            "_client_oid": "paper", "_http_status": 200
-                        }
-                    else:
-                        order_resp = bnb.place_market_order(SYMBOL, side, qty)
+                        # ── Max open trades ──
+                        open_pos = mon.get_open_positions_from_redis()
+                        if len(open_pos) >= MAX_OPEN_TRADES:
+                            print(f"   ⛔ Max open trades ({MAX_OPEN_TRADES})")
+                            continue
 
-                    parsed = bnb.parse_order_response(order_resp)
-                    print(f"   ✅ {parsed.get('status')}: fill=${parsed.get('fill_price'):,.2f} "
-                          f"fee={parsed.get('commission'):.6f} {parsed.get('commission_asset')}")
+                        # ── Correlation check ──
+                        corr_result = corr_mgr.can_open_position(current_symbol, sig.direction, open_pos)
+                        if not corr_result['allowed']:
+                            print(f"   ⛔ Correlation: {corr_result['reason']}")
+                            continue
+                        if corr_result['correlated_with']:
+                            print(f"   ℹ️ Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
 
-                    if parsed.get("status") not in ("FILLED", "PAPER"):
-                        print(f"   ❌ Not filled: {parsed.get('status')}")
-                        db.log("ERROR", "order", "Entry not filled", parsed)
-                        continue
+                        # ── Position size ──
+                        qty = risk_mgr.calculate_position_size(sig)
+                        qty *= max(sig.confidence, 0.3)  # Scale by confidence (issue #6)
+                        qty = round(qty, 6)
+                        if qty <= 0:
+                            print("   ⛔ Quantity too small")
+                            continue
 
-                    # ── Save signal ──
-                    sig_id = db.save_signal(sig, SYMBOL, source="LIVE")
+                        # ── Funding rate check ──
+                        if USE_FUTURES:
+                            try:
+                                mark = bnb.get_mark_price(current_symbol)
+                                funding_rate = float(mark.get("lastFundingRate", 0))
+                                if abs(funding_rate) > MAX_FUNDING_RATE:
+                                    print(f"   ⛔ Funding rate too high: {funding_rate:.4%}")
+                                    continue
+                            except Exception as e:
+                                print(f"   ⚠️ Funding check error: {e}")
 
-                    # ── Place SL + TP ──
-                    sl_oid = None
-                    tp_oid = None
-                    exit_side = "SELL" if sig.direction == "LONG" else "BUY"
+                        # ── Place ENTRY order ──
+                        side = "BUY" if sig.direction == "LONG" else "SELL"
+                        print(f"   🔫 {side} {qty:.6f} {current_symbol}...")
 
-                    if TRADING_MODE != "paper":
-                        try:
-                            sl_resp = _with_retry(bnb.place_stop_loss_order,
-                                                  SYMBOL, exit_side, qty, sig.stop_loss)
-                            if _verify_order_placed(sl_resp, "SL"):
-                                sl_oid = sl_resp.get("orderId")
-                                print(f"   🛑 SL #{sl_oid} @ ${sig.stop_loss:,.2f}")
-                        except Exception as e:
-                            print(f"   ⚠️ SL failed: {e}")
+                        if TRADING_MODE == "paper":
+                            order_resp = {
+                                "orderId": 0, "status": "PAPER",
+                                "fills": [{"price": str(sig.entry_price),
+                                           "qty": str(qty), "commission": "0",
+                                           "commissionAsset": "USDT"}],
+                                "_client_oid": "paper", "_http_status": 200
+                            }
+                        else:
+                            order_resp = bnb.place_market_order(current_symbol, side, qty)
 
-                        try:
-                            tp_resp = _with_retry(bnb.place_take_profit_order,
-                                                  SYMBOL, exit_side, qty, sig.take_profit)
-                            if _verify_order_placed(tp_resp, "TP"):
-                                tp_oid = tp_resp.get("orderId")
-                                print(f"   🎯 TP #{tp_oid} @ ${sig.take_profit:,.2f}")
-                        except Exception as e:
-                            print(f"   ⚠️ TP failed: {e}")
+                        parsed = bnb.parse_order_response(order_resp)
+                        print(f"   ✅ {parsed.get('status')}: fill=${parsed.get('fill_price'):,.2f} "
+                              f"fee={parsed.get('commission'):.6f} {parsed.get('commission_asset')}")
 
-                    with _position_lock:
-                        pos_id = db.open_position_live(
-                            signal_id=sig_id, symbol=SYMBOL,
-                            direction=sig.direction, strategy=sig.strategy,
-                            regime=sig.regime, entry_price=sig.entry_price,
-                            entry_time=now, quantity=qty,
-                            order_data=parsed,
-                            stop_loss=sig.stop_loss, take_profit=sig.take_profit,
-                            risk_reward=sig.risk_reward,
-                            sl_order_id=sl_oid, tp_order_id=tp_oid,
-                        )
+                        if parsed.get("status") not in ("FILLED", "PAPER"):
+                            print(f"   ❌ Not filled: {parsed.get('status')}")
+                            db.log("ERROR", "order", "Entry not filled", parsed)
+                            continue
 
-                        mon.publish_position_open(pos_id, {
-                            "source": "LIVE", "symbol": SYMBOL,
-                            "direction": sig.direction, "strategy": sig.strategy,
-                            "entry_price": sig.entry_price,
-                            "entry_fill_price": parsed.get("fill_price"),
-                            "entry_commission": parsed.get("commission"),
-                            "quantity": qty,
-                            "stop_loss": sig.stop_loss, "take_profit": sig.take_profit,
-                            "sl_order_id": sl_oid, "tp_order_id": tp_oid,
-                            "entry_time": now.isoformat(),
-                        })
+                        # Entry slippage offset (issue #10)
+                        fill_price = parsed.get("fill_price")
+                        if fill_price and fill_price != sig.entry_price:
+                            offset = float(fill_price) - sig.entry_price
+                            sig.stop_loss += offset
+                            sig.take_profit += offset
+                            print(f"   📉 Offset SL/TP by {offset:,.2f} due to slippage")
 
-                        db.log("INFO", "trade", f"Opened #{pos_id}", {
-                            "direction": sig.direction, "qty": qty,
-                            "fill": parsed.get("fill_price"),
-                            "fee": parsed.get("commission"),
-                            "sl_order": sl_oid, "tp_order": tp_oid,
-                            "ml_prob": ml_result.get("probability"),
-                        })
+                        # ── Save signal ──
+                        sig_id = db.save_signal(sig, current_symbol, source="LIVE")
 
-                last_signal_time = last_bar
-            else:
-                print("⏸️  No signal this bar")
-                last_signal_time = last_bar
+                        # ── Place SL + TP ──
+                        sl_oid = None
+                        tp_oid = None
+                        exit_side = "SELL" if sig.direction == "LONG" else "BUY"
 
-            # ── 6. Market snapshot ──
-            last = df.iloc[-1]
-            price = last['close']
-            print(f"\n📊 {SYMBOL} ${price:,.2f} | ATR: {last['atr_pct']:.2f}% "
-                  f"| RSI: {last['rsi_14']:.0f} | ADX: {last['adx']:.0f}")
+                        if TRADING_MODE != "paper":
+                            try:
+                                sl_resp = _with_retry(bnb.place_stop_loss_order,
+                                                      current_symbol, exit_side, qty, sig.stop_loss)
+                                if _verify_order_placed(sl_resp, "SL"):
+                                    sl_oid = sl_resp.get("orderId")
+                                    print(f"   🛑 SL #{sl_oid} @ ${sig.stop_loss:,.2f}")
+                            except Exception as e:
+                                print(f"   ⚠️ SL failed: {e}")
+
+                            try:
+                                tp_resp = _with_retry(bnb.place_take_profit_order,
+                                                      current_symbol, exit_side, qty, sig.take_profit)
+                                if _verify_order_placed(tp_resp, "TP"):
+                                    tp_oid = tp_resp.get("orderId")
+                                    print(f"   🎯 TP #{tp_oid} @ ${sig.take_profit:,.2f}")
+                            except Exception as e:
+                                print(f"   ⚠️ TP failed: {e}")
+
+                        with _position_lock:
+                            pos_id = db.open_position_live(
+                                signal_id=sig_id, symbol=current_symbol,
+                                direction=sig.direction, strategy=sig.strategy,
+                                regime=sig.regime, entry_price=sig.entry_price,
+                                entry_time=now, quantity=qty,
+                                order_data=parsed,
+                                stop_loss=sig.stop_loss, take_profit=sig.take_profit,
+                                risk_reward=sig.risk_reward,
+                                sl_order_id=sl_oid, tp_order_id=tp_oid,
+                            )
+
+                            mon.publish_position_open(pos_id, {
+                                "source": "LIVE", "symbol": current_symbol,
+                                "direction": sig.direction, "strategy": sig.strategy,
+                                "entry_price": sig.entry_price,
+                                "entry_fill_price": parsed.get("fill_price"),
+                                "entry_commission": parsed.get("commission"),
+                                "quantity": qty,
+                                "stop_loss": sig.stop_loss, "take_profit": sig.take_profit,
+                                "sl_order_id": sl_oid, "tp_order_id": tp_oid,
+                                "entry_time": now.isoformat(),
+                            })
+
+                            db.log("INFO", "trade", f"Opened #{pos_id}", {
+                                "direction": sig.direction, "qty": qty,
+                                "fill": parsed.get("fill_price"),
+                                "fee": parsed.get("commission"),
+                                "sl_order": sl_oid, "tp_order": tp_oid,
+                                "ml_prob": ml_result.get("probability"),
+                            })
+
+                    last_signal_time[current_symbol] = last_bar
+                else:
+                    print("⏸️  No signal this bar")
+                    last_signal_time[current_symbol] = last_bar
+
+                # ── 6. Market snapshot ──
+                last = df.iloc[-1]
+                price = last['close']
+                print(f"📊 {current_symbol} ${price:,.2f} | ATR: {last['atr_pct']:.2f}% "
+                      f"| RSI: {last['rsi_14']:.0f} | ADX: {last['adx']:.0f}")
 
             # Portfolio risk score
             open_pos = mon.get_open_positions_from_redis()
             if len(open_pos) > 1:
                 risk_score = corr_mgr.get_portfolio_risk_score(open_pos)
-                print(f"📈 Portfolio risk score: {risk_score:.2f} (0=diversified, 1=concentrated)")
+                print(f"\n📈 Portfolio risk score: {risk_score:.2f} (0=diversified, 1=concentrated)")
 
             # ── 7. Funding rates (futures) ──
             if USE_FUTURES:
@@ -498,7 +538,11 @@ def run_live():
                         pass
 
             # ── 8. Update equity ──
-            open_count = len(mon.get_open_positions_from_redis())
+            open_count = len(open_pos)
+            
+            # Recalculate unrealized globally since multiple symbols run now
+            # We still need 'price' for mon.update_price. We will use the main SYMBOL so the old update_price behavior is preserved.
+            price = bnb.get_price(SYMBOL)
             unrealized = mon.update_price(price)
             mon.update_equity(INITIAL_CAPITAL + unrealized, INITIAL_CAPITAL, unrealized, open_count)
 

@@ -400,8 +400,27 @@ class RiskManager:
             new_sl = current_price * (1 + TRAILING_STOP_DISTANCE)
             return min(new_sl, current_sl)  # Only move down
 
+    def update_trailing_tp(self, position: dict, current_price: float) -> float:
+        """Return new take profit price if trailing TP should move (issue #7)."""
+        entry = float(position.get('entry_fill_price') or position.get('entry_price', 0))
+        current_tp = float(position.get('take_profit', 0))
+        direction = position.get('direction', 'LONG')
+
+        if direction == 'LONG':
+            profit_pct = (current_price - entry) / entry
+            if profit_pct > 0.02:  # >2% profit
+                new_tp = current_price * 0.985  # Trail 1.5% behind
+                return max(new_tp, current_tp)  # Only move up
+        else:  # SHORT
+            profit_pct = (entry - current_price) / entry
+            if profit_pct > 0.02:
+                new_tp = current_price * 1.015  # Trail 1.5% above
+                return min(new_tp, current_tp)  # Only move down
+        
+        return current_tp
+
     def should_time_exit(self, position: dict) -> bool:
-        """Return True if position has been open too long without progress."""
+        """Return True if position has been open too long and funding costs bleed out (issue #2)."""
         entry_time_str = position.get('entry_time')
         if not entry_time_str:
             return False
@@ -412,10 +431,23 @@ class RiskManager:
                 entry_time = entry_time_str
             if entry_time.tzinfo is None:
                 entry_time = entry_time.replace(tzinfo=timezone.utc)
+            
             age_hours = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
             unrealized = float(position.get('unrealized_pnl', 0))
-            # Exit if: too old AND not profitable (stuck position)
-            return age_hours > MAX_POSITION_AGE_HOURS and unrealized <= 0
+            
+            entry_val = float(position.get('quantity', 0)) * float(position.get('entry_fill_price') or position.get('entry_price', 0))
+            est_funding_per_8h = entry_val * MAX_FUNDING_RATE  # ~0.1% max default config
+            cumulative_funding = est_funding_per_8h * (age_hours / 8)
+            
+            # Exit if age > 4h AND unrealized < -2x cumulative funding cost
+            if age_hours > 4 and unrealized < -(cumulative_funding * 2):
+                return True
+            
+            # Additional fallback: exit if stuck beyond 72h without profit
+            if age_hours > 72 and unrealized <= 0:
+                return True
+                
+            return False
         except:
             return False
 

@@ -15,7 +15,8 @@ from strategies.strategies import generate_all_signals
 # DB is optional (for standalone backtest without Docker)
 try:
     from data.database import (save_candles, save_regimes, save_signal,
-        open_position as db_open_position, close_position as db_close_position,
+        open_position_bt as db_open_position,    # fix: was 'open_position' (doesn't exist)
+        close_position_bt as db_close_position,  # fix: was 'close_position' (doesn't exist)
         save_equity_batch, save_backtest_run, log as db_log)
     HAS_DB = True
 except Exception:
@@ -27,6 +28,10 @@ class BacktestEngine:
         self.detector = RegimeDetector()
         self.risk_mgr = RiskManager(initial_capital=capital)
         self.fee_filter = FeeFilter()
+        # Correlation manager mirrors live trading (issue #4)
+        from core.correlation import CorrelationManager
+        self.corr_mgr = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
+                                            correlation_threshold=0.7)
         self.results = {}
         self.use_db = use_db and HAS_DB
         self._pos_id_counter = 0  # Counter for position IDs (instead of id())
@@ -113,9 +118,8 @@ class BacktestEngine:
                     pid = pos_db_ids.get(id(cp))
                     if pid and not getattr(cp, '_db_closed', False):
                         pnl_pct = cp.pnl / (cp.entry_price * cp.quantity) * 100 if cp.quantity > 0 else 0
-                        # Remove the mysterious 0.5 multiplier on exit fees
                         db_close_position(pid, cp.exit_price, cp.exit_time,
-                                          cp.exit_reason, cp.fees_paid,
+                                          cp.exit_reason,
                                           cp.pnl, pnl_pct, cp.fees_paid)
                         cp._db_closed = True
 
@@ -123,12 +127,23 @@ class BacktestEngine:
 
             if idx in signal_map:
                 for signal in signal_map[idx]:
+                    # ── Correlation check (mirrors live trading, issue #4) ──
+                    open_pos_dicts = [
+                        {'symbol': SYMBOL, 'direction': p.signal.direction}
+                        for p in self.risk_mgr.open_positions
+                    ]
+                    corr_result = self.corr_mgr.can_open_position(
+                        SYMBOL, signal.direction, open_pos_dicts)
+                    if not corr_result['allowed']:
+                        continue  # Skip correlated signal
+
                     pos = self.risk_mgr.open_position(signal, idx)
                     if pos:
                         executed += 1
                         if self.use_db:
                             sid = signal_id_map.get(signal.timestamp, None)
                             dbid = db_open_position(
+                                None,  # run_id (filled in after save_backtest_run)
                                 sid, SYMBOL, signal.direction, signal.strategy,
                                 signal.regime, pos.entry_price, idx, pos.quantity,
                                 pos.fees_paid, signal.stop_loss, signal.take_profit,
@@ -145,9 +160,8 @@ class BacktestEngine:
                 pid = pos_db_ids.get(id(cp))
                 if pid and not getattr(cp, '_db_closed', False):
                     pnl_pct = cp.pnl / (cp.entry_price * cp.quantity) * 100 if cp.quantity > 0 else 0
-                    # Remove the mysterious 0.5 multiplier on exit fees
                     db_close_position(pid, cp.exit_price, cp.exit_time,
-                                      cp.exit_reason, cp.fees_paid,
+                                      cp.exit_reason,
                                       cp.pnl, pnl_pct, cp.fees_paid)
                     cp._db_closed = True
 
