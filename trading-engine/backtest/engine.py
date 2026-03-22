@@ -9,8 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
 from core.features import calculate_features, get_regime_features
 from core.regime_detector import RegimeDetector, REGIME_NAMES
-from core.risk_manager import RiskManager, FeeFilter
-from strategies.strategies import generate_all_signals
+from core.risk_manager import RiskManager
+from strategies.signal_engine import SignalEngine
 
 # DB is optional (for standalone backtest without Docker)
 try:
@@ -27,8 +27,7 @@ class BacktestEngine:
     def __init__(self, capital=INITIAL_CAPITAL, use_db=True):
         self.detector = RegimeDetector()
         self.risk_mgr = RiskManager(initial_capital=capital)
-        self.fee_filter = FeeFilter()
-        # Correlation manager mirrors live trading (issue #4)
+        self.sig_engine = SignalEngine()
         from core.correlation import CorrelationManager
         self.corr_mgr = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
                                             correlation_threshold=0.7)
@@ -79,23 +78,23 @@ class BacktestEngine:
             regime_detail = self.detector.predict_with_confidence(test_feat)
             save_regimes(regime_detail, SYMBOL, TIMEFRAME)
 
-        # Step 5: Signals
-        print("\n📡 Generating signals...")
-        all_signals = generate_all_signals(test_df, test_regimes)
-        print(f"   Raw: {len(all_signals)}")
-
-        # Step 6: Fee filter
-        passed, rejected = self.fee_filter.filter_signals(all_signals)
-        fee_stats = self.fee_filter.get_stats(all_signals, passed, rejected)
-        print(f"\n💰 Fee filter: {fee_stats['passed']}/{fee_stats['total_signals']} passed")
+        # Step 5: Signals — multi-factor engine per bar
+        print("\n📡 Generating signals (multi-factor engine)...")
+        all_signals = []
+        for i in range(60, len(test_df)):
+            bar_df = test_df.iloc[:i+1]
+            regime_id = int(test_regimes.iloc[i]) if i < len(test_regimes) else 1
+            sigs = self.sig_engine.generate_signals(bar_df, regime=regime_id)
+            all_signals.extend(sigs)
+        print(f"   Raw signals: {len(all_signals)}")
 
         # Save signals to DB
         signal_id_map = {}
+        passed = all_signals  # Fee filter now integrated into SignalEngine
         if self.use_db:
             for s in all_signals:
-                ff = s in passed
-                sid = save_signal(s, SYMBOL, fee_filtered=ff)
-                signal_id_map[s.timestamp] = sid  # Use timestamp instead of id()
+                sid = save_signal(s, SYMBOL, fee_filtered=True)
+                signal_id_map[s.timestamp] = sid
 
         # Step 7: Execute
         print("\n⚡ Executing backtest...")
@@ -175,10 +174,10 @@ class BacktestEngine:
                      "total_bars": len(df), "test_bars": len(test_df),
                      "test_period": f"{test_df.index[0]} → {test_df.index[-1]}"},
             "regime_detection": {
-                "cv_accuracy": train_stats['cv_accuracy'],
+                "model": train_stats.get('model', 'HMM'),
+                "state_map": train_stats.get('state_map', {}),
                 "test_distribution": {REGIME_NAMES[r]: int(c) for r, c in regime_counts.items()},
-                "feature_importance": {k: round(v, 4) for k, v in train_stats['top_features'].items()}},
-            "fee_filter": fee_stats,
+            },
             "trading": trade_stats,
             "config": {"initial_capital": INITIAL_CAPITAL,
                        "risk_per_trade": f"{RISK_PER_TRADE*100}%",

@@ -109,3 +109,40 @@ LIQUIDATION_SAFETY_PCT = 0.15                        # SL must be 15% away from 
 # ─── Funding Rate ───
 MAX_FUNDING_RATE = 0.001       # Skip entry if funding > 0.1% per 8h
 FUNDING_CHECK_INTERVAL = 300   # Check funding every 5 min
+
+# ─── Multi-Factor Signal Engine ───
+COMPOSITE_ENTRY_THRESHOLD = 0.40    # Min |composite score| to enter
+COMPOSITE_STRONG_THRESHOLD = 0.70   # Score >= this = high-confidence (full size)
+
+# Factor group weights (default; adjusted by regime at runtime)
+FACTOR_WEIGHT_TREND     = 0.25
+FACTOR_WEIGHT_MEAN_REV  = 0.20
+FACTOR_WEIGHT_MOMENTUM  = 0.20
+FACTOR_WEIGHT_VOLUME    = 0.20
+FACTOR_WEIGHT_VOLATILITY = 0.15
+
+# ─── HMM Regime Detection ───
+HMM_N_STATES         = 4      # Trend-Up, Trend-Down, Range, Volatile
+HMM_RETRAIN_BARS     = 500    # Retrain every N new bars per symbol
+HMM_N_ITER           = 200    # Max EM iterations
+
+# ─── ML Ensemble Filter ───
+ML_WALK_FORWARD_SPLITS = 5    # TimeSeriesSplit folds
+ML_MIN_SAMPLES         = 50   # Min trades before training
+ML_THRESHOLD           = 0.55 # Default threshold (tuned per retrain)
+
+# ─── Scaled Entry / Exit ───
+SCALED_ENTRY_LEGS      = 3              # 1=market only, 3=split entry
+PARTIAL_TP1_R          = 1.0            # Close 33% at 1R
+PARTIAL_TP2_R          = 2.0            # Close 33% at 2R
+PARTIAL_TP_FRACTIONS   = [0.33, 0.33, 0.34]  # Per TP level
+
+# ─── Dynamic Stops ───
+CHANDELIER_PERIOD      = 22
+CHANDELIER_MULT        = 3.0
+SWING_LOOKBACK         = 15   # Bars to look for swing high/low
+
+# ─── Portfolio Risk ───
+MAX_PORTFOLIO_HEAT     = 0.06  # Max 6% capital at risk across all positions
+DRAWDOWN_SCALE_LEVELS  = [0.05, 0.08, 0.12, 0.15]  # Drawdown thresholds
+DRAWDOWN_SIZE_FACTORS  = [1.0,  0.75, 0.50, 0.25]  # Corresponding size multipliers

@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
-from config import LEVERAGE, MAX_MARGIN_RATIO, EMERGENCY_MARGIN_RATIO, LIQUIDATION_SAFETY_PCT
+from config import (LEVERAGE, MAX_MARGIN_RATIO, EMERGENCY_MARGIN_RATIO, LIQUIDATION_SAFETY_PCT,
+                    MAX_PORTFOLIO_HEAT, DRAWDOWN_SCALE_LEVELS, DRAWDOWN_SIZE_FACTORS)
 
 
 class FeeFilter:
@@ -103,7 +104,8 @@ class RiskManager:
 
         # Track trade results for Kelly sizing
         self.trade_results = deque(maxlen=100)
-    
+        self._current_heat = 0.0  # Portfolio heat tracking
+
     def reset(self):
         """Reset for new backtest."""
         self.capital = self.initial_capital
@@ -115,7 +117,8 @@ class RiskManager:
         self.is_circuit_broken = False
         self.equity_curve = []
         self.trade_results = deque(maxlen=100)
-    
+        self._current_heat = 0.0
+
     def _calculate_kelly_size(self) -> float:
         """Calculate Kelly fraction based on recent trade history.
         
@@ -591,6 +594,79 @@ class RiskManager:
             if stop_loss > safe_sl:
                 return safe_sl
         return stop_loss
+
+    # ─── Portfolio Heat ───
+    def get_portfolio_heat(self, open_positions: list) -> float:
+        """
+        Total capital % currently at risk across all open positions.
+        Heat = sum(risk_per_position) / capital
+        risk = (entry - sl) * qty for LONG, (sl - entry) * qty for SHORT
+        """
+        total_risk = 0.0
+        for pos in open_positions:
+            try:
+                entry = float(pos.get('entry_fill_price') or pos.get('entry_price', 0))
+                sl = float(pos.get('stop_loss', 0))
+                qty = float(pos.get('quantity', 0))
+                direction = pos.get('direction', 'LONG')
+                if entry <= 0 or sl <= 0 or qty <= 0:
+                    continue
+                if direction == 'LONG':
+                    risk = (entry - sl) * qty
+                else:
+                    risk = (sl - entry) * qty
+                total_risk += max(risk, 0)
+            except Exception:
+                continue
+        heat = total_risk / max(self.capital, 1.0)
+        self._current_heat = heat
+        return heat
+
+    def heat_allows_new_trade(self, open_positions: list, signal) -> tuple:
+        """Check portfolio heat before opening a new trade."""
+        heat = self.get_portfolio_heat(open_positions)
+        if heat >= MAX_PORTFOLIO_HEAT:
+            return False, f"Portfolio heat {heat:.1%} >= max {MAX_PORTFOLIO_HEAT:.1%}"
+        return True, f"Heat OK ({heat:.1%})"
+
+    def get_heat_size_multiplier(self, open_positions: list) -> float:
+        """Scale down new position if heat is approaching the limit."""
+        heat = self.get_portfolio_heat(open_positions)
+        headroom = MAX_PORTFOLIO_HEAT - heat
+        if headroom <= 0:
+            return 0.0
+        fraction = heat / MAX_PORTFOLIO_HEAT
+        if fraction > 0.75:
+            return 0.5   # Close to limit: half size
+        return 1.0
+
+    # ─── Drawdown-Adaptive Sizing ───
+    def get_drawdown_size_multiplier(self, current_equity: float = None) -> float:
+        """
+        Gradually reduce position size as drawdown increases.
+        0-5%: full size | 5-8%: 0.75x | 8-12%: 0.5x | 12-15%: 0.25x | >15%: 0
+        """
+        equity = current_equity or self.capital
+        if self.peak_capital <= 0:
+            return 1.0
+        dd = (self.peak_capital - equity) / self.peak_capital
+        multiplier = 1.0
+        for threshold, factor in zip(DRAWDOWN_SCALE_LEVELS, DRAWDOWN_SIZE_FACTORS):
+            if dd >= threshold:
+                multiplier = factor
+        return multiplier
+
+    # ─── Regime-Based Risk Scaling ───
+    def get_regime_size_multiplier(self, regime_name: str) -> float:
+        """Adjust position size based on current market regime."""
+        regime_multipliers = {
+            'Trending-Up':   1.20,   # Best conditions for directional trades
+            'Trending-Down': 1.10,   # Good for shorts
+            'Ranging':       1.00,   # Normal conditions
+            'Volatile':      0.70,   # Reduce size in chaotic markets
+            'Trending':      1.10,   # Legacy compatibility
+        }
+        return regime_multipliers.get(regime_name, 1.0)
 
     def check_funding_cost(self, symbol: str, position_value: float) -> dict:
         """Estimate daily funding cost for a position."""
