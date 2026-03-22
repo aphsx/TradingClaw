@@ -81,8 +81,9 @@ class TrendStrategy:
                         has_4h_long_confirm = ema_fast_4h > ema_slow_4h
                         has_4h_short_confirm = ema_fast_4h < ema_slow_4h
 
-            # Check pullback: price should be close to EMA (within 0.5%)
-            pullback_threshold = ema_slow.get(idx, close) * 0.005
+            # Check pullback: price should be close to EMA (within 1.0%)
+            # Crypto routinely moves 1-2% intrabar; 0.5% was killing nearly all signals
+            pullback_threshold = ema_slow.get(idx, close) * 0.01
             price_above_ema = close - ema_slow.get(idx, close)
             is_pullback = abs(price_above_ema) < pullback_threshold
 
@@ -91,8 +92,12 @@ class TrendStrategy:
                 sl = close - atr * TREND_ATR_SL_MULT
                 tp = close + atr * TREND_ATR_TP_MULT
                 expected_profit = (tp - close) / close * 100
-                ema_spread = (ema_fast.get(idx, 0) - ema_slow.get(idx, 0)) / close * 100
-                confidence = min((df.loc[idx, 'adx'] - 20) / 30, 1.0) * (1.0 if ema_spread > 0.002 else 0.5) if 'adx' in df.columns else 0.5
+                # ema_spread in price terms (not %); threshold 0.1% of price is meaningful
+                ema_spread_pct = (ema_fast.get(idx, 0) - ema_slow.get(idx, 0)) / close
+                # ADX confidence: scale from 20→60 → 0→1.0 (was 20→50 = capped at 50%)
+                adx_score = min(max((df.loc[idx, 'adx'] - 20) / 40, 0.0), 1.0) if 'adx' in df.columns else 0.5
+                spread_score = 1.0 if ema_spread_pct > 0.001 else 0.5
+                confidence = adx_score * spread_score
 
                 signals.append(Signal(
                     timestamp=idx,
@@ -112,8 +117,10 @@ class TrendStrategy:
                 sl = close + atr * TREND_ATR_SL_MULT
                 tp = close - atr * TREND_ATR_TP_MULT
                 expected_profit = (close - tp) / close * 100
-                ema_spread = (ema_slow.get(idx, 0) - ema_fast.get(idx, 0)) / close * 100
-                confidence = min((df.loc[idx, 'adx'] - 20) / 30, 1.0) * (1.0 if ema_spread > 0.002 else 0.5) if 'adx' in df.columns else 0.5
+                ema_spread_pct = (ema_slow.get(idx, 0) - ema_fast.get(idx, 0)) / close
+                adx_score = min(max((df.loc[idx, 'adx'] - 20) / 40, 0.0), 1.0) if 'adx' in df.columns else 0.5
+                spread_score = 1.0 if ema_spread_pct > 0.001 else 0.5
+                confidence = adx_score * spread_score
 
                 signals.append(Signal(
                     timestamp=idx,
@@ -168,9 +175,11 @@ class RangeStrategy:
                     allow_range = adx_4h < 30
 
             # LONG: Price at lower BB + RSI oversold
+            # TP at bb_upper (opposite band) for proper R:R; bb_mid TP was too close
+            # and got filtered out by fee filter almost every time
             if allow_range and close <= bb_lower and rsi < RANGE_RSI_OVERSOLD:
                 sl = close - atr * RANGE_ATR_SL_MULT
-                tp = bb_mid  # Target = middle band
+                tp = bb_upper  # Target = opposite (upper) band for adequate R:R
                 expected_profit = (tp - close) / close * 100
                 bb_deviation = (close - bb_mid) / (bb_upper - bb_mid) if (bb_upper - bb_mid) != 0 else 0
                 confidence = min(abs(bb_deviation) / 2, 1.0)
@@ -191,7 +200,7 @@ class RangeStrategy:
             # SHORT: Price at upper BB + RSI overbought
             elif allow_range and close >= bb_upper and rsi > RANGE_RSI_OVERBOUGHT:
                 sl = close + atr * RANGE_ATR_SL_MULT
-                tp = bb_mid
+                tp = bb_lower  # Target = opposite (lower) band for adequate R:R
                 expected_profit = (close - tp) / close * 100
                 bb_deviation = (close - bb_mid) / (bb_upper - bb_mid) if (bb_upper - bb_mid) != 0 else 0
                 confidence = min(abs(bb_deviation) / 2, 1.0)

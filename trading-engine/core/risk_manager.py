@@ -117,45 +117,63 @@ class RiskManager:
         self.trade_results = deque(maxlen=100)
     
     def _calculate_kelly_size(self) -> float:
-        """Calculate Kelly fraction based on recent trade history."""
+        """Calculate Kelly fraction based on recent trade history.
+        
+        Returns the fraction of capital to risk per trade (margin side),
+        already divided by LEVERAGE so actual notional exposure stays controlled.
+        Cap at RISK_PER_TRADE / 2 so Kelly can be adaptive above the fixed floor.
+        """
+        # Cap = half of the default risk so Kelly sizing can roam above/below it
+        kelly_cap = RISK_PER_TRADE / 2
+
         if len(self.trade_results) < MIN_WIN_RATE_SAMPLE:
-            return RISK_PER_TRADE  # Fall back to fixed sizing
+            # Divide by LEVERAGE: kelly_size is now in "margin" terms
+            return RISK_PER_TRADE / LEVERAGE
         recent = list(self.trade_results)[-MIN_WIN_RATE_SAMPLE:]
         wins = [t for t in recent if t > 0]
         losses = [t for t in recent if t <= 0]
         if not wins or not losses:
-            return RISK_PER_TRADE
+            return RISK_PER_TRADE / LEVERAGE
         win_rate = len(wins) / len(recent)
         avg_win = sum(wins) / len(wins)
         avg_loss = abs(sum(losses) / len(losses))
         if avg_loss == 0:
-            return RISK_PER_TRADE
+            return RISK_PER_TRADE / LEVERAGE
         b = avg_win / avg_loss  # Odds ratio
         kelly = (b * win_rate - (1 - win_rate)) / b
         kelly = max(0, kelly) * KELLY_FRACTION  # Half-Kelly
-        return min(kelly, 0.04)  # Cap at 4%
+        # Cap and convert to margin sizing (divide by leverage)
+        return min(kelly, kelly_cap) / LEVERAGE
 
     def _get_vol_adjustment(self, current_atr_pct: float, avg_atr_pct: float) -> float:
-        """Scale position size based on current vs average volatility."""
+        """Scale position size based on current vs average volatility.
+        
+        Returns a multiplicative factor applied *on top of* Kelly sizing.
+        ATR-based SL already shrinks size in high vol; this adds a smaller
+        extra nudge rather than a hard 50% cut to avoid double-penalising.
+        """
         if avg_atr_pct == 0:
             return 1.0
         vol_ratio = current_atr_pct / avg_atr_pct
         if vol_ratio > VOLATILITY_SCALE_HIGH:
-            return 0.5  # High vol: half size
+            # Multiplicative reduction: e.g. 2x vol → 0.75x size (not 0.5x)
+            return max(0.5, 1.0 / vol_ratio)
         elif vol_ratio < VOLATILITY_SCALE_LOW:
-            return 1.5  # Low vol: 1.5x size (capped)
+            return min(1.5, 1.0 / vol_ratio)  # Low vol: scale up, capped at 1.5x
         return 1.0
 
     def calculate_position_size(self, signal, current_atr_pct: float = None, avg_atr_pct: float = None) -> float:
         """
         Calculate position size based on adaptive Kelly sizing + volatility adjustment.
-        Risk amount = Capital * kelly_size (adaptive)
-        Position size = Risk amount / (entry - stop_loss)
+
+        Kelly size is already expressed as a fraction of margin capital (÷ LEVERAGE),
+        so risk_amount is the margin committed, and actual notional = risk_amount × LEVERAGE.
+        Position size = risk_amount / risk_per_unit  (standard ATR/SL-based sizing).
         """
         if self.is_circuit_broken:
             return 0.0
 
-        # Use adaptive Kelly sizing if we have enough trade history
+        # kelly_size is already in margin terms (divided by LEVERAGE in _calculate_kelly_size)
         kelly_size = self._calculate_kelly_size()
 
         risk_amount = self.capital * kelly_size
@@ -166,15 +184,27 @@ class RiskManager:
 
         position_size = risk_amount / risk_per_unit
 
-        # Apply volatility adjustment if ATR data is provided
+        # Apply multiplicative volatility adjustment if ATR data is provided
         if current_atr_pct is not None and avg_atr_pct is not None:
             vol_adj = self._get_vol_adjustment(current_atr_pct, avg_atr_pct)
             position_size *= vol_adj
 
-        # Cap at 50% of capital in notional value
-        max_notional = self.capital * 0.5
-        max_size = max_notional / signal.entry_price
-        position_size = min(position_size, max_size)
+        # ── Max notional cap: total notional across all positions ≤ capital × LEVERAGE ──
+        # This prevents 5x leverage × 3 trades = 15x effective exposure
+        current_open_notional = sum(
+            p.entry_price * p.quantity for p in self.open_positions
+        )
+        max_total_notional = self.capital * LEVERAGE
+        remaining_notional = max_total_notional - current_open_notional
+        if remaining_notional <= 0:
+            return 0.0
+        max_size_by_notional = remaining_notional / signal.entry_price
+
+        # Also cap per-trade at 50% of capital margin (not 50% of leveraged notional)
+        max_margin_per_trade = self.capital * 0.5
+        max_size_by_margin = (max_margin_per_trade * LEVERAGE) / signal.entry_price
+
+        position_size = min(position_size, max_size_by_notional, max_size_by_margin)
 
         # Minimum trade size (0.0001 BTC for Binance)
         if position_size * signal.entry_price < 10:  # Min $10 notional
@@ -475,13 +505,18 @@ class RiskManager:
 
     def calculate_liquidation_price(self, entry_price: float, direction: str,
                                      leverage: int, margin_type: str = "ISOLATED") -> float:
-        """Calculate approximate liquidation price for a futures position."""
+        """Calculate approximate liquidation price for a futures position.
+        
+        Binance USDM Futures maintenance margin rate ≈ 2.5% for most tiers.
+        Formula: liq_price = entry × (1 ∓ 1/lev ± maintenance_ratio)
+        """
         lev = leverage or LEVERAGE
+        maintenance_ratio = 0.025  # Binance USDM ~2.5% (was incorrect 0.004)
         if margin_type == "ISOLATED":
             if direction == "LONG":
-                return entry_price * (1 - 1.0 / lev + 0.004)  # 0.4% maintenance margin
+                return entry_price * (1 - 1.0 / lev + maintenance_ratio)
             else:
-                return entry_price * (1 + 1.0 / lev - 0.004)
+                return entry_price * (1 + 1.0 / lev - maintenance_ratio)
         else:
             # CROSSED: liquidation depends on total account, approximate
             return 0  # Can't calculate without full account state

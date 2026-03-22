@@ -188,6 +188,22 @@ def get_closed_trades(source="LIVE", limit=100):
     ), get_engine(), params={"s":source,"lim":limit})
 
 
+def get_recent_trades(limit=200, source="LIVE"):
+    """Fetch recent closed trades for ML filter training.
+    Returns DataFrame with columns: entry_time, direction, regime, confidence, risk_reward, pnl
+    """
+    try:
+        return pd.read_sql(text(
+            """SELECT entry_time, direction, strategy, regime, confidence, risk_reward, pnl
+               FROM positions
+               WHERE status='CLOSED' AND source=:s
+               ORDER BY exit_time DESC LIMIT :lim"""
+        ), get_engine(), params={"s": source, "lim": limit})
+    except Exception as e:
+        print(f"⚠️ get_recent_trades error: {e}")
+        return None
+
+
 # ═══════════════════════════════════════
 # EQUITY + BACKTEST RUNS
 # ═══════════════════════════════════════

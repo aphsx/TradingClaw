@@ -66,10 +66,38 @@ export async function GET() {
         }
       }
       const usdt = balances['USDT'] ?? { free: 0, locked: 0, total: 0 };
+
+      // Fetch account details for unrealized PnL + margin ratio
+      let unrealizedPnl = 0;
+      let marginRatio = 0;
+      let totalMarginBalance = 0;
+      let availableBalance = 0;
+      try {
+        const ts2 = await getServerTime();
+        const qs2 = `timestamp=${ts2}&recvWindow=10000`;
+        const sig2 = sign(qs2, secretKey);
+        const accRes = await fetch(`${BASE_URL}/fapi/v2/account?${qs2}&signature=${sig2}`, {
+          headers: { 'X-MBX-APIKEY': apiKey },
+          cache: 'no-store',
+        });
+        if (accRes.ok) {
+          const accData = await accRes.json();
+          unrealizedPnl = parseFloat(accData.totalUnrealizedProfit ?? 0);
+          totalMarginBalance = parseFloat(accData.totalMarginBalance ?? 0);
+          availableBalance = parseFloat(accData.availableBalance ?? usdt.free);
+          const totalMaintMargin = parseFloat(accData.totalMaintMargin ?? 0);
+          marginRatio = totalMarginBalance > 0 ? totalMaintMargin / totalMarginBalance : 0;
+        }
+      } catch (_) {}
+
       return NextResponse.json({
         usdt_free: usdt.free,
         usdt_locked: usdt.locked,
         usdt_total: usdt.total,
+        unrealized_pnl: unrealizedPnl,
+        margin_balance: totalMarginBalance,
+        available_balance: availableBalance,
+        margin_ratio: marginRatio,
         balances,
         account_type: 'FUTURES',
       });

@@ -9,6 +9,8 @@ export async function GET() {
   let equity = null;
   let regime = null;
   let lastPrice = null;
+  let margin = null;
+  let funding = null;
   let source = 'none';
   const errors: string[] = [];
 
@@ -25,6 +27,8 @@ export async function GET() {
     equity = await redisGet('monitor:equity');
     regime = await redisGet('monitor:regime');
     lastPrice = await redisGet('monitor:last_price');
+    margin = await redisGet('monitor:margin');
+    funding = await redisGet('monitor:funding');
 
     if (redisPositions.length > 0) {
       open_positions = redisPositions;
@@ -82,6 +86,8 @@ export async function GET() {
       equity,
       regime,
       last_price: lastPrice,
+      margin,
+      funding,
     },
     _errors: errors.length > 0 ? errors : undefined,
   });
