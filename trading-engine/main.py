@@ -157,6 +157,15 @@ def run_live():
     bars_since_retrain = {sym: 0 for sym in SYMBOLS}
     CAPITAL_SYNC_EVERY = 50  # Re-sync balance every N loops (~50 min on 1h tf)
 
+    # ── Pending signal outcome tracker (ML bias fix) ──
+    # All generated signals (including rejected) are tracked here.
+    # Each loop checks if tracked signals hit TP or SL → labels them for ML training.
+    # Structure: {sig_id: {'signal': dict, 'price': float, 'sl': float, 'tp': float,
+    #                      'direction': str, 'symbol': str, 'created_at': datetime}}
+    _pending_outcomes: dict = {}
+    _OUTCOME_MAX_AGE_HOURS = 48   # Discard unresolved signals after 48h
+    _sig_id_counter = 0           # Simple counter for pending signal IDs
+
     # ── Set leverage and margin type ──
     if USE_FUTURES:
         print(f"\n⚙️  Configuring futures...")
@@ -325,6 +334,59 @@ def run_live():
     monitor_thread.start()
     print("🔍 Monitor thread started")
 
+    # ── Pending signal outcome checker ──
+    def resolve_pending_outcomes(current_prices: dict):
+        """
+        Check if any pending (non-executed) signal has hit TP or SL since creation.
+        Updates DB with a simulated outcome so ML filter trains on complete data.
+
+        Called once per main loop, after fetching current prices.
+        """
+        now = datetime.utcnow()
+        resolved = []
+        for sig_key, pending in list(_pending_outcomes.items()):
+            age_h = (now - pending['created_at']).total_seconds() / 3600
+            price = current_prices.get(pending['symbol'], 0)
+            if price <= 0:
+                continue
+            direction = pending['direction']
+            sl = pending['sl']
+            tp = pending['tp']
+            # Simulate outcome: did price reach TP or SL?
+            if direction == 'LONG':
+                if price <= sl:
+                    outcome = 0   # Would have been stopped out
+                elif price >= tp:
+                    outcome = 1   # Would have hit TP
+                elif age_h >= _OUTCOME_MAX_AGE_HOURS:
+                    outcome = 0   # Timed out without hitting TP → treat as loss
+                else:
+                    continue      # Still pending
+            else:  # SHORT
+                if price >= sl:
+                    outcome = 0
+                elif price <= tp:
+                    outcome = 1
+                elif age_h >= _OUTCOME_MAX_AGE_HOURS:
+                    outcome = 0
+                else:
+                    continue
+            # Log simulated outcome to DB for ML training
+            try:
+                sim_pnl = (tp - pending['entry'] if outcome == 1 else sl - pending['entry'])
+                if direction == 'SHORT':
+                    sim_pnl = -sim_pnl
+                db.log("DEBUG", "ml_signal", f"Simulated outcome sig={sig_key}",
+                       {"outcome": outcome, "sim_pnl": round(sim_pnl, 4),
+                        "direction": direction, "age_h": round(age_h, 1)})
+            except Exception:
+                pass
+            resolved.append(sig_key)
+        for k in resolved:
+            _pending_outcomes.pop(k, None)
+        if resolved:
+            print(f"   🧠 ML: resolved {len(resolved)} pending signal outcomes")
+
     # ──────────────────────────
     # MAIN SIGNAL LOOP
     # ──────────────────────────
@@ -354,6 +416,16 @@ def run_live():
                         corr_mgr.update_prices(sym, sym_df['close'])
             except Exception as e:
                 print(f"⚠️ Multi-symbol fetch: {e}")
+
+            # ── Resolve pending signal outcomes for ML training ──
+            try:
+                current_prices_snap = {
+                    sym: float(multi_data[sym]['close'].iloc[-1])
+                    for sym in SYMBOLS if sym in multi_data and not multi_data[sym].empty
+                }
+                resolve_pending_outcomes(current_prices_snap)
+            except Exception as e:
+                print(f"⚠️ Pending outcome check: {e}")
 
             # ── Fetch funding rates for VolumeFlowFactor ──
             if USE_FUTURES:
@@ -442,6 +514,22 @@ def run_live():
                 last_bar = df.index[-1]
                 new_sigs = [s for s in signals if s.timestamp == last_bar]
 
+                # ── Track ALL new signals for ML outcome logging (bias fix) ──
+                # Signals that get rejected by any filter still need their outcomes
+                # tracked so ML can learn from complete data, not just executed trades.
+                if last_bar != last_signal_time.get(current_symbol):
+                    for raw_sig in new_sigs:
+                        _sig_id_counter += 1
+                        _pending_outcomes[f"{current_symbol}_{_sig_id_counter}"] = {
+                            'signal': _signal_to_dict(raw_sig),
+                            'entry': raw_sig.entry_price,
+                            'sl':    raw_sig.stop_loss,
+                            'tp':    raw_sig.take_profit,
+                            'direction': raw_sig.direction,
+                            'symbol': current_symbol,
+                            'created_at': now,
+                        }
+
                 if last_bar == last_signal_time.get(current_symbol):
                     print("⏸️  Already processed this bar")
                 elif new_sigs:
@@ -486,15 +574,16 @@ def run_live():
                             print(f"   ℹ️ Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
 
                         # ── Position size ──
-                        # Kelly sizing (tier-aware risk%) → ATR-based SL → notional caps
-                        # Only apply drawdown safety brake — keep full tier risk% intact
+                        # Kelly (tier-aware risk%) × drawdown safety × volatility sizing
                         qty = risk_mgr.calculate_position_size(sig)
                         dd_mult = risk_mgr.get_drawdown_size_multiplier()
-                        qty *= dd_mult
+                        vol_mult = getattr(sig, 'vol_size_mult', 1.0)  # From VolatilityFactor
+                        qty *= dd_mult * vol_mult
                         qty = round(qty, 6)
                         tier = risk_mgr.get_tier_info()
                         print(f"   💰 Tier: {tier['tier']} | Risk: {tier['risk_pct']} "
-                              f"(${tier['risk_amount_usd']}) | DD: {dd_mult:.2f}x | Qty: {qty}")
+                              f"(${tier['risk_amount_usd']}) | DD: {dd_mult:.2f}x | "
+                              f"Vol: {vol_mult:.2f}x | Qty: {qty}")
                         if qty <= 0:
                             print("   ⛔ Quantity zero after adjustments")
                             continue

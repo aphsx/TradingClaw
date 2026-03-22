@@ -36,15 +36,16 @@ from strategies.factors.volatility import VolatilityFactor
 
 # ─── Regime weights ───
 # Keys: 0=Trending-Up, 1=Ranging, 2=Volatile, 3=Trending-Down (HMM states)
+# Volatility removed from composite (used only as position size multiplier).
+# Weights redistributed proportionally so each row sums to 1.0.
 REGIME_WEIGHTS: Dict[int, Dict[str, float]] = {
-    0: dict(trend=0.35, mean_rev=0.10, momentum=0.25, volume=0.20, volatility=0.10),  # Trending-Up
-    1: dict(trend=0.10, mean_rev=0.35, momentum=0.15, volume=0.25, volatility=0.15),  # Ranging
-    2: dict(trend=0.15, mean_rev=0.15, momentum=0.25, volume=0.20, volatility=0.25),  # Volatile
-    3: dict(trend=0.35, mean_rev=0.10, momentum=0.25, volume=0.20, volatility=0.10),  # Trending-Down
+    0: dict(trend=0.40, mean_rev=0.10, momentum=0.28, volume=0.22),  # Trending-Up
+    1: dict(trend=0.12, mean_rev=0.40, momentum=0.18, volume=0.30),  # Ranging
+    2: dict(trend=0.20, mean_rev=0.20, momentum=0.33, volume=0.27),  # Volatile
+    3: dict(trend=0.40, mean_rev=0.10, momentum=0.28, volume=0.22),  # Trending-Down
 }
 DEFAULT_WEIGHTS = dict(trend=FACTOR_WEIGHT_TREND, mean_rev=FACTOR_WEIGHT_MEAN_REV,
-                       momentum=FACTOR_WEIGHT_MOMENTUM, volume=FACTOR_WEIGHT_VOLUME,
-                       volatility=FACTOR_WEIGHT_VOLATILITY)
+                       momentum=FACTOR_WEIGHT_MOMENTUM, volume=FACTOR_WEIGHT_VOLUME)
 
 
 @dataclass
@@ -62,6 +63,7 @@ class Signal:
     confidence: float        # 0-1 (derived from |composite_score|)
     expected_profit_pct: float
     composite_score: float   # Raw composite in [-1, 1]
+    vol_size_mult: float = 1.0  # Volatility-based position size multiplier (high vol → <1.0)
 
     @property
     def risk_reward(self) -> float:
@@ -103,14 +105,14 @@ class SignalEngine:
         mr_scores = self.mr_factor.score(df, df_4h)
         mom_scores = self.mom_factor.score(df, df_4h)
         vf_raw = self.vol_flow_factor.score(df, df_4h, symbol=symbol)
-        vol_scores = self.volatility_factor.score(df, df_4h)
+        # Volatility NOT included in composite — used only as position size multiplier
+        vol_size = self.volatility_factor.position_size_multiplier(df)
 
         composite = (
             t_scores * weights['trend'] +
             mr_scores * weights['mean_rev'] +
             mom_scores * weights['momentum'] +
-            vf_raw * weights['volume'] +
-            vol_scores * weights['volatility']
+            vf_raw * weights['volume']
         )
 
         result = pd.DataFrame({
@@ -118,7 +120,7 @@ class SignalEngine:
             'mean_rev': mr_scores,
             'momentum': mom_scores,
             'volume': vf_raw,
-            'volatility': vol_scores,
+            'volatility': vol_size,  # Stored for reference; NOT in composite
             'composite': composite,
         }, index=df.index)
 
@@ -143,16 +145,19 @@ class SignalEngine:
         if abs(composite) < COMPOSITE_ENTRY_THRESHOLD:
             return []
 
-        # ─── Signal confirmation: composite must CROSS threshold (not just be above it) ───
-        # Prevents entering mid-trend on a signal that's been above threshold for many bars.
-        # Require a crossover: prev bar was below threshold, current bar is above.
+        # ─── Signal confirmation: composite must CROSS threshold ───
+        # Prevents stale re-entries when composite has been above threshold for many bars.
+        # Exception: in trending regimes (0=Trending-Up, 3=Trending-Down) direction-aligned
+        # signals are allowed continuously — trend-following benefits from staying in the move.
         if len(scores_df) >= 2:
             prev_composite = float(scores_df['composite'].iloc[-2])
             just_crossed = abs(prev_composite) < COMPOSITE_ENTRY_THRESHOLD
-            # Allow entry if this is a fresh cross OR if score strengthened significantly
             score_surge = abs(composite) - abs(prev_composite) > COMPOSITE_ENTRY_THRESHOLD * 0.5
-            if not just_crossed and not score_surge:
-                return []  # Signal is stale (already above threshold for multiple bars)
+            # Trending regime re-entry: skip stale check if direction matches trend
+            trending_regime = regime in (0, 3)
+            trend_aligned = (regime == 0 and composite > 0) or (regime == 3 and composite < 0)
+            if not just_crossed and not score_surge and not (trending_regime and trend_aligned):
+                return []  # Signal is stale
 
         direction = "LONG" if composite > 0 else "SHORT"
         confidence = min(abs(composite) / COMPOSITE_STRONG_THRESHOLD, 1.0)
@@ -186,10 +191,13 @@ class SignalEngine:
         if expected_profit_pct < self._min_profit_pct:
             return []
 
+        # ─── Volatility size multiplier (from VolatilityFactor) ───
+        vol_size_mult = float(self.volatility_factor.position_size_multiplier(df).iloc[-1])
+
         # ─── Build strategy name from dominant factors ───
-        factor_labels = ['Trend', 'MeanRev', 'Momentum', 'Volume', 'Volatility']
+        factor_labels = ['Trend', 'MeanRev', 'Momentum', 'Volume']
         factor_values = [last_scores['trend'], last_scores['mean_rev'],
-                         last_scores['momentum'], last_scores['volume'], last_scores['volatility']]
+                         last_scores['momentum'], last_scores['volume']]
         dominant_idx = int(np.argmax([abs(v) for v in factor_values]))
         strategy_name = f"MultiF_{factor_labels[dominant_idx]}"
 
@@ -206,6 +214,7 @@ class SignalEngine:
             confidence=confidence,
             expected_profit_pct=expected_profit_pct,
             composite_score=composite,
+            vol_size_mult=round(vol_size_mult, 3),
         )]
 
     def _calculate_sl(self, df: pd.DataFrame, direction: str, atr: float) -> float:

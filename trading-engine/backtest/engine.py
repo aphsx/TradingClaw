@@ -66,24 +66,36 @@ class BacktestEngine:
         print(f"   CV Accuracy:      {train_stats['cv_accuracy']}")
         print(f"   Holdout Accuracy: {train_stats.get('holdout_accuracy', 'N/A')}")
 
-        # Step 4: Predict
-        print("\n🔮 Predicting regimes...")
-        test_regimes = self.detector.predict(test_feat)
-        regime_counts = test_regimes.value_counts()
+        # Step 4: Predict regimes for DB/reporting ONLY (uses full sequence — OK for display)
+        # NOTE: signal generation below uses per-bar prediction (no look-ahead).
+        print("\n🔮 Predicting regimes (for reporting)...")
+        test_regimes_report = self.detector.predict(test_feat)
+        regime_counts = test_regimes_report.value_counts()
         for r, c in regime_counts.items():
-            print(f"   {REGIME_NAMES[r]}: {c} ({c/len(test_regimes)*100:.1f}%)")
+            print(f"   {REGIME_NAMES[r]}: {c} ({c/len(test_regimes_report)*100:.1f}%)")
 
-        # Save regimes to DB
+        # Save regimes to DB (full-sequence prediction is fine for visualisation)
         if self.use_db:
             regime_detail = self.detector.predict_with_confidence(test_feat)
             save_regimes(regime_detail, SYMBOL, TIMEFRAME)
 
-        # Step 5: Signals — multi-factor engine per bar
-        print("\n📡 Generating signals (multi-factor engine)...")
+        # Step 5: Signals — per-bar regime prediction (NO look-ahead bias)
+        # HMM Viterbi on the full sequence sees future data → use get_current_regime()
+        # on only the bars available up to each point in time.
+        # A rolling window of REGIME_LOOKBACK bars keeps this O(n) instead of O(n²).
+        REGIME_LOOKBACK = 120  # 120 1h bars = 5 days of regime context
+        print(f"\n📡 Generating signals (no-lookahead, window={REGIME_LOOKBACK})...")
         all_signals = []
         for i in range(60, len(test_df)):
             bar_df = test_df.iloc[:i+1]
-            regime_id = int(test_regimes.iloc[i]) if i < len(test_regimes) else 1
+            # Regime from a rolling window — never uses bars after index i
+            window_start = max(0, i + 1 - REGIME_LOOKBACK)
+            bar_feat_window = test_feat.iloc[window_start:i+1]
+            try:
+                current_regime = self.detector.get_current_regime(bar_feat_window)
+                regime_id = current_regime['regime']
+            except Exception:
+                regime_id = 1  # Fallback: Ranging
             sigs = self.sig_engine.generate_signals(bar_df, regime=regime_id)
             all_signals.extend(sigs)
         print(f"   Raw signals: {len(all_signals)}")
