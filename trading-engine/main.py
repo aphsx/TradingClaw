@@ -153,13 +153,17 @@ def run_live():
         raise RuntimeError("Live mode requires real Binance balance; aborting startup")
 
     # ── Core components ──
+    print("\n[FEES] Fetching exact exchange trading fees...")
+    real_fees = bnb.get_trading_fees(SYMBOLS[0] if isinstance(SYMBOLS, list) and SYMBOLS else SYMBOL)
+    print(f"   Taker: {real_fees['taker']*100:.3f}% | Maker: {real_fees['maker']*100:.3f}%")
+
     detector    = RegimeDetector()
-    risk_mgr    = RiskManager(initial_capital=live_balance)
+    risk_mgr    = RiskManager(initial_capital=live_balance, taker_fee=real_fees['taker'])
     ml_filter   = MLSignalFilter(min_samples=ML_MIN_SAMPLES, threshold=ML_THRESHOLD)
     corr_mgr    = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
                                      correlation_threshold=0.7)
     pos_mgr     = PositionManager()
-    sig_engine  = SignalEngine()
+    sig_engine  = SignalEngine(taker_fee=real_fees['taker'], maker_fee=real_fees['maker'])
     exec_analytics = ExecutionAnalytics(window=50)  # Issue #10
     regime_mon  = RegimeMonitor()                   # Per-regime circuit breakers
 

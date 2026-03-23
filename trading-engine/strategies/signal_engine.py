@@ -79,8 +79,9 @@ class Signal:
 class SignalEngine:
     """Generates trade signals using 3 discrete strategies."""
 
-    def __init__(self):
-        self._total_fees = (TAKER_FEE * 2) + SLIPPAGE
+    def __init__(self, taker_fee=None, maker_fee=None):
+        tf = taker_fee if taker_fee is not None else TAKER_FEE
+        self._total_fees = (tf * 2) + SLIPPAGE
         self._min_profit = self._total_fees * FEE_MULTIPLIER * 100  # pct
 
     # ── Compatibility shims ──

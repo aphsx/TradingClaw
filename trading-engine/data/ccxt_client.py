@@ -448,6 +448,22 @@ def get_account_positions() -> list[dict]:
         return []
 
 
+def get_trading_fees(symbol: str = SYMBOL) -> dict:
+    """Fetch exact Maker/Taker fees natively supported by the broker via CCXT."""
+    # We use a clean public instance for metadata to avoid API Key auth issues
+    try:
+        ex_class = getattr(ccxt, EXCHANGE_NAME)
+        ex = ex_class({'enableRateLimit': True})
+        sym = _ccxt_symbol(symbol)
+        ex.load_markets()
+        market = ex.markets.get(sym, {})
+        taker = market.get('taker', 0.0006) # Update default to 0.06% which is common
+        maker = market.get('maker', 0.0002) # Update default to 0.02%
+        return {'taker': taker, 'maker': maker}
+    except Exception as e:
+        log.error(f"get_trading_fees error: {e}")
+        return {'taker': 0.0006, 'maker': 0.0002}
+
 def cancel_order(symbol: str, order_id) -> dict:
     ex = get_exchange()
     sym = _ccxt_symbol(symbol)

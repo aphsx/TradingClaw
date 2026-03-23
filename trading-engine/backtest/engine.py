@@ -24,11 +24,17 @@ except Exception:
     HAS_DB = False
 
 
-class BacktestEngine:
     def __init__(self, capital=INITIAL_CAPITAL, use_db=True):
+        from data.ccxt_client import get_trading_fees
+        fees = get_trading_fees(SYMBOL)
+        self.taker_fee = fees['taker']
+        self.maker_fee = fees['maker']
+        
+        print(f"[FEES] Operating backtest with real broker fees: Taker={self.taker_fee*100:.3f}% Maker={self.maker_fee*100:.3f}%")
+        
         self.detector  = RegimeDetector()
-        self.risk_mgr  = RiskManager(initial_capital=capital)
-        self.sig_engine = SignalEngine()
+        self.risk_mgr  = RiskManager(initial_capital=capital, taker_fee=self.taker_fee)
+        self.sig_engine = SignalEngine(taker_fee=self.taker_fee, maker_fee=self.maker_fee)
         # Issue #8: include same MLSignalFilter used in live trading
         self.ml_filter = MLSignalFilter(
             min_samples=ML_MIN_SAMPLES, threshold=ML_THRESHOLD)

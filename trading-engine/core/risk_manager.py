@@ -37,9 +37,11 @@ class FeeFilter:
     Rule: expected_profit >= total_fee * FEE_MULTIPLIER
     """
     
-    def __init__(self, maker_fee=MAKER_FEE, taker_fee=TAKER_FEE, 
+    def __init__(self, maker_fee=None, taker_fee=None, 
                  slippage=SLIPPAGE, multiplier=FEE_MULTIPLIER):
-        self.total_fee = (taker_fee * 2) + slippage  # Entry + Exit + Slippage
+        mf = maker_fee if maker_fee is not None else MAKER_FEE
+        tf = taker_fee if taker_fee is not None else TAKER_FEE
+        self.total_fee = (tf * 2) + slippage  # Entry + Exit + Slippage
         self.multiplier = multiplier
     
     def filter_signals(self, signals: list) -> tuple:
@@ -98,7 +100,10 @@ class RiskManager:
                  risk_per_trade=RISK_PER_TRADE,
                  max_daily_loss=MAX_DAILY_LOSS,
                  max_drawdown=MAX_DRAWDOWN,
-                 max_open_trades=MAX_OPEN_TRADES):
+                 max_open_trades=MAX_OPEN_TRADES,
+                 taker_fee=None):
+
+        self.taker_fee = taker_fee if taker_fee is not None else TAKER_FEE
 
         # Use provided capital; 0 means "not yet synced from exchange"
         start_capital = initial_capital if initial_capital > 0 else 1000.0
@@ -341,14 +346,14 @@ class RiskManager:
         
         quantity = self.calculate_position_size(signal)
         notional = signal.entry_price * quantity
-        entry_fee = notional * TAKER_FEE
+        entry_fee = notional * self.taker_fee
         
         # Check if we have enough capital for notional + fee
         if notional + entry_fee > self.capital:
-            quantity = (self.capital * 0.95) / (signal.entry_price * (1 + TAKER_FEE))
+            quantity = (self.capital * 0.95) / (signal.entry_price * (1 + self.taker_fee))
             quantity = round(quantity, 6)
             notional = signal.entry_price * quantity
-            entry_fee = notional * TAKER_FEE
+            entry_fee = notional * self.taker_fee
             # Hard reject only if balance itself is too small to cover even min notional
             if notional < self._min_notional:
                 return None
@@ -429,7 +434,7 @@ class RiskManager:
 
         # Exit fee
         exit_notional = exit_price * position.quantity
-        exit_fee = exit_notional * TAKER_FEE
+        exit_fee = exit_notional * self.taker_fee
         position.fees_paid += exit_fee
 
         # Net PnL after all fees
