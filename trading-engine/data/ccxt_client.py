@@ -621,6 +621,61 @@ def get_futures_account() -> dict:
     }
 
 
+# ─── Open Orders & Trade History ─────────────────────────────────────────────
+
+def get_all_open_orders(symbol: str = None) -> list:
+    """
+    Fetch all open orders (across all symbols or for a specific symbol).
+    Returns list of CCXT order dicts.
+    """
+    ex = get_exchange()
+    sym = _ccxt_symbol(symbol) if symbol else None
+    try:
+        if sym:
+            return ex.fetch_open_orders(sym)
+        else:
+            return ex.fetch_open_orders()
+    except ccxt.BaseError as e:
+        log.error(f"get_all_open_orders error: {e}")
+        return []
+
+
+def get_position_history(symbol: str = None, start_time: int = None,
+                         end_time: int = None, limit: int = 100) -> list:
+    """
+    Fetch recent trade history (filled orders).
+    Mirrors binance_client.get_position_history — returns Binance-compat trade dicts.
+    start_time / end_time in milliseconds.
+    """
+    ex = get_exchange()
+    sym = _ccxt_symbol(symbol) if symbol else _ccxt_symbol(SYMBOL)
+    try:
+        trades = ex.fetch_my_trades(sym, since=start_time, limit=limit)
+        result = []
+        for t in trades:
+            ts = t.get('timestamp', 0)
+            if end_time and ts > end_time:
+                continue
+            result.append({
+                'symbol':          symbol or SYMBOL,
+                'id':              t.get('id'),
+                'orderId':         t.get('order'),
+                'side':            (t.get('side') or '').upper(),
+                'price':           str(_safe_float(t.get('price'))),
+                'qty':             str(_safe_float(t.get('amount'))),
+                'quoteQty':        str(_safe_float(t.get('cost'))),
+                'commission':      str(_safe_float((t.get('fee') or {}).get('cost'))),
+                'commissionAsset': (t.get('fee') or {}).get('currency', 'USDT'),
+                'time':            ts,
+                'realizedPnl':     str(_safe_float(t.get('info', {}).get('realizedPnl'))),
+                'raw':             t,
+            })
+        return result
+    except ccxt.BaseError as e:
+        log.error(f"get_position_history error: {e}")
+        return []
+
+
 # ─── Funding Rate ────────────────────────────────────────────────────────────
 
 def get_funding_rate(symbol: str = SYMBOL, limit: int = 1) -> list:
