@@ -331,7 +331,7 @@ def get_data(use_api: bool = True, days: int = LOOKBACK_DAYS) -> pd.DataFrame:
 
 def fetch_funding_rates(symbol: str = SYMBOL, limit: int = 100) -> pd.DataFrame:
     """Fetch funding rate history."""
-    from data import binance_client as bnb
+    from data import ccxt_client as bnb
     rates = bnb.get_funding_rate(symbol, limit)
     if not rates:
         return pd.DataFrame()

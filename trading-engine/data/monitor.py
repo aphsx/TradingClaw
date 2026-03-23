@@ -341,12 +341,11 @@ def cleanup_ghost_positions() -> list:
     """
     removed = []
     try:
-        from data import binance_client as bnb
         bot_positions = get_open_positions_from_redis()
         if not bot_positions:
             return []
 
-        binance_live = bnb.get_account_positions()   # actual open on Binance
+        binance_live = bnb.get_account_positions()   # actual open on Binance (via ccxt_client)
         live_keys = {(p["symbol"], p["direction"]) for p in binance_live}
 
         for pos in bot_positions:

@@ -621,8 +621,37 @@ def get_futures_account() -> dict:
     }
 
 
+# ─── Funding Rate ────────────────────────────────────────────────────────────
+
+def get_funding_rate(symbol: str = SYMBOL, limit: int = 1) -> list:
+    """
+    Fetch funding rate history via CCXT fetch_funding_rate_history.
+    Returns list of dicts with Binance-compatible keys:
+      fundingTime (ms), fundingRate (str), symbol (str)
+    """
+    ex = get_exchange()
+    sym = _ccxt_symbol(symbol)
+    try:
+        history = ex.fetch_funding_rate_history(sym, limit=limit)
+        result = []
+        for r in history:
+            result.append({
+                'symbol':      symbol,
+                'fundingTime': r.get('timestamp', 0),
+                'fundingRate': str(r.get('fundingRate', 0)),
+            })
+        return result
+    except ccxt.BaseError as e:
+        log.error(f"get_funding_rate error: {e}")
+        # Fallback to raw binance_client
+        try:
+            import data.binance_client as _raw
+            return _raw.get_funding_rate(symbol, limit)
+        except Exception:
+            return []
+
+
 # ─── OI / Long-Short Ratio — no CCXT support, delegate to binance_client ─────
-# These are called in main.py as _bnb_raw.get_open_interest / get_long_short_ratio
 
 def get_open_interest(symbol: str = SYMBOL) -> dict:
     """Thin wrapper so ccxt_client is fully drop-in for callers that use bnb directly."""

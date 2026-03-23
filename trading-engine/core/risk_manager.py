@@ -779,7 +779,7 @@ class RiskManager:
     def check_funding_cost(self, symbol: str, position_value: float) -> dict:
         """Estimate daily funding cost for a position."""
         try:
-            from data import binance_client as bnb
+            from data import ccxt_client as bnb
             mark = bnb.get_mark_price(symbol)
             rate = float(mark.get("lastFundingRate", 0))
             daily_cost = abs(position_value * rate * 3)  # 3 funding periods per day
