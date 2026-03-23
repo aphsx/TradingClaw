@@ -1,13 +1,26 @@
 """
-Multi-Factor Signal Engine — TradingClaw v5
-============================================
-Replaces the old 3-strategy + STRATEGY_MAP approach.
-Each bar is scored by 5 factor groups. Composite score drives entry/size.
+Signal Engine v3 — Three Clean Strategies
+==========================================
+Replaces 5-factor composite soup with 3 discrete strategies
+that each have clear, testable edge.
 
-Factor weights are dynamically adjusted based on HMM regime:
-  Regime Trending-Up/Down: favor Trend + Momentum factors
-  Regime Ranging:          favor MeanReversion + Volume factors
-  Regime Volatile:         favor Momentum + Volatility factors
+STRATEGY 1 — TREND_FOLLOW (active in Trending regimes)
+  Entry: EMA alignment + ADX strength + MACD momentum + volume
+  Edge:  Trend persistence in crypto (momentum effect)
+
+STRATEGY 2 — VOL_BREAKOUT (active in any regime, strongest in Volatile/Trending)
+  Entry: Donchian breakout after BB squeeze + volume surge + ATR expansion
+  Edge:  Post-compression breakouts have strong momentum in crypto
+
+STRATEGY 3 — MEAN_REVERSION (only in Ranging, very tight conditions)
+  Entry: Extreme BB %B + very oversold RSI + volume exhaustion + reversal candle
+  Edge:  Price reversion to mean in true ranging markets
+  NOTE:  Fewer trades but much higher quality — replaces old MR that was losing pre-fee
+
+Exit Management:
+  - TREND + BREAKOUT: Pure Chandelier trailing stop (no partial TPs — let winners run)
+  - MEAN_REV: Single fixed TP at BB midband (EMA21) — mean reversion has a clear target
+  - All:       Time stop (stale trades) + hard stop loss
 """
 from __future__ import annotations
 
@@ -19,390 +32,468 @@ from typing import Optional, List, Dict
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import (
-    COMPOSITE_ENTRY_THRESHOLD, COMPOSITE_STRONG_THRESHOLD,
-    COMPOSITE_THRESHOLD_BY_REGIME,                 # Issue #4
-    FACTOR_WEIGHT_TREND, FACTOR_WEIGHT_MEAN_REV,
-    FACTOR_WEIGHT_MOMENTUM, FACTOR_WEIGHT_VOLUME, FACTOR_WEIGHT_VOLATILITY,
     TAKER_FEE, SLIPPAGE, FEE_MULTIPLIER,
     CHANDELIER_PERIOD, CHANDELIER_MULT, SWING_LOOKBACK,
-    PARTIAL_TP1_R, PARTIAL_TP2_R,
+    TREND_ADX_MIN, TREND_EMA_ALIGN_REQUIRED,
+    BREAKOUT_DONCHIAN_PERIOD, BREAKOUT_VOLUME_MULT, BREAKOUT_ATR_EXPAND,
+    MR_BB_PCT_MAX, MR_RSI_MAX, MR_ADX_MAX, MR_CONFIDENCE_MIN,
+    REGIME_CONFIDENCE_MIN,
 )
-
-from strategies.factors.trend import TrendFactor
-from strategies.factors.mean_reversion import MeanReversionFactor
-from strategies.factors.momentum import MomentumFactor
-from strategies.factors.volume_flow import VolumeFlowFactor
-from strategies.factors.volatility import VolatilityFactor
-from strategies.factors.open_interest import OpenInterestFactor    # Issue #5
-from strategies.factors.market_structure import MarketStructureFactor  # Issue #9
+from core.regime_detector import TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, REGIME_NAMES
 
 
-# ─── Regime weights ───
-# Keys: 0=Trending-Up, 1=Ranging, 2=Volatile, 3=Trending-Down (HMM states)
-#
-# Issue #2: Trending-Down now has separate weights from Trending-Up.
-# Downtrend crypto dynamics differ: higher funding bleed for longs, liquidation
-# cascades, short-squeeze bounces → mean_rev and volume need more weight.
-#
-# Issue #8: Volatile regime now includes 'breakout' weight for VolatilityFactor.
-# Each row except Volatile sums to 1.0; Volatile sums to 1.0 with breakout included.
+# ─── Regime weights (for compatibility / reporting) ────────────
 REGIME_WEIGHTS: Dict[int, Dict[str, float]] = {
-    0: dict(trend=0.40, mean_rev=0.10, momentum=0.28, volume=0.22, breakout=0.00),  # Trending-Up
-    1: dict(trend=0.12, mean_rev=0.40, momentum=0.18, volume=0.30, breakout=0.00),  # Ranging
-    2: dict(trend=0.15, mean_rev=0.15, momentum=0.28, volume=0.17, breakout=0.25),  # Volatile (Issue #8)
-    3: dict(trend=0.35, mean_rev=0.18, momentum=0.22, volume=0.25, breakout=0.00),  # Trending-Down (Issue #2)
+    TRENDING_UP:   dict(trend=0.55, breakout=0.35, mean_rev=0.00, momentum=0.10),
+    TRENDING_DOWN: dict(trend=0.55, breakout=0.35, mean_rev=0.00, momentum=0.10),
+    RANGING:       dict(trend=0.10, breakout=0.20, mean_rev=0.50, momentum=0.20),
+    VOLATILE:      dict(trend=0.15, breakout=0.60, mean_rev=0.00, momentum=0.25),
 }
-# Auto-normalise DEFAULT_WEIGHTS so they always sum to 1.0 even if config values change.
-# (FACTOR_WEIGHT_VOLATILITY is intentionally excluded from default — size multiplier only.)
-_dw_raw = dict(trend=FACTOR_WEIGHT_TREND, mean_rev=FACTOR_WEIGHT_MEAN_REV,
-               momentum=FACTOR_WEIGHT_MOMENTUM, volume=FACTOR_WEIGHT_VOLUME)
-_dw_total = sum(_dw_raw.values()) or 1.0
-DEFAULT_WEIGHTS = {k: v / _dw_total for k, v in _dw_raw.items()}
-DEFAULT_WEIGHTS['breakout'] = 0.00  # No breakout in unknown-regime default
-
-# ─── Rolling percentile normalisation window (Issue #7) ───
-_PERCENTILE_WINDOW = 200
+DEFAULT_WEIGHTS = dict(trend=0.30, breakout=0.40, mean_rev=0.10, momentum=0.20)
 
 
 @dataclass
 class Signal:
-    """Trade signal from composite scoring."""
+    """Trade signal."""
     timestamp: pd.Timestamp
     direction: str           # "LONG" or "SHORT"
     entry_price: float
     stop_loss: float
-    take_profit: float       # Primary TP (1R)
-    take_profit_2: float     # 2R TP
+    take_profit: float       # Primary TP
+    take_profit_2: float     # Secondary TP
     atr: float
     regime: int
-    strategy: str            # Factor combination description
-    confidence: float        # 0-1 (derived from |composite_score|)
+    strategy: str            # "TrendFollow", "VolBreakout", "MeanRev"
+    confidence: float        # 0-1
     expected_profit_pct: float
-    composite_score: float   # Raw composite in [-1, 1]
-    vol_size_mult: float = 1.0  # Volatility-based position size multiplier (high vol → <1.0)
+    composite_score: float   # Approximate score in [-1, 1]
+    vol_size_mult: float = 1.0
 
     @property
     def risk_reward(self) -> float:
-        risk = abs(self.entry_price - self.stop_loss)
+        risk   = abs(self.entry_price - self.stop_loss)
         reward = abs(self.take_profit - self.entry_price)
         return reward / risk if risk > 0 else 0
 
 
 class SignalEngine:
-    """
-    Orchestrates 5 factor groups into composite signals.
-    Replaces generate_all_signals() / TrendStrategy / RangeStrategy / VolatileStrategy.
-    """
+    """Generates trade signals using 3 discrete strategies."""
 
     def __init__(self):
-        self.trend_factor = TrendFactor()
-        self.mr_factor = MeanReversionFactor()
-        self.mom_factor = MomentumFactor()
-        self.vol_flow_factor = VolumeFlowFactor()
-        self.volatility_factor = VolatilityFactor()
-        self.oi_factor = OpenInterestFactor()       # Issue #5
-        self.ms_factor = MarketStructureFactor()    # Issue #9
-
         self._total_fees = (TAKER_FEE * 2) + SLIPPAGE
-        self._min_profit_pct = self._total_fees * FEE_MULTIPLIER * 100
+        self._min_profit = self._total_fees * FEE_MULTIPLIER * 100  # pct
 
+    # ── Compatibility shims ──
     @property
-    def volume_flow(self) -> VolumeFlowFactor:
-        """Expose volume_flow factor for external cache updates."""
-        return self.vol_flow_factor
-
+    def volume_flow(self):
+        return self
     @property
-    def open_interest(self) -> OpenInterestFactor:
-        """Expose OI factor for external cache updates (Issue #5)."""
-        return self.oi_factor
+    def open_interest(self):
+        return self
+    def update_cache(self, *a, **kw):
+        pass
 
-    @staticmethod
-    def _percentile_normalize(series: pd.Series, window: int = _PERCENTILE_WINDOW) -> pd.Series:
-        """
-        Issue #7 — Rolling percentile normalization.
+    # ─── Main entry point ─────────────────────────────────────────
 
-        Converts each factor's raw score to a value in [-1, 1] based on its
-        percentile rank within its own recent history (last `window` bars).
-        This ensures all factors have equal distributional weight in the composite,
-        regardless of whether one factor naturally produces larger magnitudes.
-
-        Method:
-          - Compute rolling rank of |score| within [0, 1]  (magnitude percentile)
-          - Preserve the original sign
-          - Result: sign(score) × rank_pct  ∈ [-1, 1]
-        """
-        if len(series) < 2:
-            return series
-        abs_series  = series.abs()
-        rank_pct    = abs_series.rolling(window, min_periods=10).rank(pct=True).fillna(0.5)
-        return series.map(lambda x: 1.0 if x > 0 else (-1.0 if x < 0 else 0.0)) * rank_pct
-
-    def compute_composite(self, df: pd.DataFrame, df_4h: pd.DataFrame = None,
-                           regime: int = -1, symbol: str = None,
-                           btc_composite: float = 0.0) -> pd.DataFrame:
-        """
-        Compute per-bar composite scores.
-
-        Issue #6: btc_composite — if this symbol is NOT BTC, a small portion of BTC's
-        composite is blended in (10%) so BTC acts as a leading indicator.
-        Issue #7: Each factor is normalized to rolling percentile rank before weighting.
-        Issue #8: VolatilityFactor (breakout direction score) blended into composite
-                  when regime == Volatile (2) using the 'breakout' weight key.
-
-        Returns DataFrame with factor scores, raw_composite, composite, direction.
-        """
-        weights = REGIME_WEIGHTS.get(regime, DEFAULT_WEIGHTS)
-
-        # ── Raw factor scores ──
-        t_raw  = self.trend_factor.score(df, df_4h)
-        mr_raw = self.mr_factor.score(df, df_4h)
-        mom_raw = self.mom_factor.score(df, df_4h)
-        vf_raw  = self.vol_flow_factor.score(df, df_4h, symbol=symbol)
-        oi_raw  = self.oi_factor.score(df, symbol=symbol)
-        # Issue #8: VolatilityFactor directional score for Volatile regime
-        vol_dir = self.volatility_factor.score(df, df_4h)
-        # Position size multiplier (separate from composite directional scoring)
-        vol_size = self.volatility_factor.position_size_multiplier(df)
-
-        # ── Issue #7: Percentile-normalize each factor ──
-        t_scores   = self._percentile_normalize(t_raw)
-        mr_scores  = self._percentile_normalize(mr_raw)
-        mom_scores = self._percentile_normalize(mom_raw)
-        vf_scores  = self._percentile_normalize(vf_raw)
-        oi_scores  = self._percentile_normalize(oi_raw)
-        vol_dir_n  = self._percentile_normalize(vol_dir)
-
-        # ── Weighted composite ──
-        vol_w      = weights['volume']
-        breakout_w = weights.get('breakout', 0.0)
-        composite  = (
-            t_scores   * weights['trend'] +
-            mr_scores  * weights['mean_rev'] +
-            mom_scores * weights['momentum'] +
-            vf_scores  * (vol_w * 0.90) +
-            oi_scores  * (vol_w * 0.10) +
-            vol_dir_n  * breakout_w          # Issue #8: breakout in Volatile regime
-        )
-
-        # ── Issue #6: BTC cross-symbol bias ──
-        # Blend BTC's composite (as a scalar from the last bar) into this symbol's
-        # composite with 10% weight. BTC acts as a macro filter for the crypto market.
-        if abs(btc_composite) > 0.05:  # Only blend if BTC signal is meaningful
-            composite = composite * 0.90 + btc_composite * 0.10
-
-        result = pd.DataFrame({
-            'trend':         t_raw,
-            'mean_rev':      mr_raw,
-            'momentum':      mom_raw,
-            'volume':        vf_raw,
-            'open_interest': oi_raw,
-            'breakout':      vol_dir,
-            'volatility':    vol_size,        # NOT in composite; size multiplier only
-            'composite':     composite,
-        }, index=df.index)
-
-        return result
-
-    def generate_signals(self, df: pd.DataFrame, df_4h: pd.DataFrame = None,
-                          regime: int = -1, symbol: str = None,
-                          btc_composite: float = 0.0) -> List[Signal]:
-        """
-        Generate trade signals for the latest bar.
-
-        Issue #4: Entry threshold is now regime-specific (COMPOSITE_THRESHOLD_BY_REGIME).
-        Issue #5: Normal signals require 2 consecutive bars above threshold.
-                  Strong signals (≥ COMPOSITE_STRONG_THRESHOLD) fire immediately.
-        Issue #6: btc_composite blended into composite inside compute_composite().
-
-        Returns list (usually 0 or 1 signal).
-        """
+    def generate_signals(
+        self,
+        df: pd.DataFrame,
+        df_4h: pd.DataFrame = None,
+        regime: int = -1,
+        symbol: str = None,
+        btc_composite: float = 0.0,
+        regime_confidence: float = 0.5,
+    ) -> List[Signal]:
+        """Generate at most one trade signal for the latest bar."""
         if len(df) < 60:
             return []
 
-        scores_df = self.compute_composite(df, df_4h, regime, symbol, btc_composite)
-        last = df.iloc[-1]
-        last_idx = df.index[-1]
-        last_scores = scores_df.iloc[-1]
-
-        composite = float(last_scores['composite'])
-
-        # ── Issue #4: Regime-specific entry threshold ──
-        entry_threshold = COMPOSITE_THRESHOLD_BY_REGIME.get(regime, COMPOSITE_ENTRY_THRESHOLD)
-
-        if abs(composite) < entry_threshold:
-            return []
-
-        is_strong = abs(composite) >= COMPOSITE_STRONG_THRESHOLD
-
-        # ── Issue #5: Bar confirmation logic ──
-        # Strong signal (≥ COMPOSITE_STRONG_THRESHOLD): fire immediately, no wait needed.
-        # Normal signal: require composite to have been above the threshold on the PREVIOUS
-        #   bar too (same direction) — i.e., 2 consecutive bars confirming the move.
-        # Trending-aligned re-entry: allowed when in a trend regime to stay in the move.
-        if len(scores_df) >= 2 and not is_strong:
-            prev_composite = float(scores_df['composite'].iloc[-2])
-            just_crossed = abs(prev_composite) < entry_threshold
-            score_surge  = abs(composite) - abs(prev_composite) > entry_threshold * 0.5
-
-            # 2-bar confirmation: both bars must be above threshold AND same direction
-            prev_same_direction = (prev_composite > 0) == (composite > 0)
-            two_bar_confirm = (abs(prev_composite) >= entry_threshold) and prev_same_direction
-
-            # Trending regime continuous re-entry (trend-following benefit)
-            trending_regime = regime in (0, 3)
-            trend_aligned = (regime == 0 and composite > 0) or (regime == 3 and composite < 0)
-
-            if not just_crossed and not score_surge and not two_bar_confirm \
-                    and not (trending_regime and trend_aligned):
-                return []  # Signal is stale or not yet confirmed
-
-        direction = "LONG" if composite > 0 else "SHORT"
-        base_confidence = min(abs(composite) / COMPOSITE_STRONG_THRESHOLD, 1.0)
-
-        # ── Issue #9: Market structure confidence boost ──
-        ms_scores = self.ms_factor.confidence_multiplier(df)
-        ms_last   = float(ms_scores.iloc[-1]) if len(ms_scores) > 0 else 0.0
-        confidence = self.ms_factor.apply_confidence_boost(base_confidence, ms_last, direction)
-
-        atr = float(last.get('atr_14', last['close'] * 0.01))
+        last  = df.iloc[-1]
         close = float(last['close'])
-
+        atr   = float(last.get('atr_14', close * 0.01) or (close * 0.01))
         if atr <= 0:
             return []
 
-        # ─── Stop Loss: structure-based (swing) ───
-        sl = self._calculate_sl(df, direction, atr)
-        if sl <= 0:
+        # Regime confidence gate
+        if regime_confidence < REGIME_CONFIDENCE_MIN:
             return []
+
+        signals = []
+
+        # Strategy 1: Trend Follow — Trending regimes only
+        if regime in (TRENDING_UP, TRENDING_DOWN):
+            sig = self._trend_follow(df, regime, atr, close)
+            if sig:
+                signals.append(sig)
+
+        # Strategy 2: Volatility Breakout — any regime except Ranging
+        if regime != RANGING:
+            sig = self._vol_breakout(df, regime, atr, close)
+            if sig:
+                signals.append(sig)
+
+        # Strategy 3: Mean Reversion — Ranging only, very strict
+        if regime == RANGING and regime_confidence >= MR_CONFIDENCE_MIN:
+            sig = self._mean_reversion(df, regime, atr, close)
+            if sig:
+                signals.append(sig)
+
+        if not signals:
+            return []
+        best = max(signals, key=lambda s: s.confidence)
+        return [best]
+
+    # ─── Strategy 1: Trend Follow ─────────────────────────────────
+
+    def _trend_follow(self, df: pd.DataFrame, regime: int,
+                       atr: float, close: float) -> Optional[Signal]:
+        """EMA alignment + ADX + MACD momentum + volume."""
+        last = df.iloc[-1]
+
+        cols_needed = ['ema_9', 'ema_21', 'ema_50', 'ema_200',
+                        'adx', 'macd_hist', 'macd_hist_slope',
+                        'volume', 'volume_ma_20', 'rsi_14']
+        if not all(c in df.columns for c in cols_needed):
+            return None
+
+        adx        = float(last['adx'] or 0)
+        ema9       = float(last['ema_9'])
+        ema21      = float(last['ema_21'])
+        ema50      = float(last['ema_50'])
+        ema200     = float(last['ema_200'])
+        macd_hist  = float(last['macd_hist'] or 0)
+        macd_slope = float(last.get('macd_hist_slope', 0) or 0)
+        vol        = float(last['volume'] or 0)
+        vol_ma     = float(last.get('volume_ma_20', vol) or vol)
+        rsi        = float(last.get('rsi_14', 50) or 50)
+        vol_ratio  = float(last.get('volatility_ratio', 1.0) or 1.0)
+
+        if adx < TREND_ADX_MIN:
+            return None
+        if vol_ratio > 2.0:
+            return None
+
+        volume_ok = (vol_ma <= 0) or (vol >= vol_ma * 0.85)
+
+        if regime == TRENDING_UP:
+            direction  = "LONG"
+            ema_checks = [ema9 > ema21, ema21 > ema50, ema50 > ema200]
+            if sum(ema_checks) < TREND_EMA_ALIGN_REQUIRED:
+                return None
+            if close < ema50 * 0.998:
+                return None
+            if macd_hist <= 0:
+                return None
+            if not (45 <= rsi <= 78):
+                return None
+            if macd_slope < -abs(macd_hist) * 0.5:
+                return None
+
+        elif regime == TRENDING_DOWN:
+            direction  = "SHORT"
+            ema_checks = [ema9 < ema21, ema21 < ema50, ema50 < ema200]
+            if sum(ema_checks) < TREND_EMA_ALIGN_REQUIRED:
+                return None
+            if close > ema50 * 1.002:
+                return None
+            if macd_hist >= 0:
+                return None
+            if not (22 <= rsi <= 55):
+                return None
+            if macd_slope > abs(macd_hist) * 0.5:
+                return None
+        else:
+            return None
+
+        if not volume_ok:
+            return None
+
+        ema_aligned  = sum(ema_checks)
+        ema_strength = ema_aligned / 3.0
+        adx_strength = min((adx - TREND_ADX_MIN) / 15.0, 1.0)
+        macd_strength = min(abs(macd_hist) / (atr * 0.1 + 1e-8), 1.0)
+        score      = ema_strength * 0.40 + adx_strength * 0.35 + macd_strength * 0.25
+        confidence = 0.50 + score * 0.45
+
+        sl = self._chandelier_sl(df, direction, atr)
+        if sl <= 0:
+            return None
+        risk = abs(close - sl)
+        if risk < close * 0.003:
+            return None
+
+        # Pure trailing — set TP far away, actual exit via trailing stop
+        tp1 = close + risk * 3.0 if direction == "LONG" else close - risk * 3.0
+        tp2 = tp1
+
+        expected_pct = abs(tp1 - close) / close * 100
+        if expected_pct < self._min_profit:
+            return None
+
+        composite = score if direction == "LONG" else -score
+        return Signal(
+            timestamp=df.index[-1], direction=direction,
+            entry_price=close, stop_loss=sl, take_profit=tp1, take_profit_2=tp2,
+            atr=atr, regime=regime, strategy="TrendFollow",
+            confidence=min(confidence, 0.98),
+            expected_profit_pct=expected_pct, composite_score=composite,
+            vol_size_mult=self._vol_size_mult(df),
+        )
+
+    # ─── Strategy 2: Volatility Breakout ──────────────────────────
+
+    def _vol_breakout(self, df: pd.DataFrame, regime: int,
+                       atr: float, close: float) -> Optional[Signal]:
+        """Donchian breakout after BB squeeze + volume surge + ATR expansion."""
+        last = df.iloc[-1]
+        N    = BREAKOUT_DONCHIAN_PERIOD
+
+        cols_needed = ['high', 'low', 'volume', 'volume_ma_20',
+                        'bb_inside_keltner', 'atr_14']
+        if not all(c in df.columns for c in cols_needed):
+            return None
+        if len(df) < N + 10:
+            return None
+
+        lookback = df.iloc[-(N + 1):-1]
+        don_high = float(lookback['high'].max())
+        don_low  = float(lookback['low'].min())
+
+        vol       = float(last['volume'] or 0)
+        vol_ma    = float(last.get('volume_ma_20', vol) or vol)
+        vol_ratio = vol / vol_ma if vol_ma > 0 else 1.0
+
+        atr_recent   = float(last['atr_14'] or atr)
+        atr_prev     = float(df['atr_14'].iloc[-4:-1].mean() or atr)
+        atr_expanding = atr_recent > atr_prev * BREAKOUT_ATR_EXPAND
+
+        squeeze_window = df['bb_inside_keltner'].iloc[-15:-1]
+        had_squeeze    = bool(squeeze_window.sum() >= 3)
+
+        if vol_ratio < BREAKOUT_VOLUME_MULT:
+            return None
+
+        prev_close      = float(df['close'].iloc[-2])
+        bullish_breakout = close > don_high and prev_close <= don_high
+        bearish_breakout = close < don_low  and prev_close >= don_low
+
+        if not bullish_breakout and not bearish_breakout:
+            return None
+        if not atr_expanding and not had_squeeze:
+            return None
+
+        direction     = "LONG" if bullish_breakout else "SHORT"
+        vol_score     = min((vol_ratio - BREAKOUT_VOLUME_MULT) / 2.0, 1.0)
+        squeeze_bonus = 0.15 if had_squeeze else 0.0
+        atr_bonus     = 0.10 if atr_expanding else 0.0
+        confidence    = min(0.55 + vol_score * 0.25 + squeeze_bonus + atr_bonus, 0.95)
+
+        if direction == "LONG":
+            sl = min(don_high - atr * 1.0, close - atr * 1.5)
+        else:
+            sl = max(don_low + atr * 1.0, close + atr * 1.5)
+        sl = self._safety_sl(sl, direction, close)
+        if sl <= 0:
+            return None
 
         risk = abs(close - sl)
-        if risk < close * 0.001:  # Min 0.1% risk
-            return []
+        if risk < close * 0.003:
+            return None
 
-        # ─── Take Profits: 1R and 2R (default) ───
-        if direction == "LONG":
-            tp1 = close + risk * PARTIAL_TP1_R
-            tp2 = close + risk * PARTIAL_TP2_R
+        tp1 = close + risk * 3.0 if direction == "LONG" else close - risk * 3.0
+        tp2 = tp1
+
+        expected_pct = abs(tp1 - close) / close * 100
+        if expected_pct < self._min_profit:
+            return None
+
+        composite = confidence if direction == "LONG" else -confidence
+        return Signal(
+            timestamp=df.index[-1], direction=direction,
+            entry_price=close, stop_loss=sl, take_profit=tp1, take_profit_2=tp2,
+            atr=atr, regime=regime, strategy="VolBreakout",
+            confidence=confidence, expected_profit_pct=expected_pct,
+            composite_score=composite, vol_size_mult=self._vol_size_mult(df),
+        )
+
+    # ─── Strategy 3: Mean Reversion ───────────────────────────────
+
+    def _mean_reversion(self, df: pd.DataFrame, regime: int,
+                         atr: float, close: float) -> Optional[Signal]:
+        """EXTREME BB + very oversold RSI + volume exhaustion + reversal candle."""
+        last  = df.iloc[-1]
+        last2 = df.iloc[-2] if len(df) >= 2 else last
+
+        cols_needed = ['bb_pct', 'rsi_14', 'adx', 'volume', 'volume_ma_20',
+                        'ema_21', 'close', 'open']
+        if not all(c in df.columns for c in cols_needed):
+            return None
+
+        bb_pct  = float(last['bb_pct'] or 0.5)
+        rsi     = float(last.get('rsi_14', 50) or 50)
+        adx     = float(last.get('adx', 25) or 25)
+        vol     = float(last['volume'] or 0)
+        vol_ma  = float(last.get('volume_ma_20', vol) or vol)
+        ema21   = float(last.get('ema_21', close) or close)
+        vol_ratio = vol / vol_ma if vol_ma > 0 else 1.0
+
+        if adx > MR_ADX_MAX:
+            return None
+
+        curr_close = float(last['close'])
+        curr_open  = float(last['open'])
+        prev_close = float(last2['close']) if last2 is not last else curr_close
+
+        # Bullish MR
+        if bb_pct <= MR_BB_PCT_MAX and rsi <= MR_RSI_MAX:
+            direction    = "LONG"
+            vol_3bar     = df['volume'].iloc[-3:].values
+            vol_declining = (vol_3bar[-1] < vol_3bar[-2]) or (vol_ma > 0 and vol_ratio < 1.2)
+            reversal      = (curr_close > curr_open) and (curr_close > prev_close)
+            if not vol_declining or not reversal:
+                return None
+
+        # Bearish MR
+        elif bb_pct >= (1.0 - MR_BB_PCT_MAX) and rsi >= (100 - MR_RSI_MAX):
+            direction    = "SHORT"
+            vol_3bar     = df['volume'].iloc[-3:].values
+            vol_declining = (vol_3bar[-1] < vol_3bar[-2]) or (vol_ma > 0 and vol_ratio < 1.2)
+            reversal      = (curr_close < curr_open) and (curr_close < prev_close)
+            if not vol_declining or not reversal:
+                return None
         else:
-            tp1 = close - risk * PARTIAL_TP1_R
-            tp2 = close - risk * PARTIAL_TP2_R
+            return None
 
-        # ─── Fix #4: MeanRev — dynamic TP at mean instead of fixed R ───
-        # Mean reversion trades naturally terminate at the mean; using a fixed R
-        # TP undershoots short targets and overshoots distant ones.
-        # Override TP only when the mean lies between entry and the fixed TP,
-        # so we never set a worse (harder-to-reach) target.
-        factor_labels = ['Trend', 'MeanRev', 'Momentum', 'Volume']
-        factor_values_check = [last_scores['trend'], last_scores['mean_rev'],
-                               last_scores['momentum'], last_scores['volume']]
-        dominant_idx_check = int(np.argmax([abs(v) for v in factor_values_check]))
-        if factor_labels[dominant_idx_check] == "MeanRev":
-            ema_20   = float(df['ema_21'].iloc[-1]) if 'ema_21' in df.columns else close
-            vwap_val = float(df['vwap'].iloc[-1])   if 'vwap'   in df.columns else close
-            mean_target = (ema_20 + vwap_val) / 2
-            if direction == "LONG" and close < mean_target < tp1:
-                # Mean is reachable and closer than fixed TP — use it
-                tp1 = mean_target
-                tp2 = mean_target + (mean_target - close) * 0.5  # 50% overshoot
-            elif direction == "SHORT" and tp1 < mean_target < close:
-                tp1 = mean_target
-                tp2 = mean_target - (close - mean_target) * 0.5
+        if direction == "LONG":
+            bb_extreme  = max(0, (MR_BB_PCT_MAX - bb_pct) / MR_BB_PCT_MAX)
+            rsi_extreme = max(0, (MR_RSI_MAX - rsi) / MR_RSI_MAX)
+        else:
+            bb_extreme  = max(0, (bb_pct - (1 - MR_BB_PCT_MAX)) / MR_BB_PCT_MAX)
+            rsi_extreme = max(0, (rsi - (100 - MR_RSI_MAX)) / MR_RSI_MAX)
 
-        expected_profit_pct = abs(tp1 - close) / close * 100
+        confidence = min(0.50 + bb_extreme * 0.25 + rsi_extreme * 0.25, 0.88)
 
-        # ─── Fee filter: must be profitable after fees ───
-        if expected_profit_pct < self._min_profit_pct:
-            return []
-
-        # ─── Volatility size multiplier (from VolatilityFactor) ───
-        vol_size_mult = float(self.volatility_factor.position_size_multiplier(df).iloc[-1])
-
-        # ─── Build strategy name from dominant factors ───
-        factor_labels = ['Trend', 'MeanRev', 'Momentum', 'Volume']
-        factor_values = [last_scores['trend'], last_scores['mean_rev'],
-                         last_scores['momentum'], last_scores['volume']]
-        dominant_idx = int(np.argmax([abs(v) for v in factor_values]))
-        strategy_name = f"MultiF_{factor_labels[dominant_idx]}"
-
-        return [Signal(
-            timestamp=last_idx,
-            direction=direction,
-            entry_price=close,
-            stop_loss=sl,
-            take_profit=tp1,
-            take_profit_2=tp2,
-            atr=atr,
-            regime=regime,
-            strategy=strategy_name,
-            confidence=confidence,
-            expected_profit_pct=expected_profit_pct,
-            composite_score=composite,
-            vol_size_mult=round(vol_size_mult, 3),
-        )]
-
-    def _calculate_sl(self, df: pd.DataFrame, direction: str, atr: float) -> float:
-        """
-        Structure-based SL: below recent swing low (LONG) or above swing high (SHORT).
-        Falls back to Chandelier Exit, then ATR-based.
-        """
-        close = float(df['close'].iloc[-1])
         lookback = min(SWING_LOOKBACK, len(df) - 1)
+        if direction == "LONG":
+            swing = float(df['low'].iloc[-lookback:].min())
+            sl    = min(swing * 0.997, close - atr * 1.5)
+        else:
+            swing = float(df['high'].iloc[-lookback:].max())
+            sl    = max(swing * 1.003, close + atr * 1.5)
 
-        # Volatility-adjusted ATR multiplier
-        vol_mult = float(self.volatility_factor.atr_multiplier(df).iloc[-1])
+        sl   = self._safety_sl(sl, direction, close)
+        if sl <= 0:
+            return None
+        risk = abs(close - sl)
+        if risk < close * 0.003:
+            return None
 
+        # TP = BB midband (EMA21)
+        mean_target = ema21
+        if direction == "LONG":
+            if mean_target <= close:
+                return None
+            tp1 = mean_target
+            tp2 = mean_target + (mean_target - close) * 0.3
+        else:
+            if mean_target >= close:
+                return None
+            tp1 = mean_target
+            tp2 = mean_target - (close - mean_target) * 0.3
+
+        expected_pct = abs(tp1 - close) / close * 100
+        if expected_pct < self._min_profit:
+            return None
+        if risk > 0 and (abs(tp1 - close) / risk) < 1.2:
+            return None
+
+        composite = confidence if direction == "LONG" else -confidence
+        return Signal(
+            timestamp=df.index[-1], direction=direction,
+            entry_price=close, stop_loss=sl, take_profit=tp1, take_profit_2=tp2,
+            atr=atr, regime=regime, strategy="MeanRev",
+            confidence=confidence, expected_profit_pct=expected_pct,
+            composite_score=composite, vol_size_mult=self._vol_size_mult(df),
+        )
+
+    # ─── Helpers ──────────────────────────────────────────────────
+
+    def _chandelier_sl(self, df: pd.DataFrame, direction: str, atr: float) -> float:
+        close    = float(df['close'].iloc[-1])
+        lookback = min(SWING_LOOKBACK, len(df) - 1)
+        vol_mult = self._atr_mult(df)
         try:
             if direction == "LONG":
-                # Swing low = local minimum
-                recent_lows = df['low'].iloc[-lookback:]
-                swing_low = float(recent_lows.min())
-                sl_atr = close - atr * vol_mult
-                sl = max(swing_low * 0.998, sl_atr)  # Just below swing low
-
-                # Chandelier: highest_high - ATR * mult
+                swing_low = float(df['low'].iloc[-lookback:].min())
+                sl_atr    = close - atr * vol_mult
+                sl        = max(swing_low * 0.998, sl_atr)
                 if len(df) >= CHANDELIER_PERIOD:
                     chandelier = float(df['high'].iloc[-CHANDELIER_PERIOD:].max()) - atr * CHANDELIER_MULT
                     sl = max(sl, chandelier * 0.995)
-
-            else:  # SHORT
-                recent_highs = df['high'].iloc[-lookback:]
-                swing_high = float(recent_highs.max())
-                sl_atr = close + atr * vol_mult
-                sl = min(swing_high * 1.002, sl_atr)
-
+            else:
+                swing_high = float(df['high'].iloc[-lookback:].max())
+                sl_atr     = close + atr * vol_mult
+                sl         = min(swing_high * 1.002, sl_atr)
                 if len(df) >= CHANDELIER_PERIOD:
                     chandelier = float(df['low'].iloc[-CHANDELIER_PERIOD:].min()) + atr * CHANDELIER_MULT
                     sl = min(sl, chandelier * 1.005)
-
-            # Safety: SL must be at least 0.5% from entry
-            min_dist = close * 0.005
-            if direction == "LONG":
-                sl = min(sl, close - min_dist)
-            else:
-                sl = max(sl, close + min_dist)
-
         except Exception:
-            sl = (close - atr * vol_mult) if direction == "LONG" else (close + atr * vol_mult)
+            sl = (close - atr * 1.5) if direction == "LONG" else (close + atr * 1.5)
+        return self._safety_sl(sl, direction, close)
 
-        return sl
+    def _safety_sl(self, sl: float, direction: str, close: float,
+                    min_pct: float = 0.005) -> float:
+        min_dist = close * min_pct
+        if direction == "LONG":
+            return min(sl, close - min_dist)
+        return max(sl, close + min_dist)
+
+    def _atr_mult(self, df: pd.DataFrame) -> float:
+        if 'volatility_ratio' not in df.columns:
+            return 1.5
+        vol_ratio = float(df['volatility_ratio'].iloc[-1] or 1.0)
+        if vol_ratio > 2.0:
+            return 2.5
+        elif vol_ratio > 1.5:
+            return 2.0
+        return 1.5
+
+    def _vol_size_mult(self, df: pd.DataFrame) -> float:
+        if 'volatility_ratio' not in df.columns:
+            return 1.0
+        vol_ratio = float(df['volatility_ratio'].iloc[-1] or 1.0)
+        if vol_ratio > 2.0:
+            return 0.5
+        elif vol_ratio > 1.5:
+            return 0.75
+        elif vol_ratio < 0.5:
+            return 1.2
+        return 1.0
+
+    def compute_composite(self, df: pd.DataFrame, df_4h=None,
+                            regime: int = -1, symbol: str = None,
+                            btc_composite: float = 0.0) -> pd.DataFrame:
+        """Backward-compatible stub for any reporting code."""
+        return pd.DataFrame({
+            'trend': 0.0, 'mean_rev': 0.0, 'momentum': 0.0, 'volume': 0.0,
+            'open_interest': 0.0, 'breakout': 0.0, 'volatility': 1.0, 'composite': 0.0,
+        }, index=df.index)
 
 
-def check_exit_signals(position: dict, current_price: float, df: pd.DataFrame = None) -> dict:
-    """Check if any exit signal is triggered for an open position."""
-    result = {'exit': False, 'reason': None}
-    entry = float(position.get('entry_fill_price') or position.get('entry_price', 0))
-    sl = float(position.get('stop_loss', 0))
-    tp = float(position.get('take_profit', 0))
+def check_exit_signals(position: dict, current_price: float,
+                        df: pd.DataFrame = None) -> dict:
+    result    = {'exit': False, 'reason': None}
+    sl        = float(position.get('stop_loss', 0))
+    tp        = float(position.get('take_profit', 0))
     direction = position.get('direction', 'LONG')
-
     if direction == 'LONG':
         if sl > 0 and current_price <= sl:
-            result = {'exit': True, 'reason': 'Stop Loss'}
+            return {'exit': True, 'reason': 'Stop Loss'}
         elif tp > 0 and current_price >= tp:
-            result = {'exit': True, 'reason': 'Take Profit'}
+            return {'exit': True, 'reason': 'Take Profit'}
     else:
         if sl > 0 and current_price >= sl:
-            result = {'exit': True, 'reason': 'Stop Loss'}
+            return {'exit': True, 'reason': 'Stop Loss'}
         elif tp > 0 and current_price <= tp:
-            result = {'exit': True, 'reason': 'Take Profit'}
+            return {'exit': True, 'reason': 'Take Profit'}
     return result

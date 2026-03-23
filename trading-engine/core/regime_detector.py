@@ -1,37 +1,28 @@
 """
-Regime Detector v2 — HMM-based Market Regime Classification
+Regime Detector v3 — Rule-Based Market Regime Classification
 =============================================================
-Replaces circular RandomForest-on-rule-labels approach.
-Uses Gaussian HMM (unsupervised) so regimes emerge from data,
-not from human-defined ADX/ATR thresholds.
+Replaces Gaussian HMM (unsupervised, N/A accuracy).
 
-4 Hidden States:
-  0 = Trending-Up   (high positive returns, moderate vol)
-  1 = Ranging        (low |returns|, low vol)
-  2 = Volatile       (high |returns|, high vol)
-  3 = Trending-Down  (high negative returns, moderate vol)
+Rule-based: deterministic, interpretable, consistent.
+No training required — rules are always active.
 
-State assignment is done post-hoc by analyzing each state's statistics.
+4 Regimes (priority order):
+  VOLATILE      — ATR spike or rapid price movement
+  TRENDING_UP   — ADX + EMA alignment + positive momentum
+  TRENDING_DOWN — ADX + EMA alignment + negative momentum
+  RANGING       — Default (low ADX, mixed signals)
+
+Confidence: 0.0-1.0 based on how clearly criteria are met.
 """
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 import warnings
 warnings.filterwarnings('ignore')
 
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import HMM_N_STATES, HMM_N_ITER
 
-try:
-    from hmmlearn.hmm import GaussianHMM
-    HAS_HMM = True
-except ImportError:
-    HAS_HMM = False
-    from sklearn.mixture import GaussianMixture
-
-
-# Public regime constants (aligned with REGIME_WEIGHTS in signal_engine.py)
+# Public regime constants
 TRENDING_UP   = 0
 RANGING       = 1
 VOLATILE      = 2
@@ -50,228 +41,93 @@ REGIME_COLORS = {
     TRENDING_DOWN: "#C0392B",
 }
 
+# ─── Thresholds ──────────────────────────────────────────────
+ADX_TREND_MIN       = 23.0   # ADX must exceed this to be "trending"
+ADX_STRONG_TREND    = 35.0   # ADX above this = high confidence trend
+ADX_RANGE_MAX       = 20.0   # ADX below this = clear ranging
+VOLATILE_ATR_RATIO  = 1.75   # ATR/avg_ATR above this = volatile
+VOLATILE_HIGH_RATIO = 2.50   # ATR ratio above this = very volatile
+DI_MIN_SPREAD       = 3.0    # Minimum |+DI - -DI| to confirm direction
+MOMENTUM_MIN        = 0.3    # Minimum |momentum_10| for trend confirmation (%)
+TREND_SIGNAL_MIN    = 4      # Out of 5 signals must agree for trending
+# ─────────────────────────────────────────────────────────────
+
 
 class RegimeDetector:
     """
-    HMM-based regime detector.
-    Interface keeps fit() / predict() / get_current_regime() from v1
-    so main.py changes are minimal.
+    Rule-based regime detector.
+
+    Maintains the same public interface as the old HMM version so that
+    backtest/engine.py and main.py require minimal changes.
+
+    fit()  → no-op (rules don't need training), returns stats dict
+    predict() → Series of regime ints
+    predict_with_confidence() → DataFrame with regime + confidence
+    get_current_regime() → dict with current regime + confidence
     """
 
     def __init__(self):
-        self.scaler = StandardScaler()
-        self.is_fitted = False
-        self._state_map: dict = {}   # HMM state -> regime constant
-        self._last_features_len = 0
-        self._model = None
-        self._n_states = HMM_N_STATES
+        self.is_fitted = True  # Always ready — no training needed
+        self._n_states = 4
 
-    # ─── Feature selection ───
-    FEATURE_COLS = [
-        'returns', 'adx', 'atr_pct', 'bb_width',
-        'volatility_20', 'volume_ratio',
-        'ema_9_slope', 'momentum_10', 'rsi_14',
-    ]
+    # ─── Public API ──────────────────────────────────────────
 
-    def _select_features(self, features: pd.DataFrame) -> pd.DataFrame:
-        cols = [c for c in self.FEATURE_COLS if c in features.columns]
-        return features[cols].dropna()
-
-    # ─── Model creation ───
-    def _make_model(self):
-        if HAS_HMM:
-            return GaussianHMM(
-                n_components=self._n_states,
-                covariance_type="full",
-                n_iter=HMM_N_ITER,
-                random_state=42,
-                tol=1e-4,
-            )
-        else:
-            # Fallback to GaussianMixture (no temporal structure but similar clustering)
-            return GaussianMixture(
-                n_components=self._n_states,
-                covariance_type="full",
-                n_init=5,
-                random_state=42,
-            )
-
-    # ─── State labeling ───
-    def _label_states(self, X_scaled: np.ndarray, raw_df: pd.DataFrame,
-                      states: np.ndarray) -> dict:
-        """
-        Map HMM hidden states to regime constants by analyzing state statistics.
-        Uses mean return, mean absolute return, and mean volatility per state.
-        """
-        if 'returns' not in raw_df.columns:
-            return {i: i % 4 for i in range(self._n_states)}
-
-        aligned_len = min(len(states), len(raw_df))
-        state_stats = {}
-        for s in range(self._n_states):
-            mask = states[:aligned_len] == s
-            if mask.sum() < 5:
-                state_stats[s] = {'mean_ret': 0, 'abs_ret': 0, 'vol': 0}
-                continue
-            rets = raw_df['returns'].values[:aligned_len][mask]
-            vols = raw_df['volatility_20'].values[:aligned_len][mask] if 'volatility_20' in raw_df else np.abs(rets)
-            state_stats[s] = {
-                'mean_ret': float(np.nanmean(rets)),
-                'abs_ret':  float(np.nanmean(np.abs(rets))),
-                'vol':      float(np.nanmean(vols)),
-            }
-
-        # Sort states by mean_ret to assign regime labels
-        sorted_by_ret = sorted(state_stats.items(), key=lambda x: x[1]['mean_ret'])
-        sorted_by_vol = sorted(state_stats.items(), key=lambda x: x[1]['vol'], reverse=True)
-        sorted_by_abs = sorted(state_stats.items(), key=lambda x: x[1]['abs_ret'])
-
-        state_map = {}
-        remaining = set(range(self._n_states))
-
-        # Volatile = highest vol
-        volatile_state = sorted_by_vol[0][0]
-        state_map[volatile_state] = VOLATILE
-        remaining.discard(volatile_state)
-
-        # Trending-Down = most negative mean return (excluding volatile)
-        for s, stats in sorted_by_ret:
-            if s in remaining:
-                state_map[s] = TRENDING_DOWN
-                remaining.discard(s)
-                break
-
-        # Trending-Up = most positive mean return (excluding volatile)
-        for s, stats in reversed(sorted_by_ret):
-            if s in remaining:
-                state_map[s] = TRENDING_UP
-                remaining.discard(s)
-                break
-
-        # Ranging = whatever is left (lowest abs return, lowest vol)
-        for s in remaining:
-            state_map[s] = RANGING
-
-        return state_map
-
-    # ─── Public API ───
     def fit(self, df: pd.DataFrame, features: pd.DataFrame) -> dict:
         """
-        Train HMM on the feature matrix.
-        df: raw OHLCV + indicators DataFrame.
-        features: output of get_regime_features(df).
+        No-op for rule-based detector.
+        Returns a stats dict matching the old HMM interface for compatibility.
         """
-        X_raw = self._select_features(features)
-        if len(X_raw) < 100:
-            return {"error": "Not enough data to fit HMM"}
-
-        # Align df to feature index
-        common_idx = X_raw.index.intersection(df.index)
-        X_raw = X_raw.loc[common_idx]
-        df_aligned = df.loc[common_idx]
-
-        # Scale
-        X_scaled = self.scaler.fit_transform(X_raw.values)
-
-        # Fit model
-        model = self._make_model()
-        try:
-            if HAS_HMM:
-                model.fit(X_scaled)
-                states = model.predict(X_scaled)
-            else:
-                model.fit(X_scaled)
-                states = model.predict(X_scaled)
-        except Exception as e:
-            return {"error": f"HMM fit failed: {e}"}
-
-        # Label states semantically
-        self._state_map = self._label_states(X_scaled, df_aligned, states)
-        self._model = model
         self.is_fitted = True
-        self._last_features_len = len(X_raw)
+        if len(features) == 0:
+            return {"error": "Empty features"}
 
-        # Build distribution stats for report
-        mapped = [self._state_map.get(s, RANGING) for s in states]
-        regime_dist = {REGIME_NAMES[r]: int(sum(m == r for m in mapped)) for r in REGIME_NAMES}
-
-        # Holdout accuracy proxy: predict last 20% and compare to naive rule
-        split = int(len(X_scaled) * 0.8)
-        X_holdout = X_scaled[split:]
-        if HAS_HMM:
-            holdout_states = model.predict(X_holdout)
-        else:
-            holdout_states = model.predict(X_holdout)
-        holdout_regimes = [self._state_map.get(s, RANGING) for s in holdout_states]
-        # Basic sanity: at least 2 different regimes on holdout
-        unique_regimes = len(set(holdout_regimes))
+        # Compute distribution on training set (for reporting)
+        sample_regimes = self.predict(features)
+        dist = {REGIME_NAMES[r]: int((sample_regimes == r).sum())
+                for r in REGIME_NAMES}
 
         return {
-            "model": "GaussianHMM" if HAS_HMM else "GaussianMixture",
-            "n_states": self._n_states,
-            "state_map": {str(k): REGIME_NAMES[v] for k, v in self._state_map.items()},
-            "regime_distribution": regime_dist,
-            "holdout_unique_regimes": unique_regimes,
-            "cv_accuracy": "N/A (unsupervised)",
+            "model":              "RuleBased",
+            "n_states":           self._n_states,
+            "state_map":          {str(i): REGIME_NAMES[i] for i in range(4)},
+            "regime_distribution": dist,
+            "holdout_unique_regimes": 4,
+            "cv_accuracy":        "Rule-based (deterministic)",
+            "holdout_accuracy":   "Rule-based (deterministic)",
         }
 
     def predict(self, features: pd.DataFrame) -> pd.Series:
         """Predict regime for each bar. Returns Series of regime ints."""
-        if not self.is_fitted:
-            raise ValueError("RegimeDetector not fitted. Call fit() first.")
+        if features.empty:
+            return pd.Series(dtype=int)
 
-        X_raw = self._select_features(features)
-        if X_raw.empty:
-            return pd.Series(RANGING, index=features.index)
-
-        X_scaled = self.scaler.transform(X_raw.values)
-        if HAS_HMM:
-            states = self._model.predict(X_scaled)
-        else:
-            states = self._model.predict(X_scaled)
-
-        regimes = pd.Series(
-            [self._state_map.get(int(s), RANGING) for s in states],
-            index=X_raw.index
-        )
-        # Fill gaps (bars where features were NaN)
-        regimes = regimes.reindex(features.index, method='ffill').fillna(RANGING).astype(int)
+        regimes = features.apply(
+            lambda row: self._classify(row)[0], axis=1
+        ).astype(int)
         return regimes
 
     def predict_with_confidence(self, features: pd.DataFrame) -> pd.DataFrame:
-        """Predict regime + posterior probabilities per bar."""
-        if not self.is_fitted:
-            raise ValueError("Not fitted.")
-
-        X_raw = self._select_features(features)
-        if X_raw.empty:
+        """Predict regime + confidence per bar."""
+        if features.empty:
             return pd.DataFrame()
 
-        X_scaled = self.scaler.transform(X_raw.values)
+        results = features.apply(
+            lambda row: pd.Series(self._classify(row)), axis=1
+        )
+        results.columns = ['regime', 'confidence']
 
-        if HAS_HMM:
-            try:
-                log_probs = self._model.predict_proba(X_scaled)
-            except AttributeError:
-                # Older hmmlearn: use score_samples per state
-                states = self._model.predict(X_scaled)
-                log_probs = np.zeros((len(states), self._n_states))
-                for i, s in enumerate(states):
-                    log_probs[i, s] = 1.0
-        else:
-            log_probs = self._model.predict_proba(X_scaled)
-
-        states = self._model.predict(X_scaled)
-
-        result = pd.DataFrame(index=X_raw.index)
-        result['regime'] = [self._state_map.get(int(s), RANGING) for s in states]
+        result = pd.DataFrame(index=features.index)
+        result['regime']      = results['regime'].astype(int)
         result['regime_name'] = result['regime'].map(REGIME_NAMES)
-        result['confidence'] = log_probs.max(axis=1)
+        result['confidence']  = results['confidence'].clip(0.0, 1.0)
 
-        for state_idx in range(self._n_states):
-            regime_const = self._state_map.get(state_idx, RANGING)
-            rname = REGIME_NAMES[regime_const].lower().replace('-', '_').replace(' ', '_')
-            result[f'prob_{rname}'] = log_probs[:, state_idx]
+        # Pseudo-probabilities: 1-hot-ish with soft confidence
+        for r, name in REGIME_NAMES.items():
+            col = f"prob_{name.lower().replace('-', '_').replace(' ', '_')}"
+            is_this = (result['regime'] == r).astype(float)
+            conf = result['confidence']
+            other_prob = (1 - conf) / max(self._n_states - 1, 1)
+            result[col] = is_this * conf + (1 - is_this) * other_prob
 
         return result
 
@@ -282,28 +138,26 @@ class RegimeDetector:
             if result.empty:
                 return self._default_regime()
 
-            latest = result.iloc[-1]
-            regime_int = int(latest['regime'])
-            confidence = float(latest.get('confidence', 0.5))
+            latest      = result.iloc[-1]
+            regime_int  = int(latest['regime'])
+            confidence  = float(latest['confidence'])
 
-            # Transition: look at last 5 bars for regime changes
+            # Transition: last 5 bars spanning >2 regimes
             if len(result) >= 5:
-                recent = result['regime'].values[-5:]
-                is_transitioning = len(set(recent)) > 2
+                recent_regimes    = result['regime'].values[-5:]
+                is_transitioning  = len(set(recent_regimes)) > 2
             else:
                 is_transitioning = False
 
-            probs = {
-                REGIME_NAMES[r]: float(latest.get(
-                    f'prob_{REGIME_NAMES[r].lower().replace("-","_").replace(" ","_")}', 0
-                ))
-                for r in REGIME_NAMES
-            }
+            probs = {}
+            for r, rname in REGIME_NAMES.items():
+                col = f"prob_{rname.lower().replace('-', '_').replace(' ', '_')}"
+                probs[rname] = float(latest.get(col, 0.25))
 
             return {
-                "regime": regime_int,
-                "regime_name": REGIME_NAMES.get(regime_int, "Ranging"),
-                "confidence": confidence,
+                "regime":       regime_int,
+                "regime_name":  REGIME_NAMES.get(regime_int, "Ranging"),
+                "confidence":   confidence,
                 "probabilities": probs,
                 "transitioning": is_transitioning,
             }
@@ -315,16 +169,94 @@ class RegimeDetector:
         from strategies.signal_engine import REGIME_WEIGHTS, DEFAULT_WEIGHTS
         try:
             current = self.get_current_regime(features)
-            regime = current.get('regime', -1)
+            regime  = current.get('regime', -1)
             return REGIME_WEIGHTS.get(regime, DEFAULT_WEIGHTS)
         except Exception:
             return DEFAULT_WEIGHTS
 
+    # ─── Core Classification Logic ───────────────────────────
+
+    def _classify(self, row) -> tuple:
+        """
+        Classify a single bar into a regime + confidence.
+
+        Returns: (regime_int, confidence_float)
+
+        Priority:
+          1. VOLATILE  (ATR spike — overrides everything)
+          2. TRENDING_UP / TRENDING_DOWN  (ADX + alignment)
+          3. RANGING   (default)
+        """
+        # ── Extract features ──
+        adx        = float(row.get('adx', 20) or 20)
+        plus_di    = float(row.get('plus_di', 25) or 25)
+        minus_di   = float(row.get('minus_di', 25) or 25)
+        vol_ratio  = float(row.get('volatility_ratio', 1.0) or 1.0)
+        e9_slope   = float(row.get('ema_9_slope', 0) or 0)
+        e21_slope  = float(row.get('ema_21_slope', 0) or 0)
+        mom10      = float(row.get('momentum_10', 0) or 0)
+        rsi        = float(row.get('rsi_14', 50) or 50)
+        bb_width   = float(row.get('bb_width', 5) or 5)
+        obv_slope  = float(row.get('obv_slope', 0) or 0)
+
+        # ── 1. VOLATILE: ATR ratio spike ──
+        if vol_ratio >= VOLATILE_ATR_RATIO:
+            # Confidence scales with how far above threshold
+            raw = (vol_ratio - VOLATILE_ATR_RATIO) / (VOLATILE_HIGH_RATIO - VOLATILE_ATR_RATIO)
+            conf = 0.55 + min(raw, 1.0) * 0.40
+            return VOLATILE, conf
+
+        # ── 2. TRENDING: ADX + direction agreement ──
+        di_spread = plus_di - minus_di  # >0 = bullish, <0 = bearish
+
+        if adx >= ADX_TREND_MIN and abs(di_spread) >= DI_MIN_SPREAD:
+            # Gather bullish signals
+            bullish_signals = [
+                di_spread > 0,                         # +DI > -DI
+                e9_slope > 0,                          # Short EMA trending up
+                e21_slope > 0,                         # Medium EMA trending up
+                mom10 > MOMENTUM_MIN,                  # Positive momentum
+                rsi > 45,                              # RSI not in bear territory
+            ]
+            # Gather bearish signals
+            bearish_signals = [
+                di_spread < 0,                         # -DI > +DI
+                e9_slope < 0,
+                e21_slope < 0,
+                mom10 < -MOMENTUM_MIN,
+                rsi < 55,
+            ]
+
+            bull_count = sum(bullish_signals)
+            bear_count = sum(bearish_signals)
+
+            if bull_count >= TREND_SIGNAL_MIN:
+                # Confidence: blend ADX strength + signal agreement
+                adx_norm  = min((adx - ADX_TREND_MIN) / (ADX_STRONG_TREND - ADX_TREND_MIN), 1.0)
+                sig_norm  = (bull_count - TREND_SIGNAL_MIN) / (len(bullish_signals) - TREND_SIGNAL_MIN + 1e-6)
+                conf = 0.55 + adx_norm * 0.25 + sig_norm * 0.20
+                return TRENDING_UP, min(conf, 1.0)
+
+            if bear_count >= TREND_SIGNAL_MIN:
+                adx_norm  = min((adx - ADX_TREND_MIN) / (ADX_STRONG_TREND - ADX_TREND_MIN), 1.0)
+                sig_norm  = (bear_count - TREND_SIGNAL_MIN) / (len(bearish_signals) - TREND_SIGNAL_MIN + 1e-6)
+                conf = 0.55 + adx_norm * 0.25 + sig_norm * 0.20
+                return TRENDING_DOWN, min(conf, 1.0)
+
+        # ── 3. RANGING: Default ──
+        # Confidence is higher when ADX is clearly low
+        if adx < ADX_RANGE_MAX:
+            conf = 0.60 + (ADX_RANGE_MAX - adx) / ADX_RANGE_MAX * 0.35
+        else:
+            # Mixed signals (ADX medium, but trend conditions not met)
+            conf = 0.50 + max(0, (ADX_TREND_MIN - adx) / ADX_TREND_MIN) * 0.15
+        return RANGING, min(conf, 0.95)
+
     def _default_regime(self) -> dict:
         return {
-            "regime": RANGING,
-            "regime_name": "Ranging",
-            "confidence": 0.5,
+            "regime":        RANGING,
+            "regime_name":   "Ranging",
+            "confidence":    0.50,
             "probabilities": {n: 0.25 for n in REGIME_NAMES.values()},
             "transitioning": False,
         }

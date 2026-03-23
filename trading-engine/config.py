@@ -72,7 +72,7 @@ FEE_MULTIPLIER = 3.0
 # Set to 0 to force auto-detect; any non-zero value acts as a fallback.
 INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "0"))
 # At 5x leverage, 1% of margin = 5% actual exposure → safer for futures
-RISK_PER_TRADE = 0.01
+RISK_PER_TRADE = 0.015  # 1.5% risk per trade — meaningful at 10x leverage
 MAX_DAILY_LOSS = 0.05
 MAX_DRAWDOWN = 0.15
 MAX_OPEN_TRADES = 3
@@ -122,7 +122,7 @@ VOLATILITY_SCALE_HIGH = 1.5       # Scale down position if vol > 1.5x average
 VOLATILITY_SCALE_LOW = 0.5        # Scale up position if vol < 0.5x average
 
 # ─── Futures Settings ───
-LEVERAGE = int(os.getenv("LEVERAGE", "5"))          # Default 5x leverage
+LEVERAGE = int(os.getenv("LEVERAGE", "10"))         # 10x leverage — meaningful PnL on small capital
 MARGIN_TYPE = os.getenv("MARGIN_TYPE", "ISOLATED")  # ISOLATED or CROSSED
 MAX_MARGIN_RATIO = 0.75                              # Warn when margin ratio > 75%
 EMERGENCY_MARGIN_RATIO = 0.90                        # Force close all at 90%
@@ -166,9 +166,11 @@ ML_THRESHOLD           = 0.55 # Default threshold (tuned per retrain)
 
 # ─── Scaled Entry / Exit ───
 SCALED_ENTRY_LEGS      = 3              # 1=market only, 3=split entry
-PARTIAL_TP1_R          = 2.0            # Close 25% at 2R  (was 1.5R/30%)
-PARTIAL_TP2_R          = 4.0            # Close 25% at 4R  (was 3R/30%)
-PARTIAL_TP_FRACTIONS   = [0.25, 0.25, 0.50]  # Per TP level (50% trails — let winners run)
+# v3: No partial TPs for Trend/Breakout — pure trailing stop lets winners run.
+# MeanRev uses fixed TP at EMA21. These constants kept for backtest engine compatibility.
+PARTIAL_TP1_R          = 3.0
+PARTIAL_TP2_R          = 3.0
+PARTIAL_TP_FRACTIONS   = [0.0, 0.0, 1.0]   # 100% at trailing stop — no partials
 
 # ─── Dynamic Stops ───
 CHANDELIER_PERIOD      = 22
@@ -189,7 +191,26 @@ REGIME_COOLDOWN_BARS        = 20     # Bars to wait before re-enabling a disable
 REGIME_CIRCUIT_R_THRESHOLD  = -4.0   # Cumulative R < this also triggers disable
 
 # ─── Trade Health Monitoring ───
-# If a trade hasn't moved favorably after N hours, tighten the stop loss.
 TRADE_HEALTH_MIN_HOURS      = 3      # Minimum hours before health check activates
 TRADE_HEALTH_R_THRESHOLD    = -0.35  # If at this R-multiple, tighten SL
 TRADE_HEALTH_SL_TIGHTEN_PCT = 0.50   # Move SL this fraction toward entry price
+
+# ─── v3 Strategy Parameters ──────────────────────────────────
+
+# Strategy 1: Trend Follow
+TREND_ADX_MIN              = 25     # ADX must be above this to enter trend trade
+TREND_EMA_ALIGN_REQUIRED   = 3      # Out of 3 EMA alignments (9>21, 21>50, 50>200)
+
+# Strategy 2: Volatility Breakout
+BREAKOUT_DONCHIAN_PERIOD   = 20     # Donchian channel lookback
+BREAKOUT_VOLUME_MULT       = 1.5    # Volume must be >= this multiple of average
+BREAKOUT_ATR_EXPAND        = 1.05   # ATR must be expanding by this ratio
+
+# Strategy 3: Mean Reversion (very tight — only RANGING regime)
+MR_BB_PCT_MAX              = 0.08   # BB %B must be <= this for long (extreme oversold)
+MR_RSI_MAX                 = 28     # RSI must be <= this for long
+MR_ADX_MAX                 = 20     # ADX must be <= this (truly ranging)
+MR_CONFIDENCE_MIN          = 0.65   # Regime confidence must be >= this for MR
+
+# General signal gate
+REGIME_CONFIDENCE_MIN      = 0.52   # Skip ALL entries if regime confidence below this
