@@ -108,9 +108,13 @@ class BacktestEngine:
             try:
                 current_regime = self.detector.get_current_regime(bar_feat_window)
                 regime_id = current_regime['regime']
+                regime_conf = current_regime.get('confidence', 0.5)
             except Exception:
                 regime_id = 1  # Fallback: Ranging
-            sigs = self.sig_engine.generate_signals(bar_df, regime=regime_id)
+                regime_conf = 0.5
+            sigs = self.sig_engine.generate_signals(
+                bar_df, regime=regime_id, regime_confidence=regime_conf
+            )
             all_signals.extend(sigs)
         print(f"   Raw signals: {len(all_signals)}")
 

@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 import ccxt
 
-from config import API_KEY, SECRET_KEY, USE_FUTURES, SYMBOL, BINANCE_FUTURES_BASE_URL
+from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_FUTURES, SYMBOL, USE_TESTNET
 
 log = logging.getLogger(__name__)
 
@@ -45,48 +45,23 @@ log = logging.getLogger(__name__)
 
 def _build_exchange() -> ccxt.Exchange:
     options: dict = {
-        'defaultType': 'future' if USE_FUTURES else 'spot',
-        'adjustForTimeDifference': True,   # auto-sync server clock
+        'defaultType': 'swap' if USE_FUTURES else 'spot',
+        'adjustForTimeDifference': True,
     }
 
-    exchange = ccxt.binance({
+    exchange = ccxt.okx({
         'apiKey': API_KEY,
         'secret': SECRET_KEY,
+        'password': PASSPHRASE,
         'options': options,
         'enableRateLimit': True,
     })
 
-    if USE_FUTURES:
-        _apply_custom_futures_urls(exchange, BINANCE_FUTURES_BASE_URL)
+    if USE_TESTNET:
+        exchange.set_sandbox_mode(True)
 
     return exchange
 
-
-def _apply_custom_futures_urls(exchange: ccxt.Exchange, base_url: str) -> None:
-    """Rewrite all CCXT futures endpoints to a custom base URL (e.g. demo trading)."""
-    try:
-        target_host = urlparse(base_url).netloc.lower()
-        if not target_host:
-            return
-    except Exception:
-        return
-
-    api_urls = exchange.urls.get('api')
-    if not isinstance(api_urls, dict):
-        return
-
-    def _rewrite(obj):
-        if isinstance(obj, str):
-            if 'fapi.binance.com' in obj:
-                return obj.replace('https://fapi.binance.com', base_url.rstrip('/'))
-            return obj
-        if isinstance(obj, dict):
-            return {k: _rewrite(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_rewrite(v) for v in obj]
-        return obj
-
-    exchange.urls['api'] = _rewrite(api_urls)
 
 
 # Singleton (lazy init so import doesn't blow up without network)
@@ -565,22 +540,18 @@ def get_usdt_balance() -> float:
 
 
 def get_mark_price(symbol: str = SYMBOL) -> dict:
-    """
-    Return mark price dict with markPrice, lastFundingRate, nextFundingTime.
-    Delegates to raw binance_client (uses /fapi/v1/premiumIndex) since CCXT
-    doesn't expose funding rate in a standard way.
-    Falls back to a float-only dict if binance_client fails.
-    """
+    """Return mark price dict with markPrice from CCXT."""
+    ex = get_exchange()
+    sym = _ccxt_symbol(symbol)
     try:
-        import data.binance_client as _raw
-        result = _raw.get_mark_price(symbol)
-        if result:
-            return result
+        ticker = ex.fetch_ticker(sym)
+        # OKX provides markPrice in info
+        info = ticker.get('info', {})
+        mark_price = _safe_float(info.get('markPx') or info.get('markPrice') or ticker.get('last'))
+        return {'markPrice': str(mark_price), 'lastFundingRate': '0', 'nextFundingTime': 0}
     except Exception:
-        pass
-    # Fallback: price only
-    price = get_price(symbol)
-    return {'markPrice': str(price), 'lastFundingRate': '0', 'nextFundingTime': 0}
+        price = get_price(symbol)
+        return {'markPrice': str(price), 'lastFundingRate': '0', 'nextFundingTime': 0}
 
 
 def test_connection() -> dict:
@@ -620,8 +591,7 @@ def set_margin_type(symbol: str, margin_type: str) -> dict:
     try:
         return ex.set_margin_mode(ccxt_margin, sym)
     except ccxt.BaseError as e:
-        # -4046 = already that margin type — safe to ignore
-        if '-4046' in str(e) or 'No need to change' in str(e):
+        if '-4046' in str(e) or 'No need to change' in str(e) or '58001' in str(e):
             return {'status': 'already_set', 'margin_type': margin_type}
         log.warning(f"set_margin_type {symbol} {margin_type}: {e}")
         return {'error': str(e)}
@@ -649,10 +619,7 @@ def get_futures_account() -> dict:
 # ─── Open Orders & Trade History ─────────────────────────────────────────────
 
 def get_all_open_orders(symbol: str = None) -> list:
-    """
-    Fetch all open orders (across all symbols or for a specific symbol).
-    Returns list of CCXT order dicts.
-    """
+    """Fetch all open orders."""
     ex = get_exchange()
     sym = _ccxt_symbol(symbol) if symbol else None
     try:
@@ -667,11 +634,7 @@ def get_all_open_orders(symbol: str = None) -> list:
 
 def get_position_history(symbol: str = None, start_time: int = None,
                          end_time: int = None, limit: int = 100) -> list:
-    """
-    Fetch recent trade history (filled orders).
-    Mirrors binance_client.get_position_history — returns Binance-compat trade dicts.
-    start_time / end_time in milliseconds.
-    """
+    """Fetch recent trade history (filled orders)."""
     ex = get_exchange()
     sym = _ccxt_symbol(symbol) if symbol else _ccxt_symbol(SYMBOL)
     try:
@@ -692,7 +655,7 @@ def get_position_history(symbol: str = None, start_time: int = None,
                 'commission':      str(_safe_float((t.get('fee') or {}).get('cost'))),
                 'commissionAsset': (t.get('fee') or {}).get('currency', 'USDT'),
                 'time':            ts,
-                'realizedPnl':     str(_safe_float(t.get('info', {}).get('realizedPnl'))),
+                'realizedPnl':     str(_safe_float(t.get('info', {}).get('realizedPnl') or t.get('info', {}).get('pnl'))),
                 'raw':             t,
             })
         return result
@@ -704,11 +667,7 @@ def get_position_history(symbol: str = None, start_time: int = None,
 # ─── Funding Rate ────────────────────────────────────────────────────────────
 
 def get_funding_rate(symbol: str = SYMBOL, limit: int = 1) -> list:
-    """
-    Fetch funding rate history via CCXT fetch_funding_rate_history.
-    Returns list of dicts with Binance-compatible keys:
-      fundingTime (ms), fundingRate (str), symbol (str)
-    """
+    """Fetch funding rate history via CCXT."""
     ex = get_exchange()
     sym = _ccxt_symbol(symbol)
     try:
@@ -723,28 +682,25 @@ def get_funding_rate(symbol: str = SYMBOL, limit: int = 1) -> list:
         return result
     except ccxt.BaseError as e:
         log.error(f"get_funding_rate error: {e}")
-        # Fallback to raw binance_client
-        try:
-            import data.binance_client as _raw
-            return _raw.get_funding_rate(symbol, limit)
-        except Exception:
-            return []
+        return []
 
 
-# ─── OI / Long-Short Ratio — no CCXT support, delegate to binance_client ─────
+# ─── OI / Long-Short Ratio ───────────────────────────────────────────────────
 
 def get_open_interest(symbol: str = SYMBOL) -> dict:
-    """Thin wrapper so ccxt_client is fully drop-in for callers that use bnb directly."""
+    ex = get_exchange()
+    sym = _ccxt_symbol(symbol)
     try:
-        import data.binance_client as _raw
-        return _raw.get_open_interest(symbol)
+        oi = ex.fetch_open_interest(sym)
+        return {
+            'symbol': symbol,
+            'openInterest': str(oi.get('openInterestValue') or oi.get('openInterestAmount')),
+        }
     except Exception:
         return {}
 
 
 def get_long_short_ratio(symbol: str = SYMBOL, period: str = '5m') -> dict:
-    try:
-        import data.binance_client as _raw
-        return _raw.get_long_short_ratio(symbol, period)
-    except Exception:
-        return {}
+    # CCXT doesn't standardize long short ratios yet, so we drop it
+    # Factors using this should gracefully handle missing data.
+    return []

@@ -63,6 +63,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             if self.path == '/health':
                 self._json(200, {'status': 'ok'})
 
+            elif self.path == '/balance':
+                bal = bnb.get_balance()
+                self._json(200, bal)
+
             elif self.path == '/manual-positions':
                 bot_positions = get_open_positions_from_redis()
                 binance_positions = bnb.get_account_positions()   # /fapi/v2/positionRisk
@@ -161,6 +165,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
 
+                self._json(200, {'success': True, 'order': order})
+
+            # ── /test-order ──────────────────────────────────────────────────
+            elif self.path == '/test-order':
+                symbol   = body.get('symbol', 'BTCUSDT')
+                side     = body.get('side', 'BUY')
+                quantity = float(body.get('quantity', 0.001))
+                
+                order = bnb.place_market_order(symbol, side, quantity)
+                if order.get('status') == 'FAILED':
+                    return self._json(400, {'error': order.get('error', 'Trade failed')})
                 self._json(200, {'success': True, 'order': order})
 
             # ── /adopt-position ──────────────────────────────────────────────

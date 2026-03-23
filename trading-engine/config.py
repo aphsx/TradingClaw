@@ -9,19 +9,15 @@ _root_env = Path(__file__).resolve().parent.parent / ".env"
 _local_env = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=_root_env if _root_env.exists() else _local_env)
 
-# ─── Binance ───
-API_KEY = os.getenv("BINANCE_API_KEY", "")
-SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
+# ─── OKX API ───
+API_KEY = os.getenv("OKX_API_KEY", "")
+SECRET_KEY = os.getenv("OKX_SECRET_KEY", "")
+PASSPHRASE = os.getenv("OKX_PASSPHRASE", "")
 USE_FUTURES = os.getenv("USE_FUTURES", "false").lower() == "true"
-BINANCE_FUTURES_BASE_URL = os.getenv("BINANCE_FUTURES_BASE_URL", "https://fapi.binance.com")
+USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"
 
-# Binance Futures testnet/sandbox has been deprecated by Binance/CCXT.
-# For futures, we now always use a direct base URL (mainnet or demo trading URL).
-# Example demo URL: https://demo-fapi.binance.com
-if USE_FUTURES:
-    BASE_URL = BINANCE_FUTURES_BASE_URL
-else:
-    BASE_URL = "https://api.binance.com"
+BASE_URL = "" # Not used anymore since we will rely purely on CCXT
+
 
 # ─── Database ───
 DB_HOST = os.getenv("DB_HOST", "localhost")
