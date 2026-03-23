@@ -215,9 +215,9 @@ export default function Dashboard({ data }: { data: any }) {
     } catch (e: any) { alert('Error: ' + e.message); }
     finally { setActionLoading(null); }
   };
-  // ── Sync all Binance positions to bot ──────────────────────────────────────
-  const syncBinance = async () => {
-    if (!window.confirm('Import all unmanaged Binance positions to bot?\nBot will set default SL/TP for each position.')) return;
+  // ── Sync all Exchange positions to bot ──────────────────────────────────────
+  const syncExchange = async () => {
+    if (!window.confirm('Import all unmanaged Exchange positions to bot?\nBot will set default SL/TP for each position.')) return;
     setActionLoading('sync');
     try {
       const res = await fetch('/api/sync-binance');
@@ -288,11 +288,11 @@ export default function Dashboard({ data }: { data: any }) {
   const openPositions: any[] = liveData?.positions?.open_positions || data?.openPositions || [];
   const engineStatus = monitor.status?.status || 'unknown';
 
-  // All actual Binance futures positions (tagged with bot_managed)
-  const binancePositions: any[] = liveData?.positions?.binance_positions || [];
+  // All actual Exchange futures positions (tagged with bot_managed)
+  const exchangePositions: any[] = liveData?.positions?.binance_positions || [];
   // Positions opened manually (not yet managed by the bot)
   const botKeys = new Set(openPositions.map((p: any) => `${p.symbol}-${p.direction}`));
-  const unmanaged = binancePositions.filter((p: any) => !p.bot_managed && !botKeys.has(`${p.symbol}-${p.direction}`));
+  const unmanaged = exchangePositions.filter((p: any) => !p.bot_managed && !botKeys.has(`${p.symbol}-${p.direction}`));
 
   // Redis margin + funding data
   const marginData = monitor.margin || {};
@@ -337,7 +337,7 @@ export default function Dashboard({ data }: { data: any }) {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Futures Trading System</h1>
-          <p className="text-sm text-gray-500">Binance USDM Futures · Testnet · Real-time</p>
+          <p className="text-sm text-gray-500">Universal Crypto Futures · Testnet · Real-time</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
 
@@ -418,15 +418,15 @@ export default function Dashboard({ data }: { data: any }) {
 
           
           <button 
-            onClick={syncBinance} 
+            onClick={syncExchange} 
             disabled={actionLoading === 'sync'}
             className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${actionLoading === 'sync' ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title="Sync Binance Positions"
+            title="Sync Exchange Positions"
           >
             <Download size={16} />
           </button>
 
-<button onClick={refresh} className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${refreshing ? 'animate-spin' : ''}`}>
+          <button onClick={refresh} className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${refreshing ? 'animate-spin' : ''}`}>
             <RefreshCw size={16} />
           </button>
         </div>
@@ -495,7 +495,7 @@ export default function Dashboard({ data }: { data: any }) {
               <Radio size={48} className="mx-auto mb-4 text-gray-600" />
               <h2 className="text-lg font-semibold mb-2">No live trades yet</h2>
               <p className="text-gray-500 text-sm max-w-md mx-auto">
-                Engine is {engineStatus === 'running' ? 'running — waiting for a signal' : 'not running'}. Trades appear here once the bot opens real Binance positions.
+                Engine is {engineStatus === 'running' ? 'running — waiting for a signal' : 'not running'}. Trades appear here once the bot opens real Exchange positions.
               </p>
             </Card>
           ) : (
@@ -505,7 +505,7 @@ export default function Dashboard({ data }: { data: any }) {
                   color={totalPnl >= 0 ? 'text-green-400' : 'text-red-400'} />
                 <Metric label="Win Rate" value={`${winRate}%`} sub={`${wins}W / ${totalTrades - wins}L`} />
                 <Metric label="Total Fees" value={`$${totalFees.toFixed(2)}`} color="text-amber-400"
-                  sub="From Binance fills" />
+                  sub="From Exchange fills" />
                 <Metric label="Closed Trades" value={totalTrades} />
               </div>
 
@@ -713,12 +713,12 @@ export default function Dashboard({ data }: { data: any }) {
           )}
         </Card>
 
-        {/* ── Unmanaged (manual) Binance positions ── */}
+        {/* ── Unmanaged (manual) Exchange positions ── */}
         {unmanaged.length > 0 && (
           <Card>
             <div className="flex items-center gap-2 mb-4">
               <Bot size={15} className="text-amber-400" />
-              <span className="text-sm font-semibold">Position บน Binance ที่ bot ยังไม่จัดการ</span>
+              <span className="text-sm font-semibold">Position บน Exchange ที่ bot ยังไม่จัดการ</span>
               <span className="text-xs text-amber-400/70 ml-1">({unmanaged.length})</span>
             </div>
             <div className="overflow-x-auto">

@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 import ccxt
 
-from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_FUTURES, SYMBOL, USE_TESTNET
+from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_FUTURES, SYMBOL, USE_TESTNET, EXCHANGE_NAME
 
 log = logging.getLogger(__name__)
 
@@ -49,13 +49,24 @@ def _build_exchange() -> ccxt.Exchange:
         'adjustForTimeDifference': True,
     }
 
-    exchange = ccxt.okx({
+    # Retrieve exchange class dynamically
+    exchange_class = getattr(ccxt, EXCHANGE_NAME)
+    
+    # Base params
+    params = {
         'apiKey': API_KEY,
         'secret': SECRET_KEY,
-        'password': PASSPHRASE,
         'options': options,
         'enableRateLimit': True,
-    })
+    }
+    
+    # Specific API params per exchange
+    if PASSPHRASE and EXCHANGE_NAME in ['okx', 'kucoin']:
+        params['password'] = PASSPHRASE
+    elif PASSPHRASE and EXCHANGE_NAME == 'bybit':
+        pass # Bybit doesn't require API passphrase/password in the same generic way
+
+    exchange = exchange_class(params)
 
     if USE_TESTNET:
         exchange.set_sandbox_mode(True)
@@ -349,23 +360,28 @@ def get_balance() -> dict:
     try:
         bal = ex.fetch_balance()
         usdt = bal.get('USDT', {})
-        info  = bal.get('info', {})
 
         if USE_FUTURES:
-            # For futures, totalMarginBalance and available come from account info
-            total_mb  = _safe_float(info.get('totalMarginBalance') or usdt.get('total'))
-            available = _safe_float(info.get('availableBalance')   or usdt.get('free'))
-            unrealised = _safe_float(info.get('totalUnrealizedProfit'))
-            maint_margin = _safe_float(info.get('totalMaintMargin'))
-            margin_ratio = maint_margin / total_mb if total_mb > 0 else 0.0
+            total_mb  = _safe_float(usdt.get('total'))
+            available = _safe_float(usdt.get('free'))
+            unrealised = 0.0
+            
+            # Optionally extract unrealised PnL if available in info (exchange specific)
+            info = bal.get('info', {})
+            if isinstance(info, list) and len(info) > 0: info = info[0] # some exchanges return a list
+            unrealised_raw = info.get('totalUnrealizedProfit') or info.get('unrealizedPnl') or info.get('upl')
+            if unrealised_raw:
+                unrealised = _safe_float(unrealised_raw)
+
+            # Some exchanges define free as actual available margin
             return {
                 'usdt_free':        available,
                 'usdt_locked':      _safe_float(usdt.get('used')),
-                'usdt_total':       _safe_float(usdt.get('total')),
-                'margin_balance':   total_mb,
+                'usdt_total':       total_mb,
+                'margin_balance':   total_mb + unrealised,
                 'available_balance': available,
                 'unrealized_pnl':   unrealised,
-                'margin_ratio':     margin_ratio,
+                'margin_ratio':     0.0,
                 'balances':         {k: v for k, v in bal.items()
                                      if isinstance(v, dict) and _safe_float(v.get('total')) > 0},
                 'account_type':     'FUTURES',

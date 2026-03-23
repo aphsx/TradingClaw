@@ -60,13 +60,11 @@ def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
     
     while start_time < end_time:
         try:
-            # We fetch up to 100 bars per request, CCXT automatically maps standard limits
-            bars = ex.fetch_ohlcv(sym, tf, since=start_time, limit=100)
+            bars = ex.fetch_ohlcv(sym, tf, since=start_time, limit=1000)
             if not bars:
                 break
                 
             all_data.extend(bars)
-            # Next batch starts after the last fetched candle
             start_time = bars[-1][0] + 1
             time.sleep(0.1) # Rate limit
         except Exception as e:

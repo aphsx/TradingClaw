@@ -9,15 +9,18 @@ _root_env = Path(__file__).resolve().parent.parent / ".env"
 _local_env = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=_root_env if _root_env.exists() else _local_env)
 
-# ─── OKX API ───
-API_KEY = os.getenv("OKX_API_KEY", "")
-SECRET_KEY = os.getenv("OKX_SECRET_KEY", "")
-PASSPHRASE = os.getenv("OKX_PASSPHRASE", "")
+# ─── Exchange API Setup ───
+# You can set EXCHANGE to 'okx', 'bybit', or 'binance' in your .env
+EXCHANGE_NAME = os.getenv("EXCHANGE", "okx").lower()
+
+API_KEY = os.getenv(f"{EXCHANGE_NAME.upper()}_API_KEY", "")
+SECRET_KEY = os.getenv(f"{EXCHANGE_NAME.upper()}_SECRET_KEY", "")
+PASSPHRASE = os.getenv(f"{EXCHANGE_NAME.upper()}_PASSPHRASE", "")
+
 USE_FUTURES = os.getenv("USE_FUTURES", "false").lower() == "true"
 USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"
 
 BASE_URL = "" # Not used anymore since we will rely purely on CCXT
-
 
 # ─── Database ───
 DB_HOST = os.getenv("DB_HOST", "localhost")
