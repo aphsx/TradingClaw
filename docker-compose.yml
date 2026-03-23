@@ -35,6 +35,20 @@ services:
       timeout: 3s
       retries: 5
 
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: regime_phpmyadmin
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8081:80"
+    environment:
+      - PMA_HOST=db
+      - PMA_PORT=3306
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-regime_root_2026}
+
   trading-engine:
     build: ./trading-engine
     container_name: regime_engine
