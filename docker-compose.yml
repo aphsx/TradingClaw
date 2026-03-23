@@ -96,7 +96,6 @@ services:
       - BYBIT_SECRET_KEY=${BYBIT_SECRET_KEY}
       - OKX_PASSPHRASE=${OKX_PASSPHRASE}
       - USE_FUTURES=${USE_FUTURES:-true}
-      - USE_TESTNET=${USE_TESTNET:-true}
       - TRADING_MODE=${TRADING_MODE:-live}
       - SYMBOL=${SYMBOL:-BTCUSDT}
       - TIMEFRAME=${TIMEFRAME:-1h}
@@ -144,7 +143,6 @@ services:
       - BYBIT_API_KEY=${BYBIT_API_KEY}
       - BYBIT_SECRET_KEY=${BYBIT_SECRET_KEY}
       - USE_FUTURES=${USE_FUTURES:-true}
-      - USE_TESTNET=${USE_TESTNET:-true}
       - NEXT_PUBLIC_SOCKET_URL=http://localhost:8080
 
   # ── Backtest (one-time job, ไม่รันอัตโนมัติ) ────────────────────────
@@ -176,7 +174,6 @@ services:
       - BYBIT_API_KEY=${BYBIT_API_KEY}
       - BYBIT_SECRET_KEY=${BYBIT_SECRET_KEY}
       - USE_FUTURES=${USE_FUTURES:-true}
-      - USE_TESTNET=${USE_TESTNET:-true}
       - TRADING_MODE=backtest
       - SYMBOL=${SYMBOL:-BTCUSDT}
       - TIMEFRAME=${TIMEFRAME:-1h}

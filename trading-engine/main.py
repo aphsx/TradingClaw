@@ -2,7 +2,7 @@
 """
 ═══════════════════════════════════════════════════════════
   TRADINGCLAW v5
-  Binance USDM Futures — Testnet / Live
+  Universal Crypto Futures
   Multi-Factor Signal Engine | HMM Regime | ML Ensemble
   Scaled Entry/Exit | Portfolio Heat | Drawdown-Adaptive
 ═══════════════════════════════════════════════════════════

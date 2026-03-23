@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 import ccxt
 
-from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_FUTURES, SYMBOL, USE_TESTNET, EXCHANGE_NAME
+from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_FUTURES, SYMBOL, EXCHANGE_NAME
 
 log = logging.getLogger(__name__)
 
@@ -67,9 +67,6 @@ def _build_exchange() -> ccxt.Exchange:
         pass # Bybit doesn't require API passphrase/password in the same generic way
 
     exchange = exchange_class(params)
-
-    if USE_TESTNET:
-        exchange.set_sandbox_mode(True)
 
     return exchange
 

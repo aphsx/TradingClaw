@@ -61,11 +61,10 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             if self.path == '/health':
-                from config import EXCHANGE_NAME, USE_TESTNET
+                from config import EXCHANGE_NAME
                 self._json(200, {
                     'status': 'ok',
                     'exchange': EXCHANGE_NAME.upper(),
-                    'testnet': USE_TESTNET
                 })
 
             elif self.path == '/balance':

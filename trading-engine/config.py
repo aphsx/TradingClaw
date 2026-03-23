@@ -18,7 +18,6 @@ SECRET_KEY = os.getenv(f"{EXCHANGE_NAME.upper()}_SECRET_KEY", "")
 PASSPHRASE = os.getenv(f"{EXCHANGE_NAME.upper()}_PASSPHRASE", "")
 
 USE_FUTURES = os.getenv("USE_FUTURES", "false").lower() == "true"
-USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"
 
 BASE_URL = "" # Not used anymore since we will rely purely on CCXT
 

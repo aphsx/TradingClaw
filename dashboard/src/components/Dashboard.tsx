@@ -337,7 +337,7 @@ export default function Dashboard({ data }: { data: any }) {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">Futures Trading System</h1>
-          <p className="text-sm text-gray-500">Universal Crypto Futures · Testnet · Real-time</p>
+          <p className="text-sm text-gray-500">Universal Crypto Futures · Paper Trading (Live Data) · Real-time</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
 
