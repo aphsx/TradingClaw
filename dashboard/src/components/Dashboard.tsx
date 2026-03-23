@@ -80,6 +80,7 @@ export default function Dashboard({ data }: { data: any }) {
   const [orderQty, setOrderQty] = useState('0.001');
   const [orderLoading, setOrderLoading] = useState<'BUY' | 'SELL' | null>(null);
   const [orderResult, setOrderResult] = useState<string | null>(null);
+  const [activeExchange, setActiveExchange] = useState<string | null>(null);
 
   const fetchLive = useCallback(async () => {
     try {
@@ -106,6 +107,15 @@ export default function Dashboard({ data }: { data: any }) {
       }
     } catch (e: any) {
       setBalanceError(e.message);
+    }
+
+    try {
+      const healthRes = await fetch('/api/health').then(r => r.json());
+      if (healthRes.exchange) {
+        setActiveExchange(healthRes.exchange);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch health/exchange', e);
     }
   }, []);
 
@@ -336,7 +346,14 @@ export default function Dashboard({ data }: { data: any }) {
       {/* ── Header ── */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Futures Trading System</h1>
+          <div className="flex items-center gap-2 mb-0.5">
+            <h1 className="text-2xl font-bold">Futures Trading System</h1>
+            {activeExchange && (
+              <span className="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-[10px] font-bold rounded border border-blue-500/30 uppercase tracking-tighter">
+                {activeExchange}
+              </span>
+            )}
+          </div>
           <p className="text-sm text-gray-500">Universal Crypto Futures · Paper Trading (Live Data) · Real-time</p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
