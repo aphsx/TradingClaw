@@ -27,7 +27,7 @@ export async function GET() {
   const secretKey = process.env.BINANCE_SECRET_KEY;
 
   if (!apiKey || !secretKey) {
-    return NextResponse.json({ error: 'Binance API keys not configured in .env.local' }, { status: 500 });
+    return NextResponse.json({ error: 'Binance API keys not configured' }, { status: 500 });
   }
 
   try {
@@ -47,13 +47,26 @@ export async function GET() {
     const data = await res.json();
 
     if (!res.ok) {
-      // HTTP 401 or code -2015 → API key expired/invalid (testnet keys expire ~30 days)
-      const isExpired = res.status === 401 || data.code === -2015;
-      const errMsg = isExpired
-        ? 'API key expired — ไปที่ testnet.binancefuture.com → API Management → สร้าง key ใหม่ แล้วอัพเดท .env'
-        : (data.msg || 'Binance API error');
+      const code = data?.code;
+      let errMsg = data?.msg || 'Binance API error';
+      let reason = 'unknown';
+
+      if (code === -2014) {
+        reason = 'api_key_format_or_endpoint_mismatch';
+        errMsg = 'API key ไม่ตรงกับ endpoint นี้ (มักเกิดจากใช้ key คนละ environment เช่น live key กับ testnet endpoint หรือ key คนละประเภทกับ Futures)';
+      } else if (code === -2015) {
+        reason = 'api_key_invalid_or_no_permission';
+        errMsg = 'API key/secret ไม่ถูกต้อง หรือไม่มีสิทธิ์ Futures/Trade';
+      } else if (code === -1022) {
+        reason = 'signature_invalid';
+        errMsg = 'Signature ไม่ถูกต้อง (secret key ไม่ตรงกับ API key)';
+      } else if (code === -1021) {
+        reason = 'timestamp_out_of_window';
+        errMsg = 'เวลาเครื่องไม่ตรง Binance server time';
+      }
+
       return NextResponse.json(
-        { error: errMsg, binance_code: data.code, http_status: res.status, expired: isExpired },
+        { error: errMsg, reason, binance_code: code, http_status: res.status },
         { status: res.status }
       );
     }
@@ -126,6 +139,9 @@ export async function GET() {
       });
     }
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Failed to fetch Binance balance', reason: 'network_or_runtime_error', detail: e.message },
+      { status: 500 }
+    );
   }
 }

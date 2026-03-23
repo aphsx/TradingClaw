@@ -3,6 +3,11 @@ import { query, redisGet, redisSmembers } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
+const ENGINE_HTTP_URL =
+  process.env.TRADING_ENGINE_HTTP_URL ||
+  process.env.NEXT_PUBLIC_ENGINE_HTTP_URL ||
+  'http://trading-engine:8081';
+
 export async function GET() {
   let open_positions: any[] = [];
   let monitorStatus = null;
@@ -60,7 +65,7 @@ export async function GET() {
   // All Binance positions (bot-managed + manual) — always fetch (non-fatal)
   let binancePositions: any[] = [];
   try {
-    const engineRes = await fetch('http://localhost:8080/manual-positions', {
+    const engineRes = await fetch(`${ENGINE_HTTP_URL}/manual-positions`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(4000),
@@ -70,9 +75,13 @@ export async function GET() {
       const engineData = await engineRes.json();
       // New http_api.py returns binance_positions directly
       binancePositions = engineData.binance_positions || [];
+    } else if (engineRes) {
+      errors.push(`Engine HTTP: ${engineRes.status} ${engineRes.statusText || 'error'}`);
+    } else {
+      errors.push('Engine HTTP: manual-positions unreachable');
     }
   } catch (e: any) {
-    // Silently fail — manual positions are optional
+    errors.push(`Engine HTTP: ${e.message}`);
   }
 
   return NextResponse.json({

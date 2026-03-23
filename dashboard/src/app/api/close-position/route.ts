@@ -2,11 +2,16 @@ import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
+const ENGINE_HTTP_URL =
+  process.env.TRADING_ENGINE_HTTP_URL ||
+  process.env.NEXT_PUBLIC_ENGINE_HTTP_URL ||
+  'http://trading-engine:8081';
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    const res = await fetch('http://localhost:8080/close-position', {
+    const res = await fetch(`${ENGINE_HTTP_URL}/close-position`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

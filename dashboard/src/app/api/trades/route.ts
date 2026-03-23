@@ -7,7 +7,8 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const source = searchParams.get('source') || 'LIVE';
-    const limit = parseInt(searchParams.get('limit') || '100');
+    const limitRaw = parseInt(searchParams.get('limit') || '100', 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 100;
 
     const rows = await query(
       `SELECT id, source, symbol, direction, strategy, regime, status,
@@ -22,8 +23,8 @@ export async function GET(req: Request) {
        FROM positions
        WHERE source = ? AND status = 'CLOSED'
        ORDER BY exit_time DESC
-       LIMIT ?`,
-      [source, limit]
+       LIMIT ${limit}`,
+      [source]
     );
 
     return NextResponse.json(rows);

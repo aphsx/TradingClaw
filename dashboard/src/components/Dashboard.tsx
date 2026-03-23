@@ -93,10 +93,8 @@ export default function Dashboard({ data }: { data: any }) {
     try {
       const balRes = await fetch('/api/balance').then(r => r.json());
       if (balRes.error) {
-        // expired=true → API key expired, show actionable message
-        const msg = balRes.expired
-          ? '⚠️ API Key หมดอายุ — ไปที่ testnet.binancefuture.com → API Management → สร้าง key ใหม่ แล้วอัพเดท .env'
-          : `${balRes.error}${balRes.binance_code ? ` (${balRes.binance_code})` : ''}`;
+        const msg = `${balRes.error}${balRes.binance_code ? ` (${balRes.binance_code})` : ''}`;
+        setBalanceData(null);
         setBalanceError(msg);
       } else {
         setBalanceData(balRes);
@@ -254,12 +252,11 @@ export default function Dashboard({ data }: { data: any }) {
   const fundingData = monitor.funding || {};
 
   // Balance from Binance API
-  const redisEquity = monitor.equity || {};
   const usdtFree = balanceData?.usdt_free ?? null;
   const usdtLocked = balanceData?.usdt_locked ?? null;
-  const usdtTotal = balanceData?.usdt_total ?? redisEquity.equity ?? null;
-  const unrealizedPnl = balanceData?.unrealized_pnl ?? redisEquity.unrealized ?? null;
-  const marginRatio = balanceData?.margin_ratio ?? (marginData.margin_ratio ?? null);
+  const usdtTotal = balanceData?.usdt_total ?? null;
+  const unrealizedPnl = balanceData?.unrealized_pnl ?? null;
+  const marginRatio = balanceData?.margin_ratio ?? null;
   const marginBalance = balanceData?.margin_balance ?? null;
 
   const REGIME_COLORS: Record<string, string> = {
