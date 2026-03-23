@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 import ccxt
 
-from config import API_KEY, SECRET_KEY, USE_TESTNET, USE_FUTURES, SYMBOL, BINANCE_FUTURES_BASE_URL
+from config import API_KEY, SECRET_KEY, USE_FUTURES, SYMBOL, BINANCE_FUTURES_BASE_URL
 
 log = logging.getLogger(__name__)
 
@@ -49,20 +49,12 @@ def _build_exchange() -> ccxt.Exchange:
         'adjustForTimeDifference': True,   # auto-sync server clock
     }
 
-    # Spot-only sandbox. Futures sandbox/testnet is deprecated by Binance/CCXT.
-    if USE_TESTNET and not USE_FUTURES:
-        options['sandboxMode'] = True
-
     exchange = ccxt.binance({
         'apiKey': API_KEY,
         'secret': SECRET_KEY,
         'options': options,
         'enableRateLimit': True,
     })
-
-    # Enable sandbox (testnet) URLs for spot only.
-    if USE_TESTNET and not USE_FUTURES:
-        exchange.set_sandbox_mode(True)
 
     if USE_FUTURES:
         _apply_custom_futures_urls(exchange, BINANCE_FUTURES_BASE_URL)

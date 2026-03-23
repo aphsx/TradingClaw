@@ -3,13 +3,12 @@ import crypto from 'crypto';
 
 export const dynamic = 'force-dynamic';
 
-const IS_TESTNET = process.env.USE_TESTNET === 'true';
 const IS_FUTURES = process.env.USE_FUTURES === 'true';
 const FUTURES_BASE_URL = process.env.BINANCE_FUTURES_BASE_URL || 'https://fapi.binance.com';
 
 const BASE_URL = IS_FUTURES
   ? FUTURES_BASE_URL
-  : (IS_TESTNET ? 'https://testnet.binance.vision'    : 'https://api.binance.com');
+  : 'https://api.binance.com';
 
 function sign(queryString: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(queryString).digest('hex');

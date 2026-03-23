@@ -73,7 +73,7 @@ def get_long_short_ratio(symbol: str = SYMBOL, period: str = "5m") -> dict:
     if not USE_FUTURES:
         return {}
     try:
-        base = BASE_URL.replace("testnet.binancefuture.com", "fapi.binance.com")
+        base = BASE_URL
         r = requests.get(
             f"{base}/futures/data/globalLongShortAccountRatio",
             params={"symbol": symbol, "period": period, "limit": 1},

@@ -86,16 +86,15 @@ TRADING_MODE=backtest docker compose up
 ```bash
 # .env file
 USE_FUTURES=true      # ใช้ Futures API แทน Spot
-USE_TESTNET=true      # ใช้ Testnet สำหรับทดสอบ (แนะนำ!)
-TRADING_MODE=live     # ยิง order จริง (บน Testnet = เงินปลอม)
+BINANCE_FUTURES_BASE_URL=https://demo-fapi.binance.com
+TRADING_MODE=live     # ยิง order จริง (บน Demo URL = เงินปลอม)
 ```
 
 **Futures API Endpoints:**
-- Testnet: `https://testnet.binancefuture.com`
+- Demo: `https://demo-fapi.binance.com`
 - Mainnet: `https://fapi.binance.com`
 
 **Spot API Endpoints:**
-- Testnet: `https://testnet.binance.vision`
 - Mainnet: `https://api.binance.com`
 
 ---
@@ -230,12 +229,12 @@ SELECT regime_name, COUNT(*) FROM regimes GROUP BY regime_name;
 
 1. **เปลี่ยน API Key** ใน `.env` ก่อนใช้งาน!
 2. **Futures Demo Trading:**
-   - ตั้งค่า `USE_FUTURES=true` และ `USE_TESTNET=true`
-   - ใช้ API keys จาก [Binance Futures Testnet](https://testnet.binancefuture.com)
-   - ทดสอบใน Testnet ก่อนเทรดจริงเสมอ
+   - ตั้งค่า `USE_FUTURES=true`
+   - ตั้งค่า `BINANCE_FUTURES_BASE_URL=https://demo-fapi.binance.com`
+   - ใช้ API keys จาก Binance Demo Trading
 3. **Spot Demo Trading:**
-   - ตั้งค่า `USE_FUTURES=false` และ `USE_TESTNET=true`
-   - ใช้ API keys จาก [Binance Spot Testnet](https://testnet.binance.vision)
+   - ตั้งค่า `USE_FUTURES=false`
+   - ใช้ endpoint `https://api.binance.com`
 4. ระบบเหมาะสำหรับ **Demo account** หรือ **Paper mode** ก่อน
 5. ทดสอบ backtest ให้ดีก่อนเทรดจริง
 6. Crypto trading มีความเสี่ยงสูง

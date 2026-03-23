@@ -76,6 +76,10 @@ export default function Dashboard({ data }: { data: any }) {
   const [refreshing, setRefreshing] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null); // pos id being closed/adopted
+  const [orderSymbol, setOrderSymbol] = useState('BTCUSDT');
+  const [orderQty, setOrderQty] = useState('0.001');
+  const [orderLoading, setOrderLoading] = useState<'BUY' | 'SELL' | null>(null);
+  const [orderResult, setOrderResult] = useState<string | null>(null);
 
   const fetchLive = useCallback(async () => {
     try {
@@ -226,6 +230,49 @@ export default function Dashboard({ data }: { data: any }) {
       }
     } catch (e: any) { alert('Error: ' + e.message); }
     finally { setActionLoading(null); }
+  };
+
+  // ── Manual test order (Long / Short) ──────────────────────────────────────
+  const openTestPosition = async (side: 'BUY' | 'SELL') => {
+    const symbol = orderSymbol.trim().toUpperCase();
+    const qty = Number(orderQty);
+
+    if (!symbol) {
+      setOrderResult('กรอก Symbol ก่อน เช่น BTCUSDT');
+      return;
+    }
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setOrderResult('Quantity ต้องมากกว่า 0');
+      return;
+    }
+
+    setOrderLoading(side);
+    setOrderResult(null);
+    try {
+      const res = await fetch('/api/test-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol,
+          side,
+          type: 'MARKET',
+          quantity: orderQty,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        setOrderResult(`FAILED: ${d.error || d.msg || 'unknown error'}`);
+        return;
+      }
+
+      const order = d.order || {};
+      setOrderResult(`SUCCESS: ${side === 'BUY' ? 'LONG' : 'SHORT'} ${symbol} qty=${order.origQty || order.executedQty || orderQty} orderId=${order.orderId || '-'}`);
+      await fetchLive();
+    } catch (e: any) {
+      setOrderResult(`FAILED: ${e.message}`);
+    } finally {
+      setOrderLoading(null);
+    }
   };
 
 
@@ -382,6 +429,46 @@ export default function Dashboard({ data }: { data: any }) {
 <button onClick={refresh} className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${refreshing ? 'animate-spin' : ''}`}>
             <RefreshCw size={16} />
           </button>
+        </div>
+      </div>
+
+      {/* ── Quick manual test: open Long / Short ── */}
+      <div className="mb-4 bg-[#12121a] border border-[#1e1e2e] rounded-xl p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs uppercase tracking-wider text-gray-500">Test Open Position</span>
+          <input
+            value={orderSymbol}
+            onChange={(e) => setOrderSymbol(e.target.value)}
+            className="bg-[#0f0f16] border border-[#1e1e2e] rounded px-2 py-1.5 text-sm w-28"
+            placeholder="BTCUSDT"
+          />
+          <input
+            value={orderQty}
+            onChange={(e) => setOrderQty(e.target.value)}
+            className="bg-[#0f0f16] border border-[#1e1e2e] rounded px-2 py-1.5 text-sm w-24"
+            placeholder="0.001"
+          />
+          <button
+            onClick={() => openTestPosition('BUY')}
+            disabled={orderLoading !== null}
+            className="px-3 py-1.5 rounded bg-green-600/20 border border-green-600/40 text-green-400 text-sm font-semibold hover:bg-green-600/30 disabled:opacity-50"
+            title="Open LONG (BUY MARKET)"
+          >
+            {orderLoading === 'BUY' ? 'Sending...' : 'Open Long'}
+          </button>
+          <button
+            onClick={() => openTestPosition('SELL')}
+            disabled={orderLoading !== null}
+            className="px-3 py-1.5 rounded bg-red-600/20 border border-red-600/40 text-red-400 text-sm font-semibold hover:bg-red-600/30 disabled:opacity-50"
+            title="Open SHORT (SELL MARKET)"
+          >
+            {orderLoading === 'SELL' ? 'Sending...' : 'Open Short'}
+          </button>
+          {orderResult && (
+            <span className={`text-xs ${orderResult.startsWith('SUCCESS') ? 'text-green-400' : 'text-red-400'}`}>
+              {orderResult}
+            </span>
+          )}
         </div>
       </div>
 

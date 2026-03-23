@@ -12,7 +12,6 @@ load_dotenv(dotenv_path=_root_env if _root_env.exists() else _local_env)
 # ─── Binance ───
 API_KEY = os.getenv("BINANCE_API_KEY", "")
 SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
-USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"
 USE_FUTURES = os.getenv("USE_FUTURES", "false").lower() == "true"
 BINANCE_FUTURES_BASE_URL = os.getenv("BINANCE_FUTURES_BASE_URL", "https://fapi.binance.com")
 
@@ -22,8 +21,7 @@ BINANCE_FUTURES_BASE_URL = os.getenv("BINANCE_FUTURES_BASE_URL", "https://fapi.b
 if USE_FUTURES:
     BASE_URL = BINANCE_FUTURES_BASE_URL
 else:
-    # Spot API
-    BASE_URL = "https://testnet.binance.vision" if USE_TESTNET else "https://api.binance.com"
+    BASE_URL = "https://api.binance.com"
 
 # ─── Database ───
 DB_HOST = os.getenv("DB_HOST", "localhost")
