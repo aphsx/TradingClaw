@@ -205,7 +205,7 @@ export default function Dashboard({ data }: { data: any }) {
       });
       const d = await res.json();
       if (d.success) {
-        alert(`✅ Bot จะดูแล ${pos.direction} ${pos.symbol}\nSL: $${d.stop_loss?.toLocaleString()}  TP1: $${d.take_profit?.toLocaleString()}`);
+        alert(`[OK] Bot จะดูแล ${pos.direction} ${pos.symbol}\nSL: $${d.stop_loss?.toLocaleString()}  TP1: $${d.take_profit?.toLocaleString()}`);
         await fetchLive();
       } else alert('Adopt ไม่สำเร็จ: ' + (d.error || 'unknown error'));
     } catch (e: any) { alert('Error: ' + e.message); }
@@ -219,10 +219,10 @@ export default function Dashboard({ data }: { data: any }) {
       const res = await fetch('/api/sync-binance');
       const d = await res.json();
       if (d.count > 0) {
-        alert(`✅ Imported ${d.count} position(s):\n${d.imported.map((p: any) => `${p.direction} ${p.symbol} qty=${p.quantity}`).join('\n')}`);
+        alert(`[OK] Imported ${d.count} position(s):\n${d.imported.map((p: any) => `${p.direction} ${p.symbol} qty=${p.quantity}`).join('\n')}`);
         await fetchLive();
       } else {
-        alert('ℹ️ No unmanaged positions found');
+        alert('[INFO] No unmanaged positions found');
       }
     } catch (e: any) { alert('Error: ' + e.message); }
     finally { setActionLoading(null); }
@@ -390,7 +390,7 @@ export default function Dashboard({ data }: { data: any }) {
         {[
           { key: 'live', label: `Live trades (${totalTrades})` },
           { key: 'positions', label: `Open (${openPositions.length})` },
-          { key: 'futures', label: '⚡ Futures info' },
+          { key: 'futures', label: '[FAST] Futures info' },
           { key: 'backtest', label: 'Backtest' },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key as any)}
@@ -776,7 +776,7 @@ export default function Dashboard({ data }: { data: any }) {
                         ≈{annualized.toFixed(1)}% annual
                       </div>
                       {Math.abs(rate) > 0.001 && (
-                        <div className="text-[10px] text-amber-400 mt-0.5">⚠ high funding</div>
+                        <div className="text-[10px] text-amber-400 mt-0.5">[WARN] high funding</div>
                       )}
                     </div>
                   );

@@ -298,7 +298,7 @@ def _import_binance_position(pos: dict) -> int:
     }
     publish_position_open(pos_id, pos_data)
     
-    print(f"✅ Imported position: #{pos_id} {direction} {symbol} qty={quantity}")
+    print(f"[OK] Imported position: #{pos_id} {direction} {symbol} qty={quantity}")
     return pos_id
 
 
@@ -310,7 +310,7 @@ def run_http_server(port: int = 8081):
     server = HTTPServer(('0.0.0.0', port), RequestHandler)
 
     def start():
-        print(f"🌐 HTTP API server started on http://0.0.0.0:{port}")
+        print(f"[HTTP] HTTP API server started on http://0.0.0.0:{port}")
         server.serve_forever()
 
     thread = threading.Thread(target=start, daemon=True)

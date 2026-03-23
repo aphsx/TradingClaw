@@ -43,13 +43,13 @@ export function useSocket(): UseSocketReturn {
     });
 
     socket.on('connect', () => {
-      console.log('🔌 Socket.IO connected');
+      console.log('[SOCKET] Socket.IO connected');
       setConnected(true);
       setError(null);
     });
 
     socket.on('disconnect', () => {
-      console.log('🔌 Socket.IO disconnected');
+      console.log('[SOCKET] Socket.IO disconnected');
       setConnected(false);
     });
 

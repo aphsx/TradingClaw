@@ -290,7 +290,7 @@ def get_recent_trades(limit=200, source="LIVE"):
         return pd.read_sql(text(query), get_engine(), params=params)
 
     except Exception as e:
-        print(f"⚠️ get_recent_trades error: {e}")
+        print(f"[WARN] get_recent_trades error: {e}")
         # Fallback without confidence column for old schema
         try:
             if source == "ALL":
@@ -376,4 +376,4 @@ def save_funding_rate(symbol: str, timestamp, rate: float, mark_price: float = 0
                 {"s": symbol, "ts": timestamp, "r": rate, "mp": mark_price}
             )
     except Exception as e:
-        print(f"⚠️ Save funding rate error: {e}")
+        print(f"[WARN] Save funding rate error: {e}")

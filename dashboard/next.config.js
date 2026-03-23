@@ -38,7 +38,7 @@ try {
         .filter(l => l.trim() && !l.trim().startsWith('#'))
       const header = '# Auto-synced from TradingClaw/.env — do not edit manually\n'
       fs.writeFileSync(localEnv, header + lines.join('\n') + '\n')
-      console.log('📄 [next.config] .env.local synced from root .env')
+      console.log('[ENV] [next.config] .env.local synced from root .env')
     }
   }
 } catch (_) {

@@ -170,7 +170,7 @@ class MLSignalFilter:
             return
 
         if len(trades_df) < self.min_samples:
-            print(f"⚠️ ML filter: {len(trades_df)}/{self.min_samples} trades")
+            print(f"[WARN] ML filter: {len(trades_df)}/{self.min_samples} trades")
             return
 
         X_rows, y_rows = [], []
@@ -231,7 +231,7 @@ class MLSignalFilter:
             top = ', '.join(f'{n}={v:.3f}' for n, v in imp[:5])
         except Exception:
             top = "N/A"
-        print(f"✅ ML filter trained on {len(X)} trades | source={self._source} | thr={self.optimal_threshold:.2f} | pf={self._holdout_pf:.2f}")
+        print(f"[OK] ML filter trained on {len(X)} trades | source={self._source} | thr={self.optimal_threshold:.2f} | pf={self._holdout_pf:.2f}")
         print(f"   Top features: {top}")
 
     def pretrain_from_backtest(self, simulated_trades: pd.DataFrame, market_df: pd.DataFrame):

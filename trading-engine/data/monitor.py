@@ -109,7 +109,7 @@ def get_manual_positions_from_binance() -> list:
             "timestamp": datetime.utcnow().isoformat(),
         }
     except Exception as e:
-        print(f"⚠️ Error fetching manual positions: {e}")
+        print(f"[WARN] Error fetching manual positions: {e}")
         return {"open_orders": [], "account_positions": [], "recent_trades": [], "error": str(e)}
 
 
@@ -224,7 +224,7 @@ def sync_open_positions_with_binance(db_module) -> list:
                     continue
 
         except Exception as e:
-            print(f"⚠️ Sync error for position {pos.get('id')}: {e}")
+            print(f"[WARN] Sync error for position {pos.get('id')}: {e}")
 
     return closed
 
@@ -301,7 +301,7 @@ def _handle_exit_fill(pos: dict, order_resp: dict, reason: str, db_module):
         "commission": round(exit_comm, 6),
     })
 
-    print(f"✅ Position #{pos['id']} closed: {reason} @ ${exit_p:,.2f} "
+    print(f"[OK] Position #{pos['id']} closed: {reason} @ ${exit_p:,.2f} "
           f"PnL=${net_pnl:.2f} Fee=${exit_comm:.6f} {parsed.get('commission_asset','')}")
 
 
@@ -360,7 +360,7 @@ def cleanup_ghost_positions() -> list:
                     "pnl":        0,
                 })
                 removed.append(pid)
-                print(f"🧹 Ghost position removed: #{pid} {key}")
+                print(f"[CLEANUP] Ghost position removed: #{pid} {key}")
     except Exception as e:
-        print(f"⚠️ cleanup_ghost_positions: {e}")
+        print(f"[WARN] cleanup_ghost_positions: {e}")
     return removed

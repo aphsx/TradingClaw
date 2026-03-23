@@ -27,10 +27,10 @@ def wait_for_db(max_retries=30):
         try:
             with get_engine().connect() as c:
                 c.execute(text("SELECT 1"))
-            print("✅ MySQL connected")
+            print("[OK] MySQL connected")
             return True
         except Exception:
-            print(f"⏳ DB... ({i+1}/{max_retries})")
+            print(f"[WAIT] DB... ({i+1}/{max_retries})")
             time.sleep(2)
     return False
 
@@ -40,10 +40,10 @@ def wait_for_redis(max_retries=15):
     for i in range(max_retries):
         try:
             get_redis().ping()
-            print("✅ Redis connected")
+            print("[OK] Redis connected")
             return True
         except Exception:
-            print(f"⏳ Redis... ({i+1}/{max_retries})")
+            print(f"[WAIT] Redis... ({i+1}/{max_retries})")
             time.sleep(1)
     return False
 
@@ -53,10 +53,10 @@ def wait_for_redis(max_retries=15):
 # ═══════════════════════════════════════
 def _verify_order_placed(order_resp: dict, order_type: str) -> bool:
     if order_resp.get('_http_status', 0) != 200:
-        print(f"⚠️ {order_type} order failed: {order_resp}")
+        print(f"[WARN] {order_type} order failed: {order_resp}")
         return False
     if 'orderId' not in order_resp:
-        print(f"⚠️ {order_type} order missing orderId: {order_resp}")
+        print(f"[WARN] {order_type} order missing orderId: {order_resp}")
         return False
     return True
 
@@ -134,21 +134,22 @@ def run_live():
 
     # ── Binance connection test ──
     conn = bnb.test_connection()
-    print(f"🔌 Binance ping={conn.get('ping')}")
+    print(f"[SOCKET] Binance ping={conn.get('ping')}")
     if conn.get("account", {}).get("connected"):
         bals = conn["account"]["balances"]
         for asset, b in list(bals.items())[:5]:
             print(f"   {asset}: {b['free']}")
 
     # ── Fetch real balance from Binance ──
-    print("\n💰 Fetching live balance from Binance...")
+    print("\n[BALANCE] Fetching live balance from Binance...")
     live_balance = bnb.get_usdt_balance()
     if live_balance > 0:
         print(f"   USDT balance: ${live_balance:.2f}")
     else:
-        fallback = INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else 1000.0
-        live_balance = fallback
-        print(f"   ⚠️  Could not fetch balance — using fallback ${live_balance:.2f}")
+        print("   [ERROR] Could not fetch real Binance balance (no demo fallback)")
+        if INITIAL_CAPITAL > 0:
+            print(f"   [WARN] INITIAL_CAPITAL is set (${INITIAL_CAPITAL:.2f}) but ignored in live mode")
+        raise RuntimeError("Live mode requires real Binance balance; aborting startup")
 
     # ── Core components ──
     detector   = RegimeDetector()
@@ -192,27 +193,27 @@ def run_live():
 
     # ── Set leverage and margin type ──
     if USE_FUTURES:
-        print(f"\n⚙️  Configuring futures...")
+        print(f"\n[CONFIG]  Configuring futures...")
         for sym in SYMBOLS:
             try:
                 bnb.set_leverage(sym, LEVERAGE)
-                print(f"✅ {sym}: {LEVERAGE}x")
+                print(f"[OK] {sym}: {LEVERAGE}x")
             except Exception as e:
-                print(f"⚠️ {sym}: leverage {e}")
+                print(f"[WARN] {sym}: leverage {e}")
             try:
                 bnb.set_margin_type(sym, MARGIN_TYPE)
-                print(f"✅ {sym}: {MARGIN_TYPE}")
+                print(f"[OK] {sym}: {MARGIN_TYPE}")
             except Exception as e:
-                print(f"⚠️ {sym}: margin_type (may already be set)")
+                print(f"[WARN] {sym}: margin_type (may already be set)")
 
     # ── Reconcile positions ──
     try:
-        print("\n🔄 Reconciling positions...")
+        print("\n[SYNC] Reconciling positions...")
         bp = bnb.get_position_risk(SYMBOL)
         rp = mon.get_open_positions_from_redis()
         print(f"   Binance: {len([p for p in bp if float(p.get('positionAmt',0)) != 0])} | Redis: {len(rp)}")
     except Exception as e:
-        print(f"⚠️ Reconcile: {e}")
+        print(f"[WARN] Reconcile: {e}")
 
     mon.set_status("running", f"TradingClaw v5 | {SYMBOLS}")
     db.log("INFO", "engine", "TradingClaw v5 started", {"symbols": SYMBOLS})
@@ -235,7 +236,7 @@ def run_live():
                             margin_check = risk_mgr.check_margin_ratio(account)
                             mon.update_margin_ratio(account)
                             if margin_check["status"] == "emergency":
-                                print(f"🚨 EMERGENCY MARGIN {margin_check['ratio']:.1%} — CLOSING ALL!")
+                                print(f"[EMERGENCY] EMERGENCY MARGIN {margin_check['ratio']:.1%} — CLOSING ALL!")
                                 for pos in mon.get_open_positions_from_redis():
                                     close_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
                                     try:
@@ -243,11 +244,11 @@ def run_live():
                                                                float(pos['quantity']))
                                         db.log("CRITICAL", "margin", f"Emergency #{pos.get('id')}", pos)
                                     except Exception as e:
-                                        print(f"⚠️ Emergency close: {e}")
+                                        print(f"[WARN] Emergency close: {e}")
                             elif margin_check["status"] == "warning":
-                                print(f"⚠️ Margin warning: {margin_check['ratio']:.1%}")
+                                print(f"[WARN] Margin warning: {margin_check['ratio']:.1%}")
                         except Exception as e:
-                            print(f"⚠️ Margin check: {e}")
+                            print(f"[WARN] Margin check: {e}")
 
                     open_positions = mon.get_open_positions_from_redis()
                     for pos in open_positions:
@@ -267,17 +268,17 @@ def run_live():
                                         # Move SL to breakeven after TP1
                                         new_sl = pos_mgr.move_to_breakeven(pos)
                                         pos['stop_loss'] = new_sl
-                                    print(f"✅ {partial['reason']} partial close #{pos.get('id')} "
+                                    print(f"[OK] {partial['reason']} partial close #{pos.get('id')} "
                                           f"({partial['fraction']*100:.0f}%)")
                                     mon.publish_position_open(pos['id'], pos)
                         except Exception as e:
-                            print(f"⚠️ Partial TP: {e}")
+                            print(f"[WARN] Partial TP: {e}")
 
                         # ── Chandelier trailing stop ──
                         try:
                             new_sl = pos_mgr.update_trailing_stop(pos, price)
                             if new_sl and abs(new_sl - float(pos.get('stop_loss', 0))) > price * 0.0001:
-                                print(f"🔄 Trail SL #{pos.get('id')}: {pos.get('stop_loss')} → {new_sl:.2f}")
+                                print(f"[SYNC] Trail SL #{pos.get('id')}: {pos.get('stop_loss')} → {new_sl:.2f}")
                                 pos['stop_loss'] = new_sl
                                 if pos.get('sl_order_id') and TRADING_MODE != "paper":
                                     try:
@@ -291,14 +292,14 @@ def run_live():
                                         pos['sl_order_id'] = new_sl_order['orderId']
                                         mon.publish_position_open(pos['id'], pos)
                         except Exception as e:
-                            print(f"⚠️ Trail SL: {e}")
+                            print(f"[WARN] Trail SL: {e}")
 
                         # ── Trailing TP (final leg) ──
                         try:
                             if pos.get('tp2_hit'):  # Final leg active
                                 new_tp = pos_mgr.update_trailing_tp(pos, price)
                                 if abs(new_tp - float(pos.get('take_profit', 0))) > price * 0.0001:
-                                    print(f"🔄 Trail TP #{pos.get('id')}: {pos.get('take_profit')} → {new_tp:.2f}")
+                                    print(f"[SYNC] Trail TP #{pos.get('id')}: {pos.get('take_profit')} → {new_tp:.2f}")
                                     pos['take_profit'] = new_tp
                                     if pos.get('tp_order_id') and TRADING_MODE != "paper":
                                         try:
@@ -312,12 +313,12 @@ def run_live():
                                             pos['tp_order_id'] = new_tp_order['orderId']
                                             mon.publish_position_open(pos['id'], pos)
                         except Exception as e:
-                            print(f"⚠️ Trail TP: {e}")
+                            print(f"[WARN] Trail TP: {e}")
 
                         # ── Time/funding exit ──
                         try:
                             if pos_mgr.should_time_exit(pos):
-                                print(f"⏰ Time exit #{pos['id']}")
+                                print(f"[TIME] Time exit #{pos['id']}")
                                 close_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
                                 if TRADING_MODE != "paper":
                                     close_order = bnb.place_market_order(
@@ -329,7 +330,7 @@ def run_live():
                                         })
                                         db.log("INFO", "monitor", f"Time exit #{pos['id']}", {})
                         except Exception as e:
-                            print(f"⚠️ Time exit: {e}")
+                            print(f"[WARN] Time exit: {e}")
 
                     # Sync fills with Binance
                     try:
@@ -337,7 +338,7 @@ def run_live():
                         if closed:
                             db.log("INFO", "monitor", f"Synced {len(closed)} closes", {"ids": closed})
                     except Exception as e:
-                        print(f"⚠️ Sync: {e}")
+                        print(f"[WARN] Sync: {e}")
 
                     # Ghost cleanup every ~5 min (300s / MONITOR_INTERVAL_SECONDS)
                     _ghost_check_counter += 1
@@ -348,15 +349,15 @@ def run_live():
                             if removed:
                                 db.log("INFO", "monitor", f"Ghost cleanup removed {len(removed)}", {"ids": removed})
                         except Exception as e:
-                            print(f"⚠️ Ghost cleanup: {e}")
+                            print(f"[WARN] Ghost cleanup: {e}")
 
             except Exception as e:
-                print(f"⚠️ Monitor loop: {e}")
+                print(f"[WARN] Monitor loop: {e}")
             time.sleep(MONITOR_INTERVAL_SECONDS)
 
     monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
     monitor_thread.start()
-    print("🔍 Monitor thread started")
+    print("[INFO] Monitor thread started")
 
     # ── Pending signal outcome checker ──
     def resolve_pending_outcomes(bar_ohlcv: dict):
@@ -456,7 +457,7 @@ def run_live():
         for k in resolved:
             _pending_outcomes.pop(k, None)
         if resolved:
-            print(f"   🧠 ML: resolved {len(resolved)} pending signal outcomes")
+            print(f"   [ML] ML: resolved {len(resolved)} pending signal outcomes")
 
     # ──────────────────────────
     # MAIN SIGNAL LOOP
@@ -466,7 +467,7 @@ def run_live():
             now = datetime.utcnow()
             loop_count += 1
             print(f"\n{'─'*55}")
-            print(f"⏰ {now.strftime('%Y-%m-%d %H:%M:%S')} UTC  [#{loop_count}]")
+            print(f"[TIME] {now.strftime('%Y-%m-%d %H:%M:%S')} UTC  [#{loop_count}]")
 
             # ── Periodic capital re-sync from Binance ──
             if loop_count % CAPITAL_SYNC_EVERY == 0:
@@ -476,7 +477,7 @@ def run_live():
                         msg = risk_mgr.sync_capital(refreshed)
                         print(msg)
                 except Exception as e:
-                    print(f"⚠️ Capital re-sync: {e}")
+                    print(f"[WARN] Capital re-sync: {e}")
 
             # ── Fetch multi-symbol prices for correlation ──
             multi_data = {}
@@ -486,7 +487,7 @@ def run_live():
                     if not sym_df.empty and 'close' in sym_df.columns:
                         corr_mgr.update_prices(sym, sym_df['close'])
             except Exception as e:
-                print(f"⚠️ Multi-symbol fetch: {e}")
+                print(f"[WARN] Multi-symbol fetch: {e}")
 
             # ── Resolve pending signal outcomes for ML training (Issue #1 fix) ──
             # Pass bar OHLCV so resolver tracks worst price seen, not just spot price.
@@ -503,7 +504,7 @@ def run_live():
                         }
                 resolve_pending_outcomes(bar_ohlcv_snap)
             except Exception as e:
-                print(f"⚠️ Pending outcome check: {e}")
+                print(f"[WARN] Pending outcome check: {e}")
 
             # ── Fetch funding rates for VolumeFlowFactor ──
             if USE_FUTURES:
@@ -551,9 +552,9 @@ def run_live():
                             btc_composite=0.0,   # BTC doesn't get blended with itself
                         )
                         _btc_composite_last = float(btc_scores['composite'].iloc[-1])
-                        print(f"🔗 BTC composite: {_btc_composite_last:+.3f} (macro bias for other pairs)")
+                        print(f"[LINK] BTC composite: {_btc_composite_last:+.3f} (macro bias for other pairs)")
                 except Exception as e:
-                    print(f"⚠️ BTC cross-symbol bias: {e}")
+                    print(f"[WARN] BTC cross-symbol bias: {e}")
 
             for current_symbol in SYMBOLS:
                 print(f"\n== {current_symbol} ==")
@@ -563,7 +564,7 @@ def run_live():
                 if df is None or len(df) < 60:
                     df = fetch_klines(symbol=current_symbol, interval=TIMEFRAME, days=30)
                 if len(df) < 60:
-                    print(f"⚠️ Not enough data for {current_symbol}")
+                    print(f"[WARN] Not enough data for {current_symbol}")
                     continue
 
                 # ── 4h data ──
@@ -575,7 +576,7 @@ def run_live():
                     else:
                         df_4h = None
                 except Exception as e:
-                    print(f"⚠️ 4h fetch {current_symbol}: {e}")
+                    print(f"[WARN] 4h fetch {current_symbol}: {e}")
 
                 # ── Features ──
                 df = calculate_features(df)
@@ -584,7 +585,7 @@ def run_live():
                 df, feat = df.loc[ci], feat.loc[ci]
 
                 if len(feat) < 50:
-                    print(f"⚠️ Not enough features for {current_symbol}")
+                    print(f"[WARN] Not enough features for {current_symbol}")
                     continue
 
                 # ── Regime detection (fit first time or retrain) ──
@@ -594,7 +595,7 @@ def run_live():
                     bars_since_retrain.get(current_symbol, 0) >= HMM_RETRAIN_BARS
                 )
                 if needs_retrain and current_symbol == SYMBOLS[0]:
-                    print("🧠 Training HMM regime detector...")
+                    print("[ML] Training HMM regime detector...")
                     stats = detector.fit(df, feat)
                     print(f"   Model: {stats.get('model')} | States: {stats.get('state_map')}")
                     print(f"   Distribution: {stats.get('regime_distribution')}")
@@ -606,8 +607,8 @@ def run_live():
                 rconf = current_regime['confidence']
                 regime_id = current_regime['regime']
                 transitioning = current_regime.get('transitioning', False)
-                print(f"🔮 Regime: {rname} ({rconf:.0%})"
-                      + (" ⚡transitioning" if transitioning else ""))
+                print(f"[REGIME] Regime: {rname} ({rconf:.0%})"
+                      + (" [FAST]transitioning" if transitioning else ""))
                 mon.update_regime(rname, rconf, current_regime['probabilities'])
 
                 # ── ML filter training ──
@@ -619,18 +620,18 @@ def run_live():
                         if bt_trades is not None and len(bt_trades) >= ML_MIN_SAMPLES:
                             ml_filter.pretrain_from_backtest(bt_trades, df)
                             ml_trained = True
-                            print(f"🤖 ML cold-start: pretrained on {len(bt_trades)} backtest trades")
+                            print(f"[ML] ML cold-start: pretrained on {len(bt_trades)} backtest trades")
                         else:
                             n = len(bt_trades) if bt_trades is not None else 0
-                            print(f"⚠️ ML cold-start: only {n} backtest trades (need {ML_MIN_SAMPLES})")
+                            print(f"[WARN] ML cold-start: only {n} backtest trades (need {ML_MIN_SAMPLES})")
                             # Also try SIMULATED outcomes from pending outcome tracker
                             sim_trades = db.get_recent_trades(limit=500, source='SIMULATED')
                             if sim_trades is not None and len(sim_trades) >= ML_MIN_SAMPLES:
                                 ml_filter.pretrain_from_backtest(sim_trades, df)
                                 ml_trained = True
-                                print(f"🤖 ML cold-start: pretrained on {len(sim_trades)} simulated trades")
+                                print(f"[ML] ML cold-start: pretrained on {len(sim_trades)} simulated trades")
                     except Exception as e:
-                        print(f"⚠️ ML cold-start: {e}")
+                        print(f"[WARN] ML cold-start: {e}")
 
                 if not ml_trained or loop_count % 20 == 0:
                     if current_symbol == SYMBOLS[0]:
@@ -641,9 +642,9 @@ def run_live():
                                 ml_trained = True
                             else:
                                 n = len(recent_trades) if recent_trades is not None else 0
-                                print(f"⚠️ ML: {n}/{ML_MIN_SAMPLES} live trades")
+                                print(f"[WARN] ML: {n}/{ML_MIN_SAMPLES} live trades")
                         except Exception as e:
-                            print(f"⚠️ ML train: {e}")
+                            print(f"[WARN] ML train: {e}")
 
                 # ── Generate signals via multi-factor engine ──
                 # Issue #6: pass BTC composite bias for non-BTC symbols
@@ -683,11 +684,11 @@ def run_live():
                         }
 
                 if last_bar == last_signal_time.get(current_symbol):
-                    print("⏸️  Already processed this bar")
+                    print("[SKIP]  Already processed this bar")
                 elif new_sigs:
                     for sig in new_sigs:
                         score = getattr(sig, 'composite_score', 0)
-                        print(f"\n📡 {sig.direction} @ ${sig.entry_price:,.2f} "
+                        print(f"\n[SIGNAL] {sig.direction} @ ${sig.entry_price:,.2f} "
                               f"| score={score:+.3f} | conf={sig.confidence:.0%}")
                         print(f"   SL: ${sig.stop_loss:,.2f} | TP1: ${sig.take_profit:,.2f} "
                               f"| TP2: ${sig.take_profit_2:,.2f}")
@@ -704,35 +705,35 @@ def run_live():
                             # Low confidence (0.5) → 0.4x; high confidence (0.9) → 0.7x.
                             hmm_conf = current_regime.get('confidence', 0.5)
                             transition_size_mult = float(np.clip(hmm_conf * 0.80, 0.30, 0.70))
-                            print(f"   ⚡ Regime transitioning (HMM conf={hmm_conf:.0%}) "
+                            print(f"   [FAST] Regime transitioning (HMM conf={hmm_conf:.0%}) "
                                   f"— reducing size to {transition_size_mult:.0%}")
 
                         # ── ML Filter ──
                         sig_dict = _signal_to_dict(sig, oi_score=_oi_score_last)
                         ml_result = ml_filter.predict(sig_dict, df)
-                        print(f"   🤖 ML: {ml_result['reason']}")
+                        print(f"   [ML] ML: {ml_result['reason']}")
                         if not ml_result['pass']:
                             continue
 
                         # ── Max open trades ──
                         open_pos = mon.get_open_positions_from_redis()
                         if len(open_pos) >= MAX_OPEN_TRADES:
-                            print(f"   ⛔ Max open trades ({MAX_OPEN_TRADES})")
+                            print(f"   [BLOCK] Max open trades ({MAX_OPEN_TRADES})")
                             continue
 
                         # ── Portfolio heat check ──
                         heat_ok, heat_reason = risk_mgr.heat_allows_new_trade(open_pos, sig)
                         if not heat_ok:
-                            print(f"   ⛔ {heat_reason}")
+                            print(f"   [BLOCK] {heat_reason}")
                             continue
 
                         # ── Correlation check ──
                         corr_result = corr_mgr.can_open_position(current_symbol, sig.direction, open_pos)
                         if not corr_result['allowed']:
-                            print(f"   ⛔ Correlation: {corr_result['reason']}")
+                            print(f"   [BLOCK] Correlation: {corr_result['reason']}")
                             continue
                         if corr_result['correlated_with']:
-                            print(f"   ℹ️ Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
+                            print(f"   [INFO] Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
 
                         # ── Position size ──
                         # Kelly (tier-aware risk%) × drawdown × volatility × transition reduction
@@ -742,11 +743,11 @@ def run_live():
                         qty *= dd_mult * vol_mult * transition_size_mult  # Issue #7
                         qty = round(qty, 6)
                         tier = risk_mgr.get_tier_info()
-                        print(f"   💰 Tier: {tier['tier']} | Risk: {tier['risk_pct']} "
+                        print(f"   [BALANCE] Tier: {tier['tier']} | Risk: {tier['risk_pct']} "
                               f"(${tier['risk_amount_usd']}) | DD: {dd_mult:.2f}x | "
                               f"Vol: {vol_mult:.2f}x | Trans: {transition_size_mult:.2f}x | Qty: {qty}")
                         if qty <= 0:
-                            print("   ⛔ Quantity zero after adjustments")
+                            print("   [BLOCK] Quantity zero after adjustments")
                             continue
 
                         # ── Funding rate check ──
@@ -755,10 +756,10 @@ def run_live():
                                 mark = bnb.get_mark_price(current_symbol)
                                 funding_rate = float(mark.get("lastFundingRate", 0))
                                 if abs(funding_rate) > MAX_FUNDING_RATE:
-                                    print(f"   ⛔ Funding too high: {funding_rate:.4%}")
+                                    print(f"   [BLOCK] Funding too high: {funding_rate:.4%}")
                                     continue
                             except Exception as e:
-                                print(f"   ⚠️ Funding check: {e}")
+                                print(f"   [WARN] Funding check: {e}")
 
                         # ── Place ENTRY order ──
                         side = "BUY" if sig.direction == "LONG" else "SELL"
@@ -775,7 +776,7 @@ def run_live():
                             order_resp = bnb.place_market_order(current_symbol, side, qty)
 
                         parsed = bnb.parse_order_response(order_resp)
-                        print(f"   ✅ {parsed.get('status')}: fill=${parsed.get('fill_price'):,.2f}")
+                        print(f"   [OK] {parsed.get('status')}: fill=${parsed.get('fill_price'):,.2f}")
 
                         # Issue #10: record execution quality (expected vs actual fill)
                         if parsed.get('fill_price') and parsed.get('fill_qty', 0) > 0:
@@ -788,12 +789,12 @@ def run_live():
                                     quantity=float(parsed['fill_qty']),
                                 )
                                 eff_slip = exec_analytics.get_effective_slippage(current_symbol)
-                                print(f"   📊 Exec: effective slippage={eff_slip*100:.3f}%")
+                                print(f"   [DATA] Exec: effective slippage={eff_slip*100:.3f}%")
                             except Exception:
                                 pass
 
                         if parsed.get("status") not in ("FILLED", "PAPER"):
-                            print(f"   ❌ Not filled: {parsed.get('status')}")
+                            print(f"   [ERROR] Not filled: {parsed.get('status')}")
                             db.log("ERROR", "order", "Entry not filled", parsed)
                             continue
 
@@ -804,7 +805,7 @@ def run_live():
                             sig.stop_loss += offset
                             sig.take_profit += offset
                             sig.take_profit_2 += offset
-                            print(f"   📉 SL/TP offset by {offset:,.2f} (slippage)")
+                            print(f"   [WARN] SL/TP offset by {offset:,.2f} (slippage)")
 
                         sig_id = db.save_signal(sig, current_symbol, source="LIVE")
 
@@ -817,9 +818,9 @@ def run_live():
                                                       current_symbol, exit_side, qty, sig.stop_loss)
                                 if _verify_order_placed(sl_resp, "SL"):
                                     sl_oid = sl_resp.get("orderId")
-                                    print(f"   🛑 SL #{sl_oid} @ ${sig.stop_loss:,.2f}")
+                                    print(f"   [SL] SL #{sl_oid} @ ${sig.stop_loss:,.2f}")
                             except Exception as e:
-                                print(f"   ⚠️ SL failed: {e}")
+                                print(f"   [WARN] SL failed: {e}")
 
                             try:
                                 tp_qty = qty * PARTIAL_TP_FRACTIONS[0]  # First 33% at TP1
@@ -828,10 +829,10 @@ def run_live():
                                                       round(tp_qty, 6), sig.take_profit)
                                 if _verify_order_placed(tp_resp, "TP"):
                                     tp_oid = tp_resp.get("orderId")
-                                    print(f"   🎯 TP1 #{tp_oid} @ ${sig.take_profit:,.2f} "
+                                    print(f"   [TARGET] TP1 #{tp_oid} @ ${sig.take_profit:,.2f} "
                                           f"({PARTIAL_TP_FRACTIONS[0]*100:.0f}%)")
                             except Exception as e:
-                                print(f"   ⚠️ TP failed: {e}")
+                                print(f"   [WARN] TP failed: {e}")
 
                         with _position_lock:
                             pos_id = db.open_position_live(
@@ -872,13 +873,13 @@ def run_live():
 
                     last_signal_time[current_symbol] = last_bar
                 else:
-                    print("⏸️  No signal this bar")
+                    print("[SKIP]  No signal this bar")
                     last_signal_time[current_symbol] = last_bar
 
                 # ── Market snapshot ──
                 last = df.iloc[-1]
                 price = last['close']
-                print(f"📊 {current_symbol} ${price:,.2f} | ATR: {last.get('atr_pct',0):.2f}% "
+                print(f"[DATA] {current_symbol} ${price:,.2f} | ATR: {last.get('atr_pct',0):.2f}% "
                       f"| RSI: {last.get('rsi_14',0):.0f} | ADX: {last.get('adx',0):.0f}")
 
             # ── Portfolio risk score ──
@@ -887,7 +888,7 @@ def run_live():
                 risk_score = corr_mgr.get_portfolio_risk_score(open_pos)
                 heat = risk_mgr.get_portfolio_heat(open_pos)
                 dd_mult = risk_mgr.get_drawdown_size_multiplier()
-                print(f"\n📈 Correlation: {risk_score:.2f} | Heat: {heat:.1%} | DD mult: {dd_mult:.2f}x")
+                print(f"\n[RESULT] Correlation: {risk_score:.2f} | Heat: {heat:.1%} | DD mult: {dd_mult:.2f}x")
 
             # ── Funding rates ──
             if USE_FUTURES:
@@ -909,12 +910,12 @@ def run_live():
             mon.update_equity(risk_mgr.capital + unrealized, risk_mgr.initial_capital, unrealized, len(open_pos))
 
         except Exception as e:
-            print(f"❌ Loop error: {e}")
+            print(f"[ERROR] Loop error: {e}")
             traceback.print_exc()
             mon.set_status("error", str(e))
             db.log("ERROR", "engine", str(e))
 
-        print(f"\n💤 Next in {LOOP_INTERVAL_SECONDS}s...")
+        print(f"\n[SLEEP] Next in {LOOP_INTERVAL_SECONDS}s...")
         time.sleep(LOOP_INTERVAL_SECONDS)
 
 
@@ -933,7 +934,7 @@ def run_backtest():
     db_ready = wait_for_db()
     df = get_data(use_api=True, days=LOOKBACK_DAYS)
     if len(df) < 100:
-        print("❌ Not enough data")
+        print("[ERROR] Not enough data")
         return
 
     engine = BacktestEngine(capital=INITIAL_CAPITAL, use_db=db_ready)

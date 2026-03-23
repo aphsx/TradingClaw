@@ -4,11 +4,11 @@ CCXT Client — Drop-in Binance order executor
 Replaces raw HTTP calls in binance_client.py with CCXT.
 
 Why CCXT?
-  fetchOrder()     → order_id, status, filled, remaining, timestamp ✅
-  fetchMyTrades()  → trade_id, order_id, real fill price, real fee, cost ✅
-  createOrder()    → place market/limit/SL/TP orders ✅
-  fetchBalance()   → wallet balances ✅
-  fetchTicker()    → current price ✅
+  fetchOrder()     → order_id, status, filled, remaining, timestamp [OK]
+  fetchMyTrades()  → trade_id, order_id, real fill price, real fee, cost [OK]
+  createOrder()    → place market/limit/SL/TP orders [OK]
+  fetchBalance()   → wallet balances [OK]
+  fetchTicker()    → current price [OK]
 
 Public API (same names as binance_client.py for drop-in use):
   place_market_order(symbol, side, quantity, reduce_only=False) → parsed dict

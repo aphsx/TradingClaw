@@ -42,7 +42,7 @@ class BacktestEngine:
     def run(self, df: pd.DataFrame, train_ratio: float = 0.6,
             pretrained: bool = False) -> dict:
         print("\n" + "=" * 60)
-        print("🚀 REGIME DETECTION BACKTEST")
+        print("[START] REGIME DETECTION BACKTEST")
         print("=" * 60)
 
         # Step 1: Features
@@ -66,23 +66,23 @@ class BacktestEngine:
             train_feat, test_feat = regime_features.iloc[:0], regime_features
             train_stats = {'cv_accuracy': 'N/A (pretrained)', 'holdout_accuracy': 'N/A',
                            'model': 'pretrained'}
-            print(f"\n📊 Pretrained mode | Test: {len(test_df)} bars (no retrain)")
+            print(f"\n[DATA] Pretrained mode | Test: {len(test_df)} bars (no retrain)")
         else:
             split_idx = int(len(df) * train_ratio)
             train_df, test_df = df.iloc[:split_idx], df.iloc[split_idx:]
             train_feat, test_feat = regime_features.iloc[:split_idx], regime_features.iloc[split_idx:]
-            print(f"\n📊 Train: {len(train_df)} | Test: {len(test_df)}")
+            print(f"\n[DATA] Train: {len(train_df)} | Test: {len(test_df)}")
 
         # Step 3: Train (skipped when pretrained=True)
         if not pretrained:
-            print("\n🧠 Training regime detector...")
+            print("\n[ML] Training regime detector...")
             train_stats = self.detector.fit(train_df, train_feat)
             print(f"   CV Accuracy:      {train_stats['cv_accuracy']}")
             print(f"   Holdout Accuracy: {train_stats.get('holdout_accuracy', 'N/A')}")
 
         # Step 4: Predict regimes for DB/reporting ONLY (uses full sequence — OK for display)
         # NOTE: signal generation below uses per-bar prediction (no look-ahead).
-        print("\n🔮 Predicting regimes (for reporting)...")
+        print("\n[REGIME] Predicting regimes (for reporting)...")
         test_regimes_report = self.detector.predict(test_feat)
         regime_counts = test_regimes_report.value_counts()
         for r, c in regime_counts.items():
@@ -98,7 +98,7 @@ class BacktestEngine:
         # on only the bars available up to each point in time.
         # A rolling window of REGIME_LOOKBACK bars keeps this O(n) instead of O(n²).
         REGIME_LOOKBACK = 120  # 120 1h bars = 5 days of regime context
-        print(f"\n📡 Generating signals (no-lookahead, window={REGIME_LOOKBACK})...")
+        print(f"\n[SIGNAL] Generating signals (no-lookahead, window={REGIME_LOOKBACK})...")
         all_signals = []
         for i in range(60, len(test_df)):
             bar_df = test_df.iloc[:i+1]
@@ -125,9 +125,9 @@ class BacktestEngine:
                 if bt_trades is not None and len(bt_trades) >= ML_MIN_SAMPLES:
                     self.ml_filter.train(bt_trades, train_df)
                     ml_trained_bt = True
-                    print(f"   🤖 ML filter trained on {len(bt_trades)} trades")
+                    print(f"   [ML] ML filter trained on {len(bt_trades)} trades")
             except Exception as e:
-                print(f"   ⚠️  ML filter train (backtest): {e}")
+                print(f"   [WARN]  ML filter train (backtest): {e}")
 
         # Apply ML filter to backtest signals when trained
         if ml_trained_bt:
@@ -153,7 +153,7 @@ class BacktestEngine:
                         ml_rejected += 1
                 except Exception:
                     ml_passed.append(s)  # On error, keep signal
-            print(f"   🤖 ML filter: {len(ml_passed)} passed, {ml_rejected} rejected")
+            print(f"   [ML] ML filter: {len(ml_passed)} passed, {ml_rejected} rejected")
             all_signals = ml_passed
 
         # Save signals to DB
@@ -165,7 +165,7 @@ class BacktestEngine:
                 signal_id_map[s.timestamp] = sid
 
         # Step 7: Execute
-        print("\n⚡ Executing backtest...")
+        print("\n[FAST] Executing backtest...")
         self.risk_mgr.reset()
         signal_map = {}
         for s in passed:
@@ -347,9 +347,9 @@ class BacktestEngine:
     def _print_results(self):
         t = self.results.get('trading', {})
         if 'error' in t:
-            print(f"❌ {t['error']}"); return
+            print(f"[ERROR] {t['error']}"); return
 
-        print(f"\n{'='*60}\n📈 BACKTEST RESULTS\n{'='*60}")
+        print(f"\n{'='*60}\n[RESULT] BACKTEST RESULTS\n{'='*60}")
         for k, v in [("Total Trades", t['total_trades']), ("Win Rate", t['win_rate']),
                       ("Profit Factor", t['profit_factor']),
                       ("Total PnL", f"${t['total_pnl']}"),

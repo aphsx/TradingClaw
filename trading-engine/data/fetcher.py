@@ -86,7 +86,7 @@ def validate_candles(df: pd.DataFrame, symbol: str = "BTCUSDT") -> pd.DataFrame:
         avg_range = candle_range.rolling(20).mean()
         spike_mask = candle_range > avg_range * 10
         if spike_mask.sum() > 0:
-            print(f"⚠️ {symbol}: Detected {spike_mask.sum()} spike candles, flagging")
+            print(f"[WARN] {symbol}: Detected {spike_mask.sum()} spike candles, flagging")
             df.loc[spike_mask, 'is_spike'] = True
     return df
 
@@ -102,7 +102,7 @@ def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
     end_time = int(time.time() * 1000)
     start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
 
-    print(f"📊 Fetching {symbol} {interval} data from Binance ({days} days)...")
+    print(f"[DATA] Fetching {symbol} {interval} data from Binance ({days} days)...")
 
     while start_time < end_time:
         try:
@@ -123,11 +123,11 @@ def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
             time.sleep(0.1)  # Rate limit
 
         except Exception as e:
-            print(f"⚠️ Error fetching data: {e}")
+            print(f"[WARN] Error fetching data: {e}")
             break
     
     if not all_data:
-        print("❌ No data fetched from Binance")
+        print("[ERROR] No data fetched from Binance")
         return pd.DataFrame()
     
     df = pd.DataFrame(all_data, columns=[
@@ -146,7 +146,7 @@ def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
     # Validate candles
     df = validate_candles(df, symbol)
 
-    print(f"✅ Fetched {len(df)} candles from {df.index[0]} to {df.index[-1]}")
+    print(f"[OK] Fetched {len(df)} candles from {df.index[0]} to {df.index[-1]}")
     return df
 
 
@@ -307,9 +307,9 @@ def fetch_multi_symbol(symbols: list, interval: str = "1h", lookback_days: int =
             df = fetch_klines(symbol=symbol, interval=interval, lookback_days=lookback_days)
             df = validate_candles(df, symbol)
             result[symbol] = df
-            print(f"✅ Fetched {len(df)} candles for {symbol}")
+            print(f"[OK] Fetched {len(df)} candles for {symbol}")
         except Exception as e:
-            print(f"⚠️ Failed to fetch {symbol}: {e}")
+            print(f"[WARN] Failed to fetch {symbol}: {e}")
     return result
 
 
@@ -321,11 +321,11 @@ def get_data(use_api: bool = True, days: int = LOOKBACK_DAYS) -> pd.DataFrame:
             if len(df) > 100:
                 return df
         except Exception as e:
-            print(f"⚠️ API failed: {e}, using synthetic data")
+            print(f"[WARN] API failed: {e}, using synthetic data")
     
-    print("📊 Generating realistic synthetic BTC data...")
+    print("[DATA] Generating realistic synthetic BTC data...")
     df = generate_realistic_btc_data(days=days)
-    print(f"✅ Generated {len(df)} candles from {df.index[0]} to {df.index[-1]}")
+    print(f"[OK] Generated {len(df)} candles from {df.index[0]} to {df.index[-1]}")
     return df
 
 

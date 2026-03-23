@@ -76,12 +76,12 @@ def emit_equity_update(data: dict):
 
 @sio.event
 def connect(sid, environ):
-    print(f"🔌 Client connected: {sid}")
+    print(f"[SOCKET] Client connected: {sid}")
 
 
 @sio.event
 def disconnect(sid):
-    print(f"🔌 Client disconnected: {sid}")
+    print(f"[SOCKET] Client disconnected: {sid}")
 
 
 @sio.event
@@ -90,7 +90,7 @@ def subscribe(sid, data):
     rooms = data.get('rooms', [])
     for room in rooms:
         sio.enter_room(sid, room)
-        print(f"📡 Client {sid} subscribed to {room}")
+        print(f"[SIGNAL] Client {sid} subscribed to {room}")
 
 
 # ═══════════════════════════════════════
@@ -105,10 +105,10 @@ def run_socket_server(host='0.0.0.0', port=8080):
     def start_server():
         try:
             listener = eventlet.listen((host, port))
-            print(f"🚀 Socket.IO server started on http://{host}:{port}")
+            print(f"[START] Socket.IO server started on http://{host}:{port}")
             eventlet.wsgi.server(listener, socketio_app)
         except Exception as e:
-            print(f"❌ Socket.IO server error: {e}")
+            print(f"[ERROR] Socket.IO server error: {e}")
     
     thread = threading.Thread(target=start_server, daemon=True)
     thread.start()

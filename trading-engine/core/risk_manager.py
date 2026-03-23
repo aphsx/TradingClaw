@@ -136,7 +136,7 @@ class RiskManager:
         Returns a human-readable summary string for logging.
         """
         if live_balance <= 0:
-            return f"⚠️  sync_capital: invalid balance {live_balance} — keeping ${self.capital:.2f}"
+            return f"[WARN]  sync_capital: invalid balance {live_balance} — keeping ${self.capital:.2f}"
 
         old_capital = self.capital
         self.capital = live_balance
@@ -157,7 +157,7 @@ class RiskManager:
         self._tier_label = tier["label"]
 
         return (
-            f"💰 Capital synced: ${old_capital:.2f} → ${live_balance:.2f} | "
+            f"[BALANCE] Capital synced: ${old_capital:.2f} → ${live_balance:.2f} | "
             f"Tier: {self._tier_label} | "
             f"Risk/trade: {self._risk_pct*100:.1f}% | "
             f"Min notional: ${self._min_notional:.1f}"

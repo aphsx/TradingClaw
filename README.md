@@ -226,7 +226,7 @@ SELECT regime_name, COUNT(*) FROM regimes GROUP BY regime_name;
 
 ---
 
-## ⚠️ สำคัญ
+## [WARN] สำคัญ
 
 1. **เปลี่ยน API Key** ใน `.env` ก่อนใช้งาน!
 2. **Futures Demo Trading:**
