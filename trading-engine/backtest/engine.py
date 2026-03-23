@@ -247,6 +247,10 @@ class BacktestEngine:
                     pos = self.risk_mgr.open_position(signal, idx)
                     if pos:
                         # ── Fix #5: Scale position size by signal confidence + volatility ──
+                        # CRITICAL: open_position() already locked capital for the FULL
+                        # quantity. We MUST refund the unused portion before reducing
+                        # pos.quantity, otherwise capital leaks and the circuit breaker
+                        # falsely triggers on the very next trade.
                         conf = abs(signal.composite_score)
                         if conf < 0.50:
                             size_mult = 0.5    # Weak signal → half size
@@ -254,7 +258,23 @@ class BacktestEngine:
                             size_mult = 0.75   # Moderate signal → 3/4 size
                         else:
                             size_mult = 1.0    # Strong signal → full size
-                        pos.quantity = round(pos.quantity * size_mult * signal.vol_size_mult, 6)
+
+                        total_mult = size_mult * signal.vol_size_mult
+                        if total_mult < 1.0 and pos.quantity > 0:
+                            original_qty = pos.quantity
+                            new_qty = round(original_qty * total_mult, 6)
+                            qty_delta = original_qty - new_qty
+                            if qty_delta > 0:
+                                # Refund the capital + entry fee for the unused portion
+                                notional_refund = qty_delta * pos.entry_price
+                                fee_refund      = notional_refund * TAKER_FEE
+                                self.risk_mgr.capital += notional_refund + fee_refund
+                                # Adjust fees_paid proportionally
+                                pos.fees_paid = round(pos.fees_paid * (new_qty / original_qty), 8)
+                                pos.quantity  = new_qty
+                        # Note: total_mult > 1.0 (low-vol boost) is capped at original qty;
+                        # scaling up would require additional capital checks.
+
                         executed += 1
                         if self.use_db:
                             sid = signal_id_map.get(signal.timestamp, None)

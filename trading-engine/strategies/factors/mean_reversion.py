@@ -55,13 +55,15 @@ class MeanReversionFactor:
         # Raw mapping: 0 (lower band) = +1, 0.5 (mid) = 0, 1 (upper band) = -1
         raw = -(bb_pct * 2 - 1).clip(-1, 1)
 
-        # Dead zone: price within 0.20–0.80 of band has no mean-reversion edge
-        dead_zone = (bb_pct > 0.20) & (bb_pct < 0.80)
+        # Dead zone: price within 0.30–0.70 of band has no mean-reversion edge.
+        # (0.20–0.80 was too wide — it zeroed 60% of the distribution and
+        #  crushed composite scores below the entry threshold.)
+        dead_zone = (bb_pct > 0.30) & (bb_pct < 0.70)
         score = raw.where(~dead_zone, 0.0)
 
-        # Extra boost at hard extremes (%B < 0.10 or > 0.90)
-        extreme_low  = (bb_pct < 0.10).astype(float) * 0.3
-        extreme_high = (bb_pct > 0.90).astype(float) * -0.3
+        # Extra boost at hard extremes (%B < 0.15 or > 0.85)
+        extreme_low  = (bb_pct < 0.15).astype(float) * 0.3
+        extreme_high = (bb_pct > 0.85).astype(float) * -0.3
         score = score + extreme_low + extreme_high
 
         # Amplify when squeeze is active (BB inside Keltner = volatility compression)
