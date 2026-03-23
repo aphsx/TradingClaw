@@ -166,9 +166,9 @@ ML_THRESHOLD           = 0.55 # Default threshold (tuned per retrain)
 
 # ─── Scaled Entry / Exit ───
 SCALED_ENTRY_LEGS      = 3              # 1=market only, 3=split entry
-PARTIAL_TP1_R          = 1.5            # Close 30% at 1.5R
-PARTIAL_TP2_R          = 3.0            # Close 30% at 3R
-PARTIAL_TP_FRACTIONS   = [0.30, 0.30, 0.40]  # Per TP level (40% trails)
+PARTIAL_TP1_R          = 2.0            # Close 25% at 2R  (was 1.5R/30%)
+PARTIAL_TP2_R          = 4.0            # Close 25% at 4R  (was 3R/30%)
+PARTIAL_TP_FRACTIONS   = [0.25, 0.25, 0.50]  # Per TP level (50% trails — let winners run)
 
 # ─── Dynamic Stops ───
 CHANDELIER_PERIOD      = 22
@@ -179,3 +179,17 @@ SWING_LOOKBACK         = 15   # Bars to look for swing high/low
 MAX_PORTFOLIO_HEAT     = 0.06  # Max 6% capital at risk across all positions
 DRAWDOWN_SCALE_LEVELS  = [0.05, 0.08, 0.12, 0.15]  # Drawdown thresholds
 DRAWDOWN_SIZE_FACTORS  = [1.0,  0.75, 0.50, 0.25]  # Corresponding size multipliers
+
+# ─── Regime Monitoring & Circuit Breakers ───
+# Prevents trading in a regime that has been consistently losing.
+REGIME_MIN_CONFIDENCE       = 0.55   # Skip entry if HMM confidence < this
+REGIME_REDUCE_AFTER_LOSSES  = 3      # After N consecutive losses in a regime: size × 0.5
+REGIME_DISABLE_AFTER_LOSSES = 5      # After N consecutive losses: disable regime for REGIME_COOLDOWN_BARS
+REGIME_COOLDOWN_BARS        = 20     # Bars to wait before re-enabling a disabled regime
+REGIME_CIRCUIT_R_THRESHOLD  = -4.0   # Cumulative R < this also triggers disable
+
+# ─── Trade Health Monitoring ───
+# If a trade hasn't moved favorably after N hours, tighten the stop loss.
+TRADE_HEALTH_MIN_HOURS      = 3      # Minimum hours before health check activates
+TRADE_HEALTH_R_THRESHOLD    = -0.35  # If at this R-multiple, tighten SL
+TRADE_HEALTH_SL_TIGHTEN_PCT = 0.50   # Move SL this fraction toward entry price

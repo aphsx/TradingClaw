@@ -120,6 +120,7 @@ def run_live():
     from core.correlation import CorrelationManager
     from core.position_manager import PositionManager
     from core.execution_analytics import ExecutionAnalytics  # Issue #10
+    from core.regime_monitor import RegimeMonitor
     from strategies.signal_engine import SignalEngine
 
     print("=" * 60)
@@ -152,14 +153,18 @@ def run_live():
         raise RuntimeError("Live mode requires real Binance balance; aborting startup")
 
     # ── Core components ──
-    detector   = RegimeDetector()
-    risk_mgr   = RiskManager(initial_capital=live_balance)
-    ml_filter  = MLSignalFilter(min_samples=ML_MIN_SAMPLES, threshold=ML_THRESHOLD)
-    corr_mgr   = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
-                                    correlation_threshold=0.7)
-    pos_mgr    = PositionManager()
-    sig_engine = SignalEngine()
+    detector    = RegimeDetector()
+    risk_mgr    = RiskManager(initial_capital=live_balance)
+    ml_filter   = MLSignalFilter(min_samples=ML_MIN_SAMPLES, threshold=ML_THRESHOLD)
+    corr_mgr    = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
+                                     correlation_threshold=0.7)
+    pos_mgr     = PositionManager()
+    sig_engine  = SignalEngine()
     exec_analytics = ExecutionAnalytics(window=50)  # Issue #10
+    regime_mon  = RegimeMonitor()                   # Per-regime circuit breakers
+
+    # Shared dict for monitor thread to read current regime per symbol (no DB round-trip)
+    _current_regimes: dict = {}  # symbol → {'regime': int, 'confidence': float}
 
     # Print tier info so operator knows what risk level is active
     print(f"   {risk_mgr.sync_capital(live_balance)}")
@@ -315,6 +320,63 @@ def run_live():
                         except Exception as e:
                             print(f"[WARN] Trail TP: {e}")
 
+                        # ── Trade health monitoring ──
+                        try:
+                            health = pos_mgr.check_trade_health(pos, price)
+                            if health:
+                                print(f"[HEALTH] {health['reason']}")
+                                new_sl = health['new_sl']
+                                pos['stop_loss'] = new_sl
+                                pos['health_sl_tightened'] = True
+                                # Replace SL order on exchange
+                                if pos.get('sl_order_id') and TRADING_MODE != "paper":
+                                    try:
+                                        bnb.cancel_order(pos['symbol'], int(pos['sl_order_id']))
+                                    except Exception:
+                                        pass
+                                    sl_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
+                                    new_sl_order = bnb.place_stop_loss_order(
+                                        pos['symbol'], sl_side, float(pos['quantity']), new_sl)
+                                    if new_sl_order.get('orderId'):
+                                        pos['sl_order_id'] = new_sl_order['orderId']
+                                mon.publish_position_open(pos['id'], pos)
+                                db.log("WARN", "health", f"SL tightened #{pos['id']}", health)
+                        except Exception as e:
+                            print(f"[WARN] Health check: {e}")
+
+                        # ── Regime flip exit ──
+                        try:
+                            sym = pos.get('symbol', SYMBOL)
+                            reg_info = _current_regimes.get(sym, {})
+                            current_reg_id  = reg_info.get('regime', -1)
+                            entry_reg_id    = int(pos.get('entry_regime', current_reg_id))
+                            if current_reg_id >= 0 and regime_mon.should_exit_on_regime_flip(
+                                pos.get('direction', 'LONG'), entry_reg_id, current_reg_id
+                            ):
+                                print(f"[REGIME-FLIP] Adverse regime flip #{pos['id']} "
+                                      f"({REGIME_NAMES.get(entry_reg_id,'?')} → "
+                                      f"{REGIME_NAMES.get(current_reg_id,'?')}) — exiting")
+                                close_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
+                                if TRADING_MODE != "paper":
+                                    flip_order = bnb.place_market_order(
+                                        pos['symbol'], close_side, float(pos['quantity']),
+                                        reduce_only=True)
+                                    if flip_order.get('orderId'):
+                                        pnl = float(pos.get('unrealized_pnl', 0))
+                                        r_mult = regime_mon.estimate_r_multiple(pos, price)
+                                        regime_mon.record_outcome(entry_reg_id, r_mult)
+                                        mon.publish_position_close(pos['id'], {
+                                            'exit_price': price, 'reason': 'Regime Flip',
+                                            'pnl': pnl, 'r_multiple': r_mult,
+                                        })
+                                        db.log("WARN", "regime_flip", f"Exit #{pos['id']}", {
+                                            'entry_regime': REGIME_NAMES.get(entry_reg_id),
+                                            'exit_regime': REGIME_NAMES.get(current_reg_id),
+                                            'r_multiple': r_mult,
+                                        })
+                        except Exception as e:
+                            print(f"[WARN] Regime flip exit: {e}")
+
                         # ── Time/funding exit ──
                         try:
                             if pos_mgr.should_time_exit(pos):
@@ -332,11 +394,24 @@ def run_live():
                         except Exception as e:
                             print(f"[WARN] Time exit: {e}")
 
-                    # Sync fills with Binance
+                    # Sync fills with Binance + record outcomes to regime_monitor
                     try:
+                        # Snapshot positions before sync so we can compute R on closed ones
+                        _pre_sync_positions = {p['id']: p for p in open_positions}
                         closed = mon.sync_open_positions_with_binance(db)
                         if closed:
                             db.log("INFO", "monitor", f"Synced {len(closed)} closes", {"ids": closed})
+                            for closed_id in closed:
+                                try:
+                                    closed_pos = _pre_sync_positions.get(int(closed_id))
+                                    if closed_pos:
+                                        entry_regime = int(closed_pos.get('entry_regime', -1))
+                                        if entry_regime >= 0:
+                                            # Estimate exit price from unrealized PnL or last price
+                                            r = regime_mon.estimate_r_multiple(closed_pos, price)
+                                            regime_mon.record_outcome(entry_regime, r)
+                                except Exception:
+                                    pass
                     except Exception as e:
                         print(f"[WARN] Sync: {e}")
 
@@ -611,6 +686,13 @@ def run_live():
                       + (" [FAST]transitioning" if transitioning else ""))
                 mon.update_regime(rname, rconf, current_regime['probabilities'])
 
+                # Publish current regime for monitor thread (regime flip exit)
+                _current_regimes[current_symbol] = {'regime': regime_id, 'confidence': rconf}
+
+                # Tick regime monitor bar counter (once per symbol per loop is fine)
+                if current_symbol == SYMBOLS[0]:
+                    regime_mon.tick()
+
                 # ── ML filter training ──
                 # Issue #1: Cold-start pretrain from backtest on first loop, before live filter
                 if not _ml_pretrained_attempted and current_symbol == SYMBOLS[0]:
@@ -694,6 +776,13 @@ def run_live():
                               f"| TP2: ${sig.take_profit_2:,.2f}")
                         print(f"   Strategy: {sig.strategy}")
 
+                        # ── Regime Monitor: circuit breaker + confidence gate ──
+                        regime_ok, regime_reason = regime_mon.can_trade(regime_id, rconf)
+                        if not regime_ok:
+                            print(f"   [REGIME-MON] Blocked: {regime_reason}")
+                            continue
+                        regime_size_mult = regime_mon.get_size_multiplier(regime_id)
+
                         # ── Issue #7: Regime Transition Buffer ──
                         # Instead of hard-skipping all transition signals (which misses
                         # genuine breakouts), we reduce position size proportionally
@@ -736,16 +825,17 @@ def run_live():
                             print(f"   [INFO] Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
 
                         # ── Position size ──
-                        # Kelly (tier-aware risk%) × drawdown × volatility × transition reduction
+                        # Kelly (tier-aware risk%) × drawdown × volatility × transition × regime health
                         qty = risk_mgr.calculate_position_size(sig)
                         dd_mult  = risk_mgr.get_drawdown_size_multiplier()
                         vol_mult = getattr(sig, 'vol_size_mult', 1.0)  # From VolatilityFactor
-                        qty *= dd_mult * vol_mult * transition_size_mult  # Issue #7
+                        qty *= dd_mult * vol_mult * transition_size_mult * regime_size_mult
                         qty = round(qty, 6)
                         tier = risk_mgr.get_tier_info()
                         print(f"   [BALANCE] Tier: {tier['tier']} | Risk: {tier['risk_pct']} "
                               f"(${tier['risk_amount_usd']}) | DD: {dd_mult:.2f}x | "
-                              f"Vol: {vol_mult:.2f}x | Trans: {transition_size_mult:.2f}x | Qty: {qty}")
+                              f"Vol: {vol_mult:.2f}x | Trans: {transition_size_mult:.2f}x | "
+                              f"Regime: {regime_size_mult:.2f}x | Qty: {qty}")
                         if qty <= 0:
                             print("   [BLOCK] Quantity zero after adjustments")
                             continue
@@ -861,6 +951,8 @@ def run_live():
                                 "tp1_hit": False, "tp2_hit": False,
                                 "composite_score": getattr(sig, 'composite_score', 0),
                                 "ml_probability": ml_result.get("probability"),
+                                # Regime monitoring: store entry regime for flip detection
+                                "entry_regime": regime_id,
                             })
 
                             db.log("INFO", "trade", f"Opened #{pos_id}", {
@@ -903,6 +995,17 @@ def run_live():
                         })
                     except Exception:
                         pass
+
+            # ── Regime monitor health report (every 10 loops) ──
+            if loop_count % 10 == 0:
+                health = regime_mon.get_health_report()
+                print(f"[REGIME-MON] Health @ bar {health['bar_counter']}:")
+                for reg_id, stats in health['regimes'].items():
+                    if stats['total_trades'] > 0:
+                        print(f"   {stats['name']}: {stats['total_trades']} trades | "
+                              f"WR={stats['win_rate']} | avgR={stats['avg_r_recent']:+.2f} | "
+                              f"consec_loss={stats['consecutive_losses']} | "
+                              f"size_mult={stats['size_multiplier']:.0%}")
 
             # ── Equity update ──
             price = bnb.get_price(SYMBOL)

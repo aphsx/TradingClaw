@@ -12,6 +12,7 @@ from config import (
     TRAILING_STOP_ACTIVATION, TRAILING_STOP_DISTANCE,
     CHANDELIER_PERIOD, CHANDELIER_MULT,
     MAX_FUNDING_RATE,
+    TRADE_HEALTH_MIN_HOURS, TRADE_HEALTH_R_THRESHOLD, TRADE_HEALTH_SL_TIGHTEN_PCT,
 )
 import pandas as pd
 import numpy as np
@@ -148,6 +149,77 @@ class PositionManager:
                 return current_sl
             new_sl = current_price * (1 + TRAILING_STOP_DISTANCE)
             return min(new_sl, current_sl)
+
+    # ─── Trade Health Monitoring ───
+    def check_trade_health(self, pos: dict, current_price: float) -> Optional[dict]:
+        """
+        After TRADE_HEALTH_MIN_HOURS hours, check if the trade has moved adversely.
+        If position is at TRADE_HEALTH_R_THRESHOLD (e.g. -0.35R) or worse,
+        tighten the stop loss toward the entry to cut max loss.
+
+        Only fires once (won't re-tighten), and never fires after TP1 is hit.
+        """
+        # Don't interfere once trade is partially profitable
+        if pos.get('tp1_hit'):
+            return None
+        # Don't re-tighten if already health-tightened
+        if pos.get('health_sl_tightened'):
+            return None
+
+        entry_time_str = pos.get('entry_time')
+        if not entry_time_str:
+            return None
+
+        try:
+            if isinstance(entry_time_str, str):
+                entry_time = datetime.fromisoformat(entry_time_str.replace('Z', '+00:00'))
+            else:
+                entry_time = entry_time_str
+            if entry_time.tzinfo is None:
+                entry_time = entry_time.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600
+        except Exception:
+            return None
+
+        if age_hours < TRADE_HEALTH_MIN_HOURS:
+            return None
+
+        entry = float(pos.get('entry_fill_price') or pos.get('entry_price', 0))
+        sl    = float(pos.get('stop_loss', 0))
+        direction = pos.get('direction', 'LONG')
+
+        if entry <= 0 or sl <= 0:
+            return None
+
+        risk = abs(entry - sl)
+        if risk <= 0:
+            return None
+
+        # Current R-multiple
+        if direction == 'LONG':
+            current_r = (current_price - entry) / risk
+        else:
+            current_r = (entry - current_price) / risk
+
+        if current_r >= TRADE_HEALTH_R_THRESHOLD:
+            return None  # Trade is within acceptable range, no action needed
+
+        # Tighten SL: move it TRADE_HEALTH_SL_TIGHTEN_PCT of the way toward entry
+        if direction == 'LONG':
+            new_sl = sl + (entry - sl) * TRADE_HEALTH_SL_TIGHTEN_PCT
+            new_sl = max(new_sl, sl)   # Can only tighten (move up)
+        else:
+            new_sl = sl - (sl - entry) * TRADE_HEALTH_SL_TIGHTEN_PCT
+            new_sl = min(new_sl, sl)   # Can only tighten (move down)
+
+        return {
+            'action':     'tighten_sl',
+            'new_sl':     new_sl,
+            'current_r':  round(current_r, 3),
+            'age_hours':  round(age_hours, 1),
+            'reason':     (f'Trade health: {current_r:+.2f}R after {age_hours:.1f}h '
+                           f'→ SL tightened {sl:.2f} → {new_sl:.2f}'),
+        }
 
     # ─── Time / funding exit ───
     def should_time_exit(self, pos: dict) -> bool:
