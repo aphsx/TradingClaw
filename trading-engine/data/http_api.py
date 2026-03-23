@@ -61,10 +61,13 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             if self.path == '/health':
-                from config import EXCHANGE_NAME
+                from config import EXCHANGE_NAME, TRADING_MODE, SYMBOLS, LEVERAGE
                 self._json(200, {
                     'status': 'ok',
                     'exchange': EXCHANGE_NAME.upper(),
+                    'mode': TRADING_MODE.upper(),
+                    'symbols': SYMBOLS,
+                    'leverage': LEVERAGE
                 })
 
             elif self.path == '/balance':

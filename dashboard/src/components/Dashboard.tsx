@@ -81,6 +81,7 @@ export default function Dashboard({ data }: { data: any }) {
   const [orderLoading, setOrderLoading] = useState<'BUY' | 'SELL' | null>(null);
   const [orderResult, setOrderResult] = useState<string | null>(null);
   const [activeExchange, setActiveExchange] = useState<string | null>(null);
+  const [systemInfo, setSystemInfo] = useState<{ mode: string, symbols: string[], leverage: number } | null>(null);
 
   const fetchLive = useCallback(async () => {
     try {
@@ -113,6 +114,11 @@ export default function Dashboard({ data }: { data: any }) {
       const healthRes = await fetch('/api/health').then(r => r.json());
       if (healthRes.exchange) {
         setActiveExchange(healthRes.exchange);
+        setSystemInfo({
+          mode: healthRes.mode,
+          symbols: healthRes.symbols,
+          leverage: healthRes.leverage
+        });
       }
     } catch (e) {
       console.warn('Failed to fetch health/exchange', e);
@@ -349,12 +355,33 @@ export default function Dashboard({ data }: { data: any }) {
           <div className="flex items-center gap-2 mb-0.5">
             <h1 className="text-2xl font-bold">Futures Trading System</h1>
             {activeExchange && (
-              <span className="px-2 py-0.5 bg-blue-500/20 text-blue-400 text-[10px] font-bold rounded border border-blue-500/30 uppercase tracking-tighter">
-                {activeExchange}
-              </span>
+              <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#1a1a24] border border-[#1e1e2e] rounded shadow-sm">
+                <span className="text-[10px] uppercase font-semibold text-gray-500 tracking-wider">Broker:</span>
+                <span className={`px-1.5 py-0.5 text-[11px] font-bold rounded uppercase tracking-tight
+                  ${activeExchange === 'BINANCE' ? 'bg-[#F3BA2F]/10 text-[#F3BA2F]' : 
+                    activeExchange === 'OKX' ? 'bg-[#ffffff]/10 text-white' : 
+                    activeExchange === 'BYBIT' ? 'bg-[#f7a600]/10 text-[#f7a600]' : 'bg-blue-500/20 text-blue-400'}`}>
+                  {activeExchange}
+                </span>
+                {systemInfo && (
+                  <>
+                    <div className="w-[1px] h-3 bg-[#1e1e2e] mx-0.5" />
+                    <span className={`text-[10px] font-bold uppercase ${systemInfo.mode === 'LIVE' ? 'text-red-400' : 'text-green-400'}`}>
+                      {systemInfo.mode}
+                    </span>
+                    <div className="w-[1px] h-3 bg-[#1e1e2e] mx-0.5" />
+                    <span className="text-[10px] text-gray-400">{systemInfo.leverage}x</span>
+                  </>
+                )}
+              </div>
             )}
           </div>
-          <p className="text-sm text-gray-500">Universal Crypto Futures · Paper Trading (Live Data) · Real-time</p>
+          <p className="text-sm text-gray-500">
+            {systemInfo && systemInfo.symbols.length > 0
+              ? `Trading: ${systemInfo.symbols.join(', ')}`
+              : 'Universal Crypto Futures · Paper Trading (Live Data) · Real-time'
+            }
+          </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
 
