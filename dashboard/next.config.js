@@ -1,27 +1,71 @@
 /** @type {import('next').NextConfig} */
 const path = require('path')
+const fs   = require('fs')
 
-// Load root .env (TradingClaw/.env) — single source of truth for local dev.
-// In Docker, env vars are injected directly so this is a no-op.
-require('dotenv').config({ path: path.resolve(__dirname, '../.env') })
+// ─── Env loading strategy ─────────────────────────────────────────────────────
+//
+//  Mode          | Source                        | Loaded by
+//  ──────────────┼───────────────────────────────┼──────────────────────────────
+//  Docker        | docker-compose environment:   | OS process.env (runtime)
+//                | docker-compose build.args     | ARG/ENV in Dockerfile (build)
+//  Local dev     | dashboard/.env.local          | Next.js built-in auto-loader
+//                | TradingClaw/.env (via dotenv) | try-catch below
+//  CI            | Shell env vars                | OS process.env
+//
+// Rule: NEVER crash — all three try-catches are intentional no-ops.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 1. Try to load root .env via dotenv (local dev only, dotenv package optional)
+try {
+  require('dotenv').config({ path: path.resolve(__dirname, '../.env') })
+} catch (_) {
+  // dotenv not installed — Next.js auto-loads .env.local; Docker injects via env
+}
+
+// 2. Auto-sync .env.local from root .env (local dev only, no-op in Docker)
+//    Skips when root .env doesn't exist (e.g. inside Docker container).
+try {
+  const rootEnv  = path.resolve(__dirname, '../.env')
+  const localEnv = path.resolve(__dirname, '.env.local')
+
+  if (fs.existsSync(rootEnv)) {
+    const rootMtime  = fs.statSync(rootEnv).mtimeMs
+    const localMtime = fs.existsSync(localEnv) ? fs.statSync(localEnv).mtimeMs : 0
+
+    if (rootMtime > localMtime) {
+      const lines = fs.readFileSync(rootEnv, 'utf8')
+        .split('\n')
+        .filter(l => l.trim() && !l.trim().startsWith('#'))
+      const header = '# Auto-synced from TradingClaw/.env — do not edit manually\n'
+      fs.writeFileSync(localEnv, header + lines.join('\n') + '\n')
+      console.log('📄 [next.config] .env.local synced from root .env')
+    }
+  }
+} catch (_) {
+  // Non-fatal — expected in Docker where ../. env doesn't exist
+}
+
+// 3. Expose env vars to Next.js server-side routes.
+//    - In Docker: process.env is already populated by the `environment:` block.
+//    - In dev: process.env is populated by dotenv above OR by .env.local auto-load.
+//    - Filter out undefined so we never override a valid runtime value with "undefined".
+const SERVER_ENV_KEYS = [
+  'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD',
+  'REDIS_HOST', 'REDIS_PORT',
+  'BINANCE_API_KEY', 'BINANCE_SECRET_KEY',
+  'USE_TESTNET', 'USE_FUTURES',
+  'NEXT_PUBLIC_SOCKET_URL',
+]
 
 const nextConfig = {
-  output: 'standalone',
-  // Expose root .env vars to Next.js (server-side API routes + NEXT_PUBLIC_ client vars)
-  env: {
-    DB_HOST:     process.env.DB_HOST,
-    DB_PORT:     process.env.DB_PORT,
-    DB_NAME:     process.env.DB_NAME,
-    DB_USER:     process.env.DB_USER,
-    DB_PASSWORD: process.env.DB_PASSWORD,
-    REDIS_HOST:  process.env.REDIS_HOST,
-    REDIS_PORT:  process.env.REDIS_PORT,
-    BINANCE_API_KEY:    process.env.BINANCE_API_KEY,
-    BINANCE_SECRET_KEY: process.env.BINANCE_SECRET_KEY,
-    USE_TESTNET:  process.env.USE_TESTNET,
-    USE_FUTURES:  process.env.USE_FUTURES,
-    NEXT_PUBLIC_SOCKET_URL: process.env.NEXT_PUBLIC_SOCKET_URL,
-  },
+  // output: 'standalone' is optional — uncomment for smaller Docker images
+  // output: 'standalone',
+
+  env: Object.fromEntries(
+    SERVER_ENV_KEYS
+      .filter(k => process.env[k] !== undefined && process.env[k] !== '')
+      .map(k => [k, process.env[k]])
+  ),
 }
 
 module.exports = nextConfig

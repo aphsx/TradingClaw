@@ -44,6 +44,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    ports:
+      - "8080:8080"
     environment:
       - DB_HOST=db
       - DB_PORT=3306
@@ -61,7 +63,12 @@ services:
       - ./trading-engine:/app
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      args:
+        # NEXT_PUBLIC_* vars must be passed at BUILD TIME so Next.js can bake them
+        # into the client-side JS bundle.  They are fixed for every deployment.
+        NEXT_PUBLIC_SOCKET_URL: "http://localhost:8080"
     container_name: regime_dashboard
     restart: unless-stopped
     depends_on:
@@ -69,18 +76,27 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      trading-engine:
+        condition: service_started
     ports:
       - "3000:3000"
     environment:
+      # ── Database (use Docker service names, not localhost) ──────────────────
       - DB_HOST=db
       - DB_PORT=3306
       - DB_NAME=${MYSQL_DATABASE:-regime_trader}
       - DB_USER=${MYSQL_USER:-trader}
       - DB_PASSWORD=${MYSQL_PASSWORD:-trader_pass_2026}
+      # ── Redis ───────────────────────────────────────────────────────────────
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      # ── Binance ─────────────────────────────────────────────────────────────
       - BINANCE_API_KEY=${BINANCE_API_KEY}
       - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
+      - USE_TESTNET=${USE_TESTNET:-true}
+      - USE_FUTURES=${USE_FUTURES:-true}
+      # ── Socket.IO (client connects from browser → host port 8080) ───────────
+      - NEXT_PUBLIC_SOCKET_URL=http://localhost:8080
 
 volumes:
   mysql_data:

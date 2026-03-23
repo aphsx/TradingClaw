@@ -9,3 +9,4 @@ schedule>=1.2
 python-dotenv>=1.0
 python-socketio>=5.10
 eventlet>=0.33
+ccxt>=4.0

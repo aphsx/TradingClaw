@@ -60,7 +60,7 @@ export async function GET() {
   // All Binance positions (bot-managed + manual) — always fetch (non-fatal)
   let binancePositions: any[] = [];
   try {
-    const engineRes = await fetch('http://localhost:8081/manual-positions', {
+    const engineRes = await fetch('http://localhost:8080/manual-positions', {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(4000),

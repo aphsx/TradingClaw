@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const res = await fetch('http://localhost:8081/sync-binance', {
+    const res = await fetch('http://localhost:8080/sync-binance', {
       signal: AbortSignal.timeout(8000),
     });
 

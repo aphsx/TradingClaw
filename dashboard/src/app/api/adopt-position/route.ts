@@ -6,7 +6,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    const res = await fetch('http://localhost:8081/adopt-position', {
+    const res = await fetch('http://localhost:8080/adopt-position', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
