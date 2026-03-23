@@ -40,6 +40,10 @@ class MeanReversionFactor:
         BB %B: 0 = at lower band (oversold), 1 = at upper band (overbought)
         Squeeze (BB inside Keltner) amplifies the signal (breakout pending).
         Returns +1 at lower band (buy), -1 at upper band (sell).
+
+        Fix #3: Dead zone added — BB %B between 0.20 and 0.80 (price near mid-band)
+        gives zero score. Only extremes carry a signal. RSI threshold tightened
+        from 35/65 to 25/75 to reduce false entries.
         """
         score = pd.Series(0.0, index=df.index)
 
@@ -47,22 +51,31 @@ class MeanReversionFactor:
             return score
 
         bb_pct = df['bb_pct'].fillna(0.5)
-        # Convert: 0 (lower band) = +1, 0.5 (mid) = 0, 1 (upper band) = -1
-        score = -(bb_pct * 2 - 1).clip(-1, 1)
+
+        # Raw mapping: 0 (lower band) = +1, 0.5 (mid) = 0, 1 (upper band) = -1
+        raw = -(bb_pct * 2 - 1).clip(-1, 1)
+
+        # Dead zone: price within 0.20–0.80 of band has no mean-reversion edge
+        dead_zone = (bb_pct > 0.20) & (bb_pct < 0.80)
+        score = raw.where(~dead_zone, 0.0)
+
+        # Extra boost at hard extremes (%B < 0.10 or > 0.90)
+        extreme_low  = (bb_pct < 0.10).astype(float) * 0.3
+        extreme_high = (bb_pct > 0.90).astype(float) * -0.3
+        score = score + extreme_low + extreme_high
 
         # Amplify when squeeze is active (BB inside Keltner = volatility compression)
+        # Only applies when already in extreme territory (score != 0)
         if 'bb_inside_keltner' in df.columns:
             squeeze = df['bb_inside_keltner'].fillna(0)
-            # Only amplify, don't reverse direction
             score = score * (1 + squeeze * 0.5)
 
-        # Also check RSI level (oversold/overbought confirmation)
+        # RSI confirmation — tightened thresholds to reduce false signals
         if 'rsi_14' in df.columns:
             rsi = df['rsi_14'].fillna(50)
-            # Boost score at RSI extremes
             rsi_boost = pd.Series(0.0, index=df.index)
-            rsi_boost[rsi < 35] = 0.3
-            rsi_boost[rsi > 65] = -0.3
+            rsi_boost[rsi < 25] = 0.4   # was < 35
+            rsi_boost[rsi > 75] = -0.4  # was > 65
             score = score + rsi_boost
 
         return score.clip(-1.0, 1.0)

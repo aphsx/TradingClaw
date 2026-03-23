@@ -167,9 +167,9 @@ ML_THRESHOLD           = 0.55 # Default threshold (tuned per retrain)
 
 # ─── Scaled Entry / Exit ───
 SCALED_ENTRY_LEGS      = 3              # 1=market only, 3=split entry
-PARTIAL_TP1_R          = 1.0            # Close 33% at 1R
-PARTIAL_TP2_R          = 2.0            # Close 33% at 2R
-PARTIAL_TP_FRACTIONS   = [0.33, 0.33, 0.34]  # Per TP level
+PARTIAL_TP1_R          = 1.5            # Close 30% at 1.5R
+PARTIAL_TP2_R          = 3.0            # Close 30% at 3R
+PARTIAL_TP_FRACTIONS   = [0.30, 0.30, 0.40]  # Per TP level (40% trails)
 
 # ─── Dynamic Stops ───
 CHANDELIER_PERIOD      = 22

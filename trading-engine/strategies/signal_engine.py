@@ -279,13 +279,34 @@ class SignalEngine:
         if risk < close * 0.001:  # Min 0.1% risk
             return []
 
-        # ─── Take Profits: 1R and 2R ───
+        # ─── Take Profits: 1R and 2R (default) ───
         if direction == "LONG":
             tp1 = close + risk * PARTIAL_TP1_R
             tp2 = close + risk * PARTIAL_TP2_R
         else:
             tp1 = close - risk * PARTIAL_TP1_R
             tp2 = close - risk * PARTIAL_TP2_R
+
+        # ─── Fix #4: MeanRev — dynamic TP at mean instead of fixed R ───
+        # Mean reversion trades naturally terminate at the mean; using a fixed R
+        # TP undershoots short targets and overshoots distant ones.
+        # Override TP only when the mean lies between entry and the fixed TP,
+        # so we never set a worse (harder-to-reach) target.
+        factor_labels = ['Trend', 'MeanRev', 'Momentum', 'Volume']
+        factor_values_check = [last_scores['trend'], last_scores['mean_rev'],
+                               last_scores['momentum'], last_scores['volume']]
+        dominant_idx_check = int(np.argmax([abs(v) for v in factor_values_check]))
+        if factor_labels[dominant_idx_check] == "MeanRev":
+            ema_20   = float(df['ema_21'].iloc[-1]) if 'ema_21' in df.columns else close
+            vwap_val = float(df['vwap'].iloc[-1])   if 'vwap'   in df.columns else close
+            mean_target = (ema_20 + vwap_val) / 2
+            if direction == "LONG" and close < mean_target < tp1:
+                # Mean is reachable and closer than fixed TP — use it
+                tp1 = mean_target
+                tp2 = mean_target + (mean_target - close) * 0.5  # 50% overshoot
+            elif direction == "SHORT" and tp1 < mean_target < close:
+                tp1 = mean_target
+                tp2 = mean_target - (close - mean_target) * 0.5
 
         expected_profit_pct = abs(tp1 - close) / close * 100
 

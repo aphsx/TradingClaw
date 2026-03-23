@@ -179,6 +179,46 @@ class BacktestEngine:
             # check_exits applies SLIPPAGE to make SL/TP prices realistic
             self.risk_mgr.check_exits(bar, idx)
 
+            # ── Fix #2a: Breakeven stop — move SL to entry once 1R profit is touched ──
+            for pos in list(self.risk_mgr.open_positions):
+                sig = pos.signal
+                risk = abs(pos.entry_price - sig.stop_loss)
+                if risk > 0:
+                    if sig.direction == "LONG":
+                        unrealized_r = (bar['high'] - pos.entry_price) / risk
+                        if unrealized_r >= 1.0 and sig.stop_loss < pos.entry_price:
+                            sig.stop_loss = pos.entry_price * 1.001  # breakeven + tiny buffer
+                    else:
+                        unrealized_r = (pos.entry_price - bar['low']) / risk
+                        if unrealized_r >= 1.0 and sig.stop_loss > pos.entry_price:
+                            sig.stop_loss = pos.entry_price * 0.999
+
+            # ── Fix #2b: Trailing stop — trail behind close once activation threshold met ──
+            for pos in list(self.risk_mgr.open_positions):
+                sig = pos.signal
+                pos_dict = {
+                    'entry_price': pos.entry_price,
+                    'stop_loss': sig.stop_loss,
+                    'direction': sig.direction,
+                    'quantity': pos.quantity,
+                }
+                new_sl = self.risk_mgr.update_trailing_stop(pos_dict, bar['close'])
+                if sig.direction == "LONG" and new_sl > sig.stop_loss:
+                    sig.stop_loss = new_sl
+                elif sig.direction == "SHORT" and new_sl < sig.stop_loss:
+                    sig.stop_loss = new_sl
+
+            # ── Fix #2c: Time-based exit — close stale unprofitable positions after 12h ──
+            for pos in list(self.risk_mgr.open_positions):
+                sig = pos.signal
+                age_hours = (idx - pos.entry_time).total_seconds() / 3600
+                if sig.direction == "LONG":
+                    unrealized = (bar['close'] - pos.entry_price) * pos.quantity
+                else:
+                    unrealized = (pos.entry_price - bar['close']) * pos.quantity
+                if age_hours > 12 and unrealized <= 0:
+                    self.risk_mgr._close_position(pos, bar['close'], "Time Exit", idx)
+
             # Write closed positions to DB
             if self.use_db:
                 for cp in list(self.risk_mgr.closed_positions):
@@ -206,6 +246,15 @@ class BacktestEngine:
 
                     pos = self.risk_mgr.open_position(signal, idx)
                     if pos:
+                        # ── Fix #5: Scale position size by signal confidence + volatility ──
+                        conf = abs(signal.composite_score)
+                        if conf < 0.50:
+                            size_mult = 0.5    # Weak signal → half size
+                        elif conf < 0.65:
+                            size_mult = 0.75   # Moderate signal → 3/4 size
+                        else:
+                            size_mult = 1.0    # Strong signal → full size
+                        pos.quantity = round(pos.quantity * size_mult * signal.vol_size_mult, 6)
                         executed += 1
                         if self.use_db:
                             sid = signal_id_map.get(signal.timestamp, None)
