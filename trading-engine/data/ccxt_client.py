@@ -33,10 +33,11 @@ import time
 import uuid
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 import ccxt
 
-from config import API_KEY, SECRET_KEY, USE_TESTNET, USE_FUTURES, SYMBOL
+from config import API_KEY, SECRET_KEY, USE_TESTNET, USE_FUTURES, SYMBOL, BINANCE_FUTURES_BASE_URL
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +48,9 @@ def _build_exchange() -> ccxt.Exchange:
         'defaultType': 'future' if USE_FUTURES else 'spot',
         'adjustForTimeDifference': True,   # auto-sync server clock
     }
-    if USE_TESTNET:
+
+    # Spot-only sandbox. Futures sandbox/testnet is deprecated by Binance/CCXT.
+    if USE_TESTNET and not USE_FUTURES:
         options['sandboxMode'] = True
 
     exchange = ccxt.binance({
@@ -57,11 +60,41 @@ def _build_exchange() -> ccxt.Exchange:
         'enableRateLimit': True,
     })
 
-    # Enable sandbox (testnet) URLs
-    if USE_TESTNET:
+    # Enable sandbox (testnet) URLs for spot only.
+    if USE_TESTNET and not USE_FUTURES:
         exchange.set_sandbox_mode(True)
 
+    if USE_FUTURES:
+        _apply_custom_futures_urls(exchange, BINANCE_FUTURES_BASE_URL)
+
     return exchange
+
+
+def _apply_custom_futures_urls(exchange: ccxt.Exchange, base_url: str) -> None:
+    """Rewrite all CCXT futures endpoints to a custom base URL (e.g. demo trading)."""
+    try:
+        target_host = urlparse(base_url).netloc.lower()
+        if not target_host:
+            return
+    except Exception:
+        return
+
+    api_urls = exchange.urls.get('api')
+    if not isinstance(api_urls, dict):
+        return
+
+    def _rewrite(obj):
+        if isinstance(obj, str):
+            if 'fapi.binance.com' in obj:
+                return obj.replace('https://fapi.binance.com', base_url.rstrip('/'))
+            return obj
+        if isinstance(obj, dict):
+            return {k: _rewrite(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_rewrite(v) for v in obj]
+        return obj
+
+    exchange.urls['api'] = _rewrite(api_urls)
 
 
 # Singleton (lazy init so import doesn't blow up without network)

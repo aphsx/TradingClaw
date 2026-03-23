@@ -14,12 +14,13 @@ API_KEY = os.getenv("BINANCE_API_KEY", "")
 SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
 USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"
 USE_FUTURES = os.getenv("USE_FUTURES", "false").lower() == "true"
+BINANCE_FUTURES_BASE_URL = os.getenv("BINANCE_FUTURES_BASE_URL", "https://fapi.binance.com")
 
-# Binance Futures uses different API endpoints than Spot
-# Futures Testnet: https://testnet.binancefuture.com
-# Futures Mainnet: https://fapi.binance.com
+# Binance Futures testnet/sandbox has been deprecated by Binance/CCXT.
+# For futures, we now always use a direct base URL (mainnet or demo trading URL).
+# Example demo URL: https://demo-fapi.binance.com
 if USE_FUTURES:
-    BASE_URL = "https://testnet.binancefuture.com" if USE_TESTNET else "https://fapi.binance.com"
+    BASE_URL = BINANCE_FUTURES_BASE_URL
 else:
     # Spot API
     BASE_URL = "https://testnet.binance.vision" if USE_TESTNET else "https://api.binance.com"
