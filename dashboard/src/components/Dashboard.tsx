@@ -1038,7 +1038,9 @@ export default function Dashboard({ data }: { data: any }) {
                     <th className="text-left pb-3 pr-3">Strategy</th>
                     <th className="text-right pb-3 pr-3">Entry</th>
                     <th className="text-right pb-3 pr-3">Exit</th>
-                    <th className="text-right pb-3 pr-3">PnL</th>
+                    <th className="text-right pb-3 pr-3" title="PnL before fees">Gross</th>
+                    <th className="text-right pb-3 pr-3" title="Entry fee + exit fee">Fees</th>
+                    <th className="text-right pb-3 pr-3" title="PnL after fees">Net</th>
                     <th className="text-left pb-3 pr-3">Order IDs</th>
                     <th className="text-left pb-3">Reason</th>
                   </tr>
@@ -1053,7 +1055,13 @@ export default function Dashboard({ data }: { data: any }) {
                       <td className="py-2 pr-3 text-gray-300 text-xs">{t.strategy}</td>
                       <td className="py-2 pr-3 text-right">${Number(t.entry_price).toLocaleString()}</td>
                       <td className="py-2 pr-3 text-right">${Number(t.exit_price).toLocaleString()}</td>
-                      <td className={`py-2 pr-3 text-right ${Number(t.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      <td className={`py-2 pr-3 text-right ${(Number(t.pnl) + Number(t.total_fees || 0)) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        ${(Number(t.pnl) + Number(t.total_fees || 0)).toFixed(2)}
+                      </td>
+                      <td className="py-2 pr-3 text-right text-amber-400/80">
+                        ${Number(t.total_fees || 0).toFixed(2)}
+                      </td>
+                      <td className={`py-2 pr-3 text-right font-medium ${Number(t.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                         ${Number(t.pnl).toFixed(2)}
                       </td>
                       <td className="py-2 pr-3 text-[10px] text-gray-500 font-mono">
@@ -1082,4 +1090,3 @@ export default function Dashboard({ data }: { data: any }) {
     </div>
   );
 }
-

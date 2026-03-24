@@ -103,6 +103,7 @@ class Position:
     entry_price: float
     quantity: float
     entry_time: pd.Timestamp
+    margin_used: float = 0.0
     pnl: float = 0.0
     exit_price: float = 0.0
     exit_time: Optional[pd.Timestamp] = None
@@ -548,18 +549,18 @@ class RiskManager:
         return round(position_size, 6)
 
     def _get_total_equity(self, current_price: float = None) -> float:
-        """Get total equity = free capital + open position value."""
+        """Get total equity = free margin + locked margin + unrealized PnL."""
         equity = self.capital
         for pos in self.open_positions:
-            notional = pos.entry_price * pos.quantity
+            margin = getattr(pos, "margin_used", 0.0)
             if current_price:
                 if pos.signal.direction == "LONG":
                     unrealized = (current_price - pos.entry_price) * pos.quantity
                 else:
                     unrealized = (pos.entry_price - current_price) * pos.quantity
-                equity += notional + unrealized
+                equity += margin + unrealized
             else:
-                equity += notional  # At cost
+                equity += margin
         return equity
 
     def can_open_trade(self, signal, current_time: pd.Timestamp,
@@ -608,13 +609,17 @@ class RiskManager:
 
         quantity = self.calculate_position_size(signal, current_time=current_time, regime=regime)
         notional = signal.entry_price * quantity
+        margin_required = notional / max(self._leverage, 1)
         entry_fee = notional * self.taker_fee
 
-        # Check if we have enough capital for notional + fee
-        if notional + entry_fee > self.capital:
-            quantity = (self.capital * 0.95) / (signal.entry_price * (1 + self.taker_fee))
+        # Futures need margin + fee, not the full notional.
+        if margin_required + entry_fee > self.capital:
+            quantity = (self.capital * 0.95) / (
+                signal.entry_price * ((1 / max(self._leverage, 1)) + self.taker_fee)
+            )
             quantity = round(quantity, 6)
             notional = signal.entry_price * quantity
+            margin_required = notional / max(self._leverage, 1)
             entry_fee = notional * self.taker_fee
             # Hard reject only if balance itself is too small to cover even min notional
             if notional < self._min_notional:
@@ -625,11 +630,12 @@ class RiskManager:
             entry_price=signal.entry_price,
             quantity=quantity,
             entry_time=current_time,
+            margin_used=margin_required,
             fees_paid=entry_fee
         )
 
         self.open_positions.append(position)
-        self.capital -= (notional + entry_fee)  # Lock capital for position
+        self.capital -= (margin_required + entry_fee)
 
         return position
 
@@ -703,7 +709,9 @@ class RiskManager:
         position.pnl = pnl - position.fees_paid
 
         # Track trade result for Kelly sizing (as a percentage return)
-        position_cost = position.entry_price * position.quantity
+        position_cost = getattr(position, "margin_used", 0.0) or (
+            position.entry_price * position.quantity
+        )
         if position_cost > 0:
             pnl_return = position.pnl / position_cost
             self.trade_results.append(pnl_return)
@@ -722,9 +730,8 @@ class RiskManager:
         is_win = position.pnl > 0
         self._update_streak(is_win)
 
-        # Return capital: original notional + PnL - exit fee
-        entry_notional = position.entry_price * position.quantity
-        self.capital += entry_notional + pnl - exit_fee
+        # Return locked margin plus realized PnL, then deduct the exit fee.
+        self.capital += position.margin_used + pnl - exit_fee
         self.daily_pnl += position.pnl
 
         # Move to closed

@@ -371,11 +371,16 @@ class BacktestEngine:
                             new_qty        = round(original_qty * total_mult, 6)
                             qty_delta      = original_qty - new_qty
                             if qty_delta > 0:
-                                notional_refund = qty_delta * pos.entry_price
-                                fee_refund      = notional_refund * self.taker_fee
-                                self.risk_mgr.capital += notional_refund + fee_refund
-                                pos.fees_paid  = round(pos.fees_paid * (new_qty / original_qty), 8)
-                                pos.quantity   = new_qty
+                                scale = new_qty / original_qty
+                                original_notional = original_qty * pos.entry_price
+                                reduced_notional = new_qty * pos.entry_price
+                                notional_refund = original_notional - reduced_notional
+                                margin_refund = getattr(pos, "margin_used", 0.0) * (1 - scale)
+                                fee_refund = notional_refund * self.taker_fee
+                                self.risk_mgr.capital += margin_refund + fee_refund
+                                pos.margin_used = round(getattr(pos, "margin_used", 0.0) * scale, 8)
+                                pos.fees_paid = round(pos.fees_paid * scale, 8)
+                                pos.quantity = new_qty
 
                         executed += 1
                         if self.use_db:
