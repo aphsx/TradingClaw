@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 import ccxt
 
-from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_FUTURES, SYMBOL, EXCHANGE_NAME
+from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_FUTURES, SYMBOL, EXCHANGE_NAME, EXCHANGE_RAW
 
 log = logging.getLogger(__name__)
 
@@ -63,10 +63,25 @@ def _build_exchange() -> ccxt.Exchange:
     # Specific API params per exchange
     if PASSPHRASE and EXCHANGE_NAME in ['okx', 'kucoin']:
         params['password'] = PASSPHRASE
-    elif PASSPHRASE and EXCHANGE_NAME == 'bybit':
-        pass # Bybit doesn't require API passphrase/password in the same generic way
 
     exchange = exchange_class(params)
+
+    # ─── Special handling for Bybit Demo/Testnet ──────────────
+    if EXCHANGE_NAME == 'bybit':
+        if '_demo' in EXCHANGE_RAW:
+            # Bybit's "Demo Trading" (live app integration)
+            exchange.options['demo'] = True
+            exchange.urls['api']['public'] = 'https://api-demo.bybit.com'
+            exchange.urls['api']['private'] = 'https://api-demo.bybit.com'
+            if not exchange.headers: exchange.headers = {}
+            exchange.headers['X-DEMO-TRADING'] = '1'
+            log.info("Bybit mode: DEMO TRADING (api-demo)")
+        elif '_testnet' in EXCHANGE_RAW:
+            # Traditional Bybit Testnet (testnet.bybit.com)
+            exchange.set_sandbox_mode(True)
+            log.info("Bybit mode: TESTNET")
+        else:
+            log.info("Bybit mode: LIVE")
 
     return exchange
 
@@ -355,6 +370,41 @@ def get_balance() -> dict:
     """
     ex = get_exchange()
     try:
+        if EXCHANGE_NAME == 'bybit' and '_demo' in EXCHANGE_RAW:
+            # Special bypass for Bybit Demo Trading using the proven V5 endpoint
+            try:
+                bal_raw = ex.privateGetV5AccountWalletBalance({'accountType': 'UNIFIED'})
+                result = bal_raw.get('result', {})
+                list_data = result.get('list', [])
+                if not list_data:
+                    raise ValueError("No account data in Bybit response")
+                
+                acc = list_data[0]
+                coins = acc.get('coin', [])
+                
+                total_wb = _safe_float(acc.get('totalWalletBalance'))
+                available = _safe_float(acc.get('totalAvailableBalance'))
+                total_equity = _safe_float(acc.get('totalEquity'))
+                unrealised = _safe_float(acc.get('totalPerpUPL'))
+                
+                return {
+                    'usdt_free':        available,
+                    'usdt_locked':      total_wb - available,
+                    'usdt_total':       total_wb,
+                    'margin_balance':   total_equity,
+                    'available_balance': available,
+                    'unrealized_pnl':   unrealised,
+                    'margin_ratio':     0.0,
+                    'balances':         {c.get('coin'): {
+                                            'total': _safe_float(c.get('walletBalance')),
+                                            'free': _safe_float(c.get('availableToWithdraw')) or _safe_float(c.get('walletBalance')),
+                                            'used': 0.0
+                                         } for c in coins},
+                    'account_type':     'FUTURES',
+                }
+            except Exception as ebb:
+                log.warning(f"Bybit Demo balance fallback failed: {ebb}")
+        
         bal = ex.fetch_balance()
         usdt = bal.get('USDT', {})
 

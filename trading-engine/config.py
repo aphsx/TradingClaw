@@ -11,7 +11,8 @@ load_dotenv(dotenv_path=_root_env if _root_env.exists() else _local_env)
 
 # ─── Exchange API Setup ───
 # You can set EXCHANGE to 'okx', 'bybit', or 'binance' in your .env
-EXCHANGE_NAME = os.getenv("EXCHANGE", "okx").lower()
+EXCHANGE_RAW = os.getenv("EXCHANGE", "okx").lower()
+EXCHANGE_NAME = EXCHANGE_RAW.split('_')[0] # 'bybit_demo' -> 'bybit'
 
 API_KEY = os.getenv(f"{EXCHANGE_NAME.upper()}_API_KEY", "")
 SECRET_KEY = os.getenv(f"{EXCHANGE_NAME.upper()}_SECRET_KEY", "")
