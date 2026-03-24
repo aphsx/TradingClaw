@@ -135,6 +135,7 @@ KELLY_FRACTION = 0.5              # Use half Kelly to be conservative
 MAX_CORRELATED_POSITIONS = 2      # Max positions with correlation > 0.7
 
 # ─── Smart Partial TP (NEW v6) ───
+TAKE_PROFIT_MODE = os.getenv("TAKE_PROFIT_MODE", "single").lower()  # 'single' or 'partial'
 PARTIAL_TP_ENABLED = True         # Enable intelligent partial profit-taking
 PARTIAL_TP_LEVEL_1_R = 1.0       # First partial at 1R
 PARTIAL_TP_LEVEL_2_R = 2.0       # Second partial at 2R

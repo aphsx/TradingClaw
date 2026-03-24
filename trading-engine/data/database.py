@@ -231,6 +231,15 @@ def get_closed_trades(source="LIVE", limit=100):
     ), get_engine(), params={"s":source,"lim":limit})
 
 
+def clear_backtest_data():
+    """Keep only the newest backtest by clearing all prior backtest artifacts first."""
+    with get_engine().begin() as c:
+        c.execute(text("DELETE FROM positions WHERE source='BACKTEST'"))
+        c.execute(text("DELETE FROM signals WHERE source='BACKTEST'"))
+        c.execute(text("DELETE FROM equity_curve WHERE source='BACKTEST'"))
+        c.execute(text("DELETE FROM backtest_runs"))
+
+
 def save_simulated_outcome(symbol: str, direction: str, strategy: str, regime,
                            entry_price: float, entry_time, stop_loss: float,
                            take_profit: float, risk_reward: float, confidence: float,

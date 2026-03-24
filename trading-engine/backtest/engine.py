@@ -31,7 +31,8 @@ try:
     from data.database import (save_candles, save_regimes, save_signal,
         open_position_bt as db_open_position,
         close_position_bt as db_close_position,
-        save_equity_batch, save_backtest_run, log as db_log)
+        save_equity_batch, save_backtest_run, clear_backtest_data,
+        log as db_log)
     HAS_DB = True
 except Exception:
     HAS_DB = False
@@ -125,6 +126,7 @@ class BacktestEngine:
                     print(f"   {tf_name}: ERROR - {e}")
 
         if self.use_db:
+            clear_backtest_data()
             save_candles(df, SYMBOL, TIMEFRAME)
 
         # ── Step 2: Train/test split ──
@@ -199,7 +201,7 @@ class BacktestEngine:
         signal_id_map = {}
         if self.use_db:
             for s in all_signals:
-                sid = save_signal(s, SYMBOL, fee_filtered=True)
+                sid = save_signal(s, SYMBOL, source="BACKTEST", fee_filtered=True)
                 signal_id_map[s.timestamp] = sid
 
         # ── Step 6: Execute backtest loop ──
@@ -537,7 +539,7 @@ class BacktestEngine:
                 peak = max(peak, e['equity'])
                 e['peak_equity']  = peak
                 e['drawdown_pct'] = (peak - e['equity']) / peak * 100 if peak > 0 else 0
-            save_equity_batch(self.equity_curve)
+            save_equity_batch(self.equity_curve, source="BACKTEST")
             save_backtest_run(self.results, self.results['config'])
             db_log("INFO", "backtest", "Backtest completed", self.results['trading'])
 

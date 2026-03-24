@@ -263,7 +263,7 @@ def run_live():
                     for pos in open_positions:
                         # ── Partial TP check ──
                         try:
-                            partial = pos_mgr.check_partial_tp(pos, price)
+                            partial = None if TAKE_PROFIT_MODE == "single" else pos_mgr.check_partial_tp(pos, price)
                             if partial and TRADING_MODE != "paper":
                                 tp_qty = float(pos.get('quantity', 0)) * partial['fraction']
                                 close_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
@@ -917,14 +917,16 @@ def run_live():
                                 print(f"   [WARN] SL failed: {e}")
 
                             try:
-                                tp_qty = qty * PARTIAL_TP_FRACTIONS[0]  # First 33% at TP1
+                                tp_qty = qty if TAKE_PROFIT_MODE == "single" else qty * PARTIAL_TP_FRACTIONS[0]
                                 tp_resp = _with_retry(bnb.place_take_profit_order,
                                                       current_symbol, exit_side,
                                                       round(tp_qty, 6), sig.take_profit)
                                 if _verify_order_placed(tp_resp, "TP"):
                                     tp_oid = tp_resp.get("orderId")
-                                    print(f"   [TARGET] TP1 #{tp_oid} @ ${sig.take_profit:,.2f} "
-                                          f"({PARTIAL_TP_FRACTIONS[0]*100:.0f}%)")
+                                    tp_label = "TP" if TAKE_PROFIT_MODE == "single" else "TP1"
+                                    tp_pct = 100.0 if TAKE_PROFIT_MODE == "single" else PARTIAL_TP_FRACTIONS[0] * 100
+                                    print(f"   [TARGET] {tp_label} #{tp_oid} @ ${sig.take_profit:,.2f} "
+                                          f"({tp_pct:.0f}%)")
                             except Exception as e:
                                 print(f"   [WARN] TP failed: {e}")
 

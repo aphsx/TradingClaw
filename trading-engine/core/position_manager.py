@@ -44,6 +44,7 @@ from config import (
     TRAILING_ATR_MULT_PROFIT,
     TRAILING_ATR_MULT_EXTENDED,
     TRAILING_RATCHET_ENABLED,
+    TAKE_PROFIT_MODE,
     PARTIAL_TP_ENABLED,
     PARTIAL_TP_LEVEL_1_R,
     PARTIAL_TP_LEVEL_2_R,
@@ -81,6 +82,8 @@ class PositionManager:
         Returns:
             {'action': 'partial_close', 'fraction': 0.33, 'reason': 'TP1', ...}
         """
+        if TAKE_PROFIT_MODE == "single":
+            return None
         strategy = pos.get('strategy', 'TREND')
         result = self.check_smart_partial_tp(pos, current_price, strategy)
         return result
@@ -105,7 +108,7 @@ class PositionManager:
         Returns:
             Action dict or None
         """
-        if not PARTIAL_TP_ENABLED:
+        if TAKE_PROFIT_MODE == "single" or not PARTIAL_TP_ENABLED:
             return None
 
         entry = float(pos.get('entry_fill_price') or pos.get('entry_price', 0))
