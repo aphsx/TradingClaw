@@ -147,6 +147,8 @@ def close_position_live(position_id, exit_price, exit_time, exit_reason,
                         exit_status=None, exit_raw=None,
                         pnl=0, pnl_pct=0, total_fees=0):
     """Close a LIVE position with real Binance exit data."""
+    if exit_reason and len(exit_reason) > 50:
+        exit_reason = exit_reason[:47] + "..."
     with get_engine().begin() as c:
         c.execute(text("""
             UPDATE positions SET
@@ -187,9 +189,9 @@ def open_position_bt(run_id, signal_id, symbol, direction, strategy, regime,
 def close_position_bt(position_id, exit_price, exit_time, exit_reason,
                       pnl, pnl_pct, total_fees):
     with get_engine().begin() as c:
-        # Truncate exit_reason to fit DB column (VARCHAR 100)
-        if exit_reason and len(exit_reason) > 100:
-            exit_reason = exit_reason[:97] + "..."
+        # Truncate exit_reason to fit DB column (VARCHAR 50)
+        if exit_reason and len(exit_reason) > 50:
+            exit_reason = exit_reason[:47] + "..."
         c.execute(text("""
             UPDATE positions SET exit_price=:ep,exit_time=:et,exit_reason=:er,
                 pnl=:pnl,pnl_pct=:pp,total_fees=:tf WHERE id=:id
