@@ -61,6 +61,8 @@ from config import (
     RSI_DIV_ADX_MAX, RSI_DIV_TP_R,
 )
 from core.regime_detector import TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, REGIME_NAMES
+from strategies.factors.volume_flow import VolumeFlowFactor
+from strategies.factors.open_interest import OpenInterestFactor
 
 
 # ─── Regime weights (for compatibility / reporting) ────────────
@@ -124,15 +126,23 @@ class SignalEngine:
         self._min_profit = self._total_fees * FEE_MULTIPLIER * 100  # pct
         self._mtf_enabled = MTF_ENABLED if 'MTF_ENABLED' in dir() else True
         self._session_enabled = SESSION_FILTER_ENABLED if 'SESSION_FILTER_ENABLED' in dir() else True
+        # Legacy main-loop integrations expect these factor objects.
+        self._volume_flow_factor = VolumeFlowFactor()
+        self._open_interest_factor = OpenInterestFactor()
 
     # ── Compatibility shims ──
     @property
     def volume_flow(self):
-        return self
+        return self._volume_flow_factor
 
     @property
     def open_interest(self):
-        return self
+        return self._open_interest_factor
+
+    @property
+    def oi_factor(self):
+        # Backward-compatible alias used in main.py.
+        return self._open_interest_factor
 
     def update_cache(self, *a, **kw):
         """Compatibility shim for cache updates."""
