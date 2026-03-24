@@ -47,10 +47,11 @@ from config import (
     CHANDELIER_PERIOD, CHANDELIER_MULT, SWING_LOOKBACK,
     TREND_ADX_MIN, TREND_EMA_ALIGN_REQUIRED,
     BREAKOUT_DONCHIAN_PERIOD, BREAKOUT_VOLUME_MULT, BREAKOUT_ATR_EXPAND,
-    MR_BB_PCT_MAX, MR_RSI_MAX, MR_ADX_MAX, MR_CONFIDENCE_MIN,
+    MR_BB_PCT_MAX, MR_RSI_MAX, MR_ADX_MAX, MR_CONFIDENCE_MIN, MR_MIN_RR,
     REGIME_CONFIDENCE_MIN,
     # New v4 config constants
     MTF_ENABLED, MTF_MIN_ALIGNMENT, MTF_TREND_WEIGHT, MTF_CONFIRM_WEIGHT,
+    MTF_BYPASS_IF_NO_HTF,
     SESSION_FILTER_ENABLED, ASIAN_SESSION, EUROPE_SESSION, US_SESSION, DEAD_ZONE_HOURS,
 )
 from core.regime_detector import TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, REGIME_NAMES
@@ -180,9 +181,16 @@ class SignalEngine:
         mtf_aligned = 0
         if self._mtf_enabled and htf_data:
             mtf_score, mtf_aligned = self._compute_mtf_confluence(df, htf_data, regime)
-            # Hard gate: require minimum MTF alignment
+            # FIX #1: Hard gate only wenn HTF data exists AND alignment is below minimum
+            # If no HTF data → bypass (don't penalize signal)
             if mtf_aligned < MTF_MIN_ALIGNMENT:
                 return []
+        elif self._mtf_enabled and not htf_data:
+            # FIX #1: No HTF data at all → bypass MTF gate entirely
+            # MTF_BYPASS_IF_NO_HTF=True: treat as neutral (score=0.5, aligned=1)
+            if MTF_BYPASS_IF_NO_HTF:
+                mtf_score = 0.5
+                mtf_aligned = MTF_MIN_ALIGNMENT  # satisfy gate
 
         # Compute session-based bonus/penalty
         session_bonus = 0.0
@@ -869,14 +877,24 @@ class SignalEngine:
         confidence += session_bonus
         confidence = max(confidence, 0.40)
 
-        # Stop Loss: Swing low/high with safety margin
+        # FIX #4: MeanRev SL — use BB band as stop instead of swing low
+        # BB band = natural volatility boundary; price that breaks this invalidates the MR signal
         lookback = min(SWING_LOOKBACK, len(df) - 1)
         if direction == "LONG":
-            swing = float(df['low'].iloc[-lookback:].min())
-            sl = min(swing * 0.997, close - atr * 1.5)
+            # SL = BB lower band (if available) else ATR-based
+            if 'bb_lower' in df.columns:
+                bb_lower = float(df['bb_lower'].iloc[-1] or (close - atr * 2.0))
+                sl = min(bb_lower * 0.998, close - atr * 2.0)  # whichever is tighter (further from close)
+            else:
+                swing = float(df['low'].iloc[-lookback:].min())
+                sl = min(swing * 0.997, close - atr * 2.0)
         else:
-            swing = float(df['high'].iloc[-lookback:].max())
-            sl = max(swing * 1.003, close + atr * 1.5)
+            if 'bb_upper' in df.columns:
+                bb_upper = float(df['bb_upper'].iloc[-1] or (close + atr * 2.0))
+                sl = max(bb_upper * 1.002, close + atr * 2.0)
+            else:
+                swing = float(df['high'].iloc[-lookback:].max())
+                sl = max(swing * 1.003, close + atr * 2.0)
 
         sl = self._safety_sl(sl, direction, close)
         if sl <= 0:
@@ -901,11 +919,11 @@ class SignalEngine:
             tp1 = mean_target
             tp2 = mean_target - (close - mean_target) * 0.382
 
-        # Risk-reward minimum: 1.5 (elevated from 1.2)
+        # FIX #2: enforce R:R ≥ MR_MIN_RR (2.0) for MeanRev
         rr = abs(tp1 - close) / risk if risk > 0 else 0
-        if rr < 1.5:
-            # Adjust TP if doesn't meet minimum
-            tp1 = close + (risk * 1.5) if direction == "LONG" else close - (risk * 1.5)
+        if rr < MR_MIN_RR:
+            # Adjust TP to meet minimum MR_MIN_RR
+            tp1 = close + (risk * MR_MIN_RR) if direction == "LONG" else close - (risk * MR_MIN_RR)
             tp2 = tp1
 
         expected_pct = abs(tp1 - close) / close * 100
@@ -943,45 +961,44 @@ class SignalEngine:
         risk: float,
     ) -> float:
         """
-        Calculate trend take profit target using next significant S/R level.
+        Calculate trend take profit using risk-based minimum with S/R stretch.
 
-        Logic:
-        - Look for swing highs (LONG) or swing lows (SHORT) in recent bars
-        - Use next significant level as TP target
-        - Fallback to 3x risk if no clear level found
+        FIX #3: Old code used swing highs from recent 50 bars — these are often
+        the same bars already tested, giving a very narrow TP. Now:
+        - Baseline: 4.0x risk (strong R:R floor)
+        - If a significant S/R level is FURTHER than baseline → use that
+        - If S/R is closer than baseline → stay with baseline (don't clip winners)
 
         Returns:
             Take profit price level
         """
         try:
+            # FIX #3: use 4.0R as floor — trade must have room to run
+            risk_based_tp = close + risk * 4.0 if direction == "LONG" else close - risk * 4.0
+
             lookback = 50
             if len(df) < lookback:
-                # Fallback to risk-based TP
-                return close + risk * 3.0 if direction == "LONG" else close - risk * 3.0
+                return risk_based_tp
 
             if direction == "LONG":
-                # Find next swing high above current price
+                # Find swing high ABOVE risk_based_tp (a further target)
                 recent_data = df.tail(lookback)
-                highs_above = recent_data[recent_data['high'] > close]['high']
-                if len(highs_above) > 0:
-                    next_resistance = highs_above.min()
-                    return next_resistance
-                else:
-                    return close + risk * 3.0
+                highs_stretch = recent_data[recent_data['high'] > risk_based_tp]['high']
+                if len(highs_stretch) > 0:
+                    # Use the nearest major resistance above the floor
+                    return highs_stretch.min()
+                return risk_based_tp
 
             else:
-                # Find next swing low below current price
+                # Find swing low BELOW risk_based_tp
                 recent_data = df.tail(lookback)
-                lows_below = recent_data[recent_data['low'] < close]['low']
-                if len(lows_below) > 0:
-                    next_support = lows_below.max()
-                    return next_support
-                else:
-                    return close - risk * 3.0
+                lows_stretch = recent_data[recent_data['low'] < risk_based_tp]['low']
+                if len(lows_stretch) > 0:
+                    return lows_stretch.max()
+                return risk_based_tp
 
         except Exception:
-            # Fallback
-            return close + risk * 3.0 if direction == "LONG" else close - risk * 3.0
+            return close + risk * 4.0 if direction == "LONG" else close - risk * 4.0
 
     def _chandelier_sl(self, df: pd.DataFrame, direction: str, atr: float) -> float:
         close    = float(df['close'].iloc[-1])

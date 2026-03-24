@@ -108,6 +108,7 @@ def generate_realistic_btc_data(days: int = 90, interval_hours: float = 1.0,
     """
     Generate realistic BTC/USDT synthetic data with regime changes.
     Uses GBM with regime-switching volatility for realistic behavior.
+    Timestamps start from (now - days) so synthetic data matches real backtest window.
     """
     np.random.seed(seed)
     
@@ -138,7 +139,8 @@ def generate_realistic_btc_data(days: int = 90, interval_hours: float = 1.0,
     
     opens, highs, lows, closes, volumes = [], [], [], [], []
     timestamps = []
-    start_date = datetime(2025, 1, 1)
+    # FIX: Use current UTC time minus N days — synthetic data always covers the real lookback window
+    start_date = datetime.utcnow() - timedelta(days=days)
     
     for i in range(n_candles):
         # Regime transition

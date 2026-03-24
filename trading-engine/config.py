@@ -60,7 +60,8 @@ MAKER_FEE = 0.0002      # OKX maker 0.02%
 TAKER_FEE = 0.0005      # OKX taker 0.05%
 SLIPPAGE = 0.0003       # Tighter slippage for OKX liquidity
 TOTAL_FEE_PER_TRADE = (TAKER_FEE * 2) + SLIPPAGE
-FEE_MULTIPLIER = 2.5    # Lower multiplier with OKX lower fees
+FEE_MULTIPLIER = 4.0    # FIX #5: 2.5→4.0 — expected profit must be 4x fees to enter
+MIN_PROFIT_FEE_MULTIPLE = 4.0   # FIX #5: minimum expected_profit_pct ≥ fees × this
 
 # ─── Risk ───
 # INITIAL_CAPITAL is used ONLY as a fallback when the live balance
@@ -77,7 +78,7 @@ MAX_OPEN_TRADES = 3
 TREND_EMA_FAST = 9
 TREND_EMA_SLOW = 21
 TREND_ATR_SL_MULT = 1.5
-TREND_ATR_TP_MULT = 3.0
+TREND_ATR_TP_MULT = 4.0         # FIX #2: 3.0→4.0 — let winners run longer
 
 # ─── Range Strategy ───
 RANGE_BB_PERIOD = 20
@@ -85,9 +86,9 @@ RANGE_BB_STD = 2.0
 RANGE_BB_STD_RANGE = 1.5   # 1.5σ trigger zone for range entries (more signals)
 RANGE_RSI_OVERSOLD = 35    # Widened from 30: easier to trigger, still meaningful
 RANGE_RSI_OVERBOUGHT = 65  # Widened from 70
-# 1.5x ATR for SL: crypto 5x lev needs more room than 1.0x
-RANGE_ATR_SL_MULT = 1.5
-RANGE_ATR_TP_MULT = 1.5
+# FIX #4: MeanRev SL wider (2.0x ATR) so stop not hit before revert
+RANGE_ATR_SL_MULT = 2.0         # FIX #4: 1.5→2.0 — MR needs room to oscillate before reverting
+RANGE_ATR_TP_MULT = 2.5         # FIX #4: 1.5→2.5 — enforce min R:R ~1.25 after wider SL
 
 # ─── Volatile Strategy ───
 # Require stronger volume confirmation (2.5x vs 2.0x) to cut false positives
@@ -109,7 +110,8 @@ MTF_ENABLED = True
 MTF_PRIMARY_TF = "5m"           # Entry timeframe
 MTF_CONFIRM_TFS = ["15m", "1h"] # Confirmation timeframes
 MTF_TREND_TF = "4h"             # Overall trend bias
-MTF_MIN_ALIGNMENT = 2           # Min # of HTFs that must agree (out of 3: 15m, 1h, 4h)
+MTF_MIN_ALIGNMENT = 1           # FIX #1: 2→1 — ถ้า HTF data ไม่ครบ ไม่ควร block ทั้งหมด
+MTF_BYPASS_IF_NO_HTF = True     # FIX #1: ถ้าไม่มี HTF data เลย → bypass gate (ไม่ block)
 MTF_TREND_WEIGHT = 0.30         # Weight of 4h trend in final score
 MTF_CONFIRM_WEIGHT = 0.25       # Weight of each confirmation TF
 
@@ -176,7 +178,7 @@ FACTOR_WEIGHT_VOLATILITY = 0.15
 HMM_N_STATES         = 4      # Trend-Up, Trend-Down, Range, Volatile
 HMM_RETRAIN_BARS     = 500    # Retrain every N new bars per symbol
 HMM_N_ITER           = 200    # Max EM iterations
-REGIME_HYSTERESIS_BARS = 3    # Min bars before regime can flip (anti-whipsaw)
+REGIME_HYSTERESIS_BARS = 2    # FIX #1: 3→2 bars — regime switches faster, fewer blocked signals
 REGIME_TRANSITION_DECAY = 0.85 # Confidence decay rate during transitions
 REGIME_VOLATILITY_LOOKBACK = 50  # Bars for adaptive volatility thresholds
 REGIME_STRENGTH_SMOOTHING = 5    # EMA smoothing for regime strength
@@ -237,13 +239,14 @@ BREAKOUT_VOLUME_MULT       = 1.2    # 1.5→1.2: 5m spikes are smaller but still
 BREAKOUT_ATR_EXPAND        = 1.05   # ATR must be expanding by this ratio
 
 # Strategy 3: Mean Reversion (RANGING only)
-MR_BB_PCT_MAX              = 0.15   # 0.08→0.15: less extreme, more opportunities
-MR_RSI_MAX                 = 35     # 28→35: 5m RSI extremes are hit more often
-MR_ADX_MAX                 = 22     # 20→22: slight relaxation for 5m noise
-MR_CONFIDENCE_MIN          = 0.60   # 0.65→0.60: easier to meet on 5m
+MR_BB_PCT_MAX              = 0.20   # FIX #4: 0.15→0.20 — more MR opportunities
+MR_RSI_MAX                 = 38     # FIX #4: 35→38 — easier RSI trigger on 5m
+MR_ADX_MAX                 = 25     # FIX #4: 22→25 — allow slightly stronger trends
+MR_CONFIDENCE_MIN          = 0.55   # FIX #4: 0.60→0.55 — lower bar for MR entry
+MR_MIN_RR                  = 2.0    # FIX #2: enforce R:R ≥ 2.0 for MeanRev (SL wider → TP must be further)
 
 # General signal gate
-REGIME_CONFIDENCE_MIN      = 0.50   # 0.52→0.50: allow slightly less certain regimes
+REGIME_CONFIDENCE_MIN      = 0.45   # FIX #1: 0.50→0.45 — allow more signals through
 
 # ─── v6 Advanced Risk Parameters ───
 CVAR_CONFIDENCE      = 0.95   # CVaR at 95% confidence level

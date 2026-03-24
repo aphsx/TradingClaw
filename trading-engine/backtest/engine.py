@@ -171,11 +171,16 @@ class BacktestEngine:
                 bar_df, regime=regime_id, regime_confidence=regime_conf)
 
             for s in sigs:
+                # FIX #5: Fee threshold gate — skip if expected profit too small vs fees
+                # Prevents fee drag killing tiny-win trades (avg $0.05 gain vs $0.16 fee)
+                min_profit_pct = TOTAL_FEE_PER_TRADE * 100 * FEE_MULTIPLIER
+                if s.expected_profit_pct < min_profit_pct:
+                    continue
+
                 # Extract ML features NOW (at signal bar) — strictly backward-looking
                 ml_feats = self.ml_filter.extract_features(bar_df, s, regime_id, regime_conf)
                 ml_feat_map[id(s)] = ml_feats
-
-            all_signals.extend(sigs)
+                all_signals.append(s)
 
         print(f"   Raw signals: {len(all_signals)}")
 
@@ -420,9 +425,12 @@ class BacktestEngine:
             print(f"\n[ML FILTER] Active | Trades seen: {ml_stats['trades_in_memory']} | "
                   f"Pass rate: {ml_stats['pass_rate']} | "
                   f"Observed win rate: {ml_stats['observed_win_rate']}")
-            fi = self.ml_filter.feature_importance()
-            top5 = list(fi.items())[:5]
-            print(f"   Top features: {', '.join(f'{k}={v:.3f}' for k,v in top5)}")
+            fi = self.ml_filter.feature_importance  # dict attribute, not method
+            if callable(fi):
+                fi = fi()  # fallback if ever becomes callable
+            if isinstance(fi, dict) and fi:
+                top5 = list(fi.items())[:5]
+                print(f"   Top features: {', '.join(f'{k}={v:.3f}' for k,v in top5)}")
         else:
             print(f"\n[ML FILTER] Warming up ({ml_stats['trades_in_memory']}/{50} trades needed)")
 
