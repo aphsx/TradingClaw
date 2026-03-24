@@ -377,6 +377,14 @@ class RegimeDetector:
                     volatile_conf = max(volatile_conf, 0.60 + min(pct_move / 5.0, 1.0) * 0.35)
 
         if volatile:
+            # v5 FIX: Strong trending markets must NOT be misclassified as VOLATILE.
+            # If ADX is high AND DI spread is clear, the move is directional, not chaotic.
+            # True volatility = high ATR *without* clear direction (low ADX / DI spread).
+            di_spread_raw = plus_di - minus_di
+            if adx >= 30 and abs(di_spread_raw) >= 10:
+                volatile = False  # Reclassify — elevated ATR is part of the trend move
+
+        if volatile:
             return VOLATILE, min(volatile_conf, 1.0)
 
         # ── 2. TRENDING: ADX + direction agreement ──

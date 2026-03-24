@@ -60,8 +60,8 @@ MAKER_FEE = 0.0002      # OKX maker 0.02%
 TAKER_FEE = 0.0005      # OKX taker 0.05%
 SLIPPAGE = 0.0003       # Tighter slippage for OKX liquidity
 TOTAL_FEE_PER_TRADE = (TAKER_FEE * 2) + SLIPPAGE
-FEE_MULTIPLIER = 4.0    # FIX #5: 2.5→4.0 — expected profit must be 4x fees to enter
-MIN_PROFIT_FEE_MULTIPLE = 4.0   # FIX #5: minimum expected_profit_pct ≥ fees × this
+FEE_MULTIPLIER = 3.0    # v5: 4.0→3.0 — still conservative but lets more signals through
+MIN_PROFIT_FEE_MULTIPLE = 3.0   # v5: 4.0→3.0 — minimum expected_profit_pct ≥ fees × this
 
 # ─── Risk ───
 # INITIAL_CAPITAL is used ONLY as a fallback when the live balance
@@ -72,13 +72,13 @@ INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "0"))
 RISK_PER_TRADE = 0.015  # 1.5% risk per trade — meaningful at 10x leverage
 MAX_DAILY_LOSS = 0.05
 MAX_DRAWDOWN = 0.15
-MAX_OPEN_TRADES = 3
+MAX_OPEN_TRADES = 2       # v5: 3→2 — smaller accounts overexposed with 3 simultaneous positions
 
 # ─── Trend Strategy ───
 TREND_EMA_FAST = 9
 TREND_EMA_SLOW = 21
 TREND_ATR_SL_MULT = 1.5
-TREND_ATR_TP_MULT = 4.0         # FIX #2: 3.0→4.0 — let winners run longer
+TREND_ATR_TP_MULT = 3.5         # v5: 4.0→3.5 — 4R rarely hit on 5m; 3.5 better hit rate
 
 # ─── Range Strategy ───
 RANGE_BB_PERIOD = 20
@@ -133,7 +133,7 @@ MAX_CORRELATED_POSITIONS = 2      # Max positions with correlation > 0.7
 PARTIAL_TP_ENABLED = True         # Enable intelligent partial profit-taking
 PARTIAL_TP_LEVEL_1_R = 1.0       # First partial at 1R
 PARTIAL_TP_LEVEL_2_R = 2.0       # Second partial at 2R
-PARTIAL_TP_FRACTION_1 = 0.33     # Close 33% at TP1
+PARTIAL_TP_FRACTION_1 = 0.25     # v5: 0.33→0.25 — close less at TP1; let runners run more
 PARTIAL_TP_FRACTION_2 = 0.33     # Close 33% at TP2, trail rest
 PARTIAL_TP_MEANREV_AT_TARGET = 0.70  # MeanRev: close 70% at BB mid, trail 30%
 
@@ -178,7 +178,7 @@ FACTOR_WEIGHT_VOLATILITY = 0.15
 HMM_N_STATES         = 4      # Trend-Up, Trend-Down, Range, Volatile
 HMM_RETRAIN_BARS     = 500    # Retrain every N new bars per symbol
 HMM_N_ITER           = 200    # Max EM iterations
-REGIME_HYSTERESIS_BARS = 2    # FIX #1: 3→2 bars — regime switches faster, fewer blocked signals
+REGIME_HYSTERESIS_BARS = 3    # v5: 2→3 bars — 2 bars caused whipsaw; 3 balances responsiveness vs stability
 REGIME_TRANSITION_DECAY = 0.85 # Confidence decay rate during transitions
 REGIME_VOLATILITY_LOOKBACK = 50  # Bars for adaptive volatility thresholds
 REGIME_STRENGTH_SMOOTHING = 5    # EMA smoothing for regime strength
@@ -235,18 +235,38 @@ TREND_EMA_ALIGN_REQUIRED   = 2      # 3→2: require 2/3 alignments (9>21 + 21>5
 
 # Strategy 2: Volatility Breakout
 BREAKOUT_DONCHIAN_PERIOD   = 20     # 20 bars = 100 min lookback on 5m (fine)
-BREAKOUT_VOLUME_MULT       = 1.2    # 1.5→1.2: 5m spikes are smaller but still meaningful
-BREAKOUT_ATR_EXPAND        = 1.05   # ATR must be expanding by this ratio
+BREAKOUT_VOLUME_MULT       = 1.8    # v5: 1.2→1.8 — 1.2x was too lenient, too many false breakouts
+BREAKOUT_ATR_EXPAND        = 1.08   # v5: 1.05→1.08 — require stronger ATR expansion confirmation
 
 # Strategy 3: Mean Reversion (RANGING only)
-MR_BB_PCT_MAX              = 0.20   # FIX #4: 0.15→0.20 — more MR opportunities
+MR_BB_PCT_MAX              = 0.15   # v5: 0.20→0.15 — trade only true extremes, higher win rate
 MR_RSI_MAX                 = 38     # FIX #4: 35→38 — easier RSI trigger on 5m
 MR_ADX_MAX                 = 25     # FIX #4: 22→25 — allow slightly stronger trends
 MR_CONFIDENCE_MIN          = 0.55   # FIX #4: 0.60→0.55 — lower bar for MR entry
 MR_MIN_RR                  = 2.0    # FIX #2: enforce R:R ≥ 2.0 for MeanRev (SL wider → TP must be further)
 
 # General signal gate
-REGIME_CONFIDENCE_MIN      = 0.45   # FIX #1: 0.50→0.45 — allow more signals through
+REGIME_CONFIDENCE_MIN      = 0.45   # v5: 0.45 kept — balanced threshold
+
+# ─── Strategy 4: Pullback in Trend (NEW v5) ───
+PULLBACK_ADX_MIN           = 22     # Min ADX for valid trend (must be trending)
+PULLBACK_EMA_ZONE          = 0.005  # 0.5% zone around EMA21/50 — pullback target zone
+PULLBACK_RSI_MIN           = 38     # RSI floor for LONG pullback (not oversold)
+PULLBACK_RSI_MAX           = 62     # RSI ceiling for LONG pullback (not overbought)
+PULLBACK_VOL_DECLINE_BARS  = 2      # Min bars of declining volume = exhaustion confirmed
+PULLBACK_TP_R              = 3.0    # Take profit = 3x risk (superior R:R over breakout)
+
+# ─── Strategy 5: Session Open Breakout (NEW v5) ───
+SESSION_OPEN_LOOKBACK_BARS = 48     # Asian session range lookback (48 x 5m = 4h)
+SESSION_OPEN_VOLUME_MIN    = 1.5    # Min volume ratio to confirm session open breakout
+SESSION_OPEN_TP_RANGE_MULT = 1.5    # TP = 1.5x Asian session range
+LONDON_OPEN_HOURS          = (8, 10)   # UTC hours for London open
+NY_OPEN_HOURS              = (13, 15)  # UTC hours for NY open
+
+# ─── Strategy 6: RSI Divergence Entry (NEW v5) ───
+RSI_DIV_LOOKBACK           = 20     # Bars to look for divergence signal
+RSI_DIV_ADX_MAX            = 30     # Divergences fail in strong trends (ADX > 30)
+RSI_DIV_TP_R               = 2.5    # Take profit = 2.5x risk
 
 # ─── v6 Advanced Risk Parameters ───
 CVAR_CONFIDENCE      = 0.95   # CVaR at 95% confidence level

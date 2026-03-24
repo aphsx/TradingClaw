@@ -49,22 +49,28 @@ from config import (
     BREAKOUT_DONCHIAN_PERIOD, BREAKOUT_VOLUME_MULT, BREAKOUT_ATR_EXPAND,
     MR_BB_PCT_MAX, MR_RSI_MAX, MR_ADX_MAX, MR_CONFIDENCE_MIN, MR_MIN_RR,
     REGIME_CONFIDENCE_MIN,
-    # New v4 config constants
+    # v4 config constants
     MTF_ENABLED, MTF_MIN_ALIGNMENT, MTF_TREND_WEIGHT, MTF_CONFIRM_WEIGHT,
     MTF_BYPASS_IF_NO_HTF,
     SESSION_FILTER_ENABLED, ASIAN_SESSION, EUROPE_SESSION, US_SESSION, DEAD_ZONE_HOURS,
+    # v5 new strategy constants
+    PULLBACK_ADX_MIN, PULLBACK_EMA_ZONE, PULLBACK_RSI_MIN, PULLBACK_RSI_MAX,
+    PULLBACK_VOL_DECLINE_BARS, PULLBACK_TP_R,
+    SESSION_OPEN_LOOKBACK_BARS, SESSION_OPEN_VOLUME_MIN, SESSION_OPEN_TP_RANGE_MULT,
+    LONDON_OPEN_HOURS, NY_OPEN_HOURS,
+    RSI_DIV_ADX_MAX, RSI_DIV_TP_R,
 )
 from core.regime_detector import TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, REGIME_NAMES
 
 
 # ─── Regime weights (for compatibility / reporting) ────────────
 REGIME_WEIGHTS: Dict[int, Dict[str, float]] = {
-    TRENDING_UP:   dict(trend=0.55, breakout=0.35, mean_rev=0.00, momentum=0.10),
-    TRENDING_DOWN: dict(trend=0.55, breakout=0.35, mean_rev=0.00, momentum=0.10),
-    RANGING:       dict(trend=0.10, breakout=0.20, mean_rev=0.50, momentum=0.20),
-    VOLATILE:      dict(trend=0.15, breakout=0.60, mean_rev=0.00, momentum=0.25),
+    TRENDING_UP:   dict(trend=0.35, breakout=0.15, mean_rev=0.00, momentum=0.10, pullback=0.30, session=0.10),
+    TRENDING_DOWN: dict(trend=0.35, breakout=0.15, mean_rev=0.00, momentum=0.10, pullback=0.30, session=0.10),
+    RANGING:       dict(trend=0.05, breakout=0.10, mean_rev=0.40, momentum=0.15, pullback=0.05, session=0.10, rsi_div=0.15),
+    VOLATILE:      dict(trend=0.10, breakout=0.45, mean_rev=0.00, momentum=0.20, pullback=0.05, session=0.20),
 }
-DEFAULT_WEIGHTS = dict(trend=0.30, breakout=0.40, mean_rev=0.10, momentum=0.20)
+DEFAULT_WEIGHTS = dict(trend=0.20, breakout=0.25, mean_rev=0.10, momentum=0.15, pullback=0.15, session=0.10, rsi_div=0.05)
 
 
 @dataclass
@@ -179,7 +185,7 @@ class SignalEngine:
         # Compute multi-timeframe confluence if enabled and data provided
         mtf_score = 0.0
         mtf_aligned = 0
-        if self._mtf_enabled and htf_data:
+        if self._mtf_enabled and htf_data is not None and (not isinstance(htf_data, dict) or htf_data):
             mtf_score, mtf_aligned = self._compute_mtf_confluence(df, htf_data, regime)
             # FIX #1: Hard gate only wenn HTF data exists AND alignment is below minimum
             # If no HTF data → bypass (don't penalize signal)
@@ -215,13 +221,36 @@ class SignalEngine:
             if sig:
                 signals.append(sig)
 
-        # Strategy 3: Mean Reversion — Ranging only, very strict
+        # Strategy 3: Mean Reversion — Ranging only, strict
         if regime == RANGING and regime_confidence >= MR_CONFIDENCE_MIN:
             sig = self._mean_reversion(
                 df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
             )
             if sig:
                 signals.append(sig)
+
+        # Strategy 4: Pullback in Trend — Trending regimes (institutional-style entry)
+        if regime in (TRENDING_UP, TRENDING_DOWN):
+            sig = self._pullback_trend(
+                df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
+            )
+            if sig:
+                signals.append(sig)
+
+        # Strategy 5: Session Open Breakout — London/NY opens only
+        if self._session_enabled:
+            sig = self._session_open_breakout(
+                df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
+            )
+            if sig:
+                signals.append(sig)
+
+        # Strategy 6: RSI Divergence — any regime, strongest when ADX < 30
+        sig = self._rsi_divergence_entry(
+            df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
+        )
+        if sig:
+            signals.append(sig)
 
         if not signals:
             return []
@@ -601,7 +630,7 @@ class SignalEngine:
                 if len(bb_widths) > 0
                 else 50
             )
-            squeeze_genuine = bb_width_percentile < 20
+            squeeze_genuine = bb_width_percentile < 15  # v5: <20 → <15, only genuine squeeze
         else:
             # Fallback to Keltner inside check
             squeeze_window = df.get('bb_inside_keltner', pd.Series([False] * len(df))).iloc[-15:-1]
@@ -639,11 +668,10 @@ class SignalEngine:
                         failed_breakout_risk = True
                         break
 
+        # v5: Hard reject failed breakouts — negative expectancy, no point entering
         if failed_breakout_risk:
-            # Still allow but penalize confidence significantly
-            failed_breakout_penalty = -0.20
-        else:
-            failed_breakout_penalty = 0.0
+            return None
+        failed_breakout_penalty = 0.0
 
         # ─── Volume Climax Detection ────
         # Extremely high volume + reversal candle = likely fake breakout
@@ -662,8 +690,9 @@ class SignalEngine:
                 elif direction == "SHORT" and curr_close > curr_open:
                     is_climax = True
 
+        # v5: Volume climax = likely fake breakout, hard reject
         if is_climax:
-            failed_breakout_penalty = -0.25
+            return None
 
         # Score calculation
         vol_score = min((vol_ratio - BREAKOUT_VOLUME_MULT) / 2.0, 1.0)
@@ -671,8 +700,22 @@ class SignalEngine:
         atr_bonus = 0.10 if atr_expanding else 0.0
         mtf_bonus = mtf_score * 0.15 if mtf_aligned >= MTF_MIN_ALIGNMENT else 0.0
 
+        # v5: Retest confirmation bonus — breakout happened recently and price retested level
+        retest_bonus = 0.0
+        if len(df) >= 5:
+            for i in range(2, 5):
+                bar = df.iloc[-i]
+                if direction == "LONG":
+                    if float(bar['low']) <= don_high <= float(bar['high']):
+                        retest_bonus = 0.10  # Price tested breakout level and held
+                        break
+                else:
+                    if float(bar['low']) <= don_low <= float(bar['high']):
+                        retest_bonus = 0.10
+                        break
+
         confidence = min(
-            0.55 + vol_score * 0.25 + squeeze_bonus + atr_bonus + mtf_bonus,
+            0.55 + vol_score * 0.25 + squeeze_bonus + atr_bonus + mtf_bonus + retest_bonus,
             0.95
         )
         confidence += failed_breakout_penalty
@@ -790,88 +833,84 @@ class SignalEngine:
         curr_close = float(last['close'])
         curr_open = float(last['open'])
 
-        # ─── Confluence Zone Check ────
-        # Require BB extreme + VWAP Z-score + RSI extreme together
+        # ─── Compute gate variables ────
         bb_extreme_bullish = bb_pct <= MR_BB_PCT_MAX
         bb_extreme_bearish = bb_pct >= (1.0 - MR_BB_PCT_MAX)
         rsi_extreme_bullish = rsi <= MR_RSI_MAX
         rsi_extreme_bearish = rsi >= (100 - MR_RSI_MAX)
 
         # VWAP extreme: price at least 0.2% away from VWAP
-        vwap_dist = abs(close - vwap) / vwap
+        vwap_dist = abs(close - vwap) / vwap if vwap > 0 else 0.0
         vwap_extreme = vwap_dist > 0.002
         vwap_bullish = close < vwap
         vwap_bearish = close > vwap
 
-        # Stochastic RSI (simpler proxy: RSI at extreme zones)
+        # Stochastic RSI confirmation (use stoch_rsi_k if available)
         stoch_rsi_ok = True
-        if 'stoch_rsi' in df.columns:
-            stoch_rsi = float(df['stoch_rsi'].iloc[-1] or 50)
-            stoch_rsi_ok = (rsi <= MR_RSI_MAX and stoch_rsi < 20) or \
-                           (rsi >= (100 - MR_RSI_MAX) and stoch_rsi > 80)
+        for col in ('stoch_rsi_k', 'stoch_rsi'):
+            if col in df.columns:
+                stoch_val = float(df[col].iloc[-1] or 50)
+                stoch_rsi_ok = (rsi <= MR_RSI_MAX and stoch_val < 25) or \
+                               (rsi >= (100 - MR_RSI_MAX) and stoch_val > 75)
+                break
 
-        # Bullish MR confluence
-        if bb_extreme_bullish and rsi_extreme_bullish and vwap_bullish and vwap_extreme and stoch_rsi_ok:
+        # ─── v5: Determine direction from hard gates (BB + RSI) ────
+        if bb_extreme_bullish and rsi_extreme_bullish:
             direction = "LONG"
-            vol_3bar = df['volume'].iloc[-3:].values
-            vol_exhaustion = False
-            if len(vol_3bar) >= 3:
-                # Declining volume pattern: 3+ bars with vol decreasing
-                vol_declining_count = sum(
-                    vol_3bar[i] < vol_3bar[i - 1] for i in range(1, len(vol_3bar))
-                )
-                vol_exhaustion = vol_declining_count >= 2 or (vol_ma > 0 and vol_ratio < 1.5)
-            else:
-                vol_exhaustion = vol_ma > 0 and vol_ratio < 1.5
-
-            if not vol_exhaustion:
-                return None
-
-            reversal = curr_close > curr_open
-            if not reversal:
-                return None
-
-        # Bearish MR confluence
-        elif bb_extreme_bearish and rsi_extreme_bearish and vwap_bearish and vwap_extreme and stoch_rsi_ok:
+        elif bb_extreme_bearish and rsi_extreme_bearish:
             direction = "SHORT"
-            vol_3bar = df['volume'].iloc[-3:].values
-            vol_exhaustion = False
-            if len(vol_3bar) >= 3:
-                vol_declining_count = sum(
-                    vol_3bar[i] < vol_3bar[i - 1] for i in range(1, len(vol_3bar))
-                )
-                vol_exhaustion = vol_declining_count >= 2 or (vol_ma > 0 and vol_ratio < 1.5)
-            else:
-                vol_exhaustion = vol_ma > 0 and vol_ratio < 1.5
-
-            if not vol_exhaustion:
-                return None
-
-            reversal = curr_close < curr_open
-            if not reversal:
-                return None
-
         else:
             return None
 
-        # Confidence from confluence strength
-        if direction == "LONG":
-            bb_extreme_score = max(0, (MR_BB_PCT_MAX - bb_pct) / MR_BB_PCT_MAX)
-            rsi_extreme_score = max(0, (MR_RSI_MAX - rsi) / MR_RSI_MAX)
+        # ─── v5: Score 4 bonus conditions (need >= 2 to proceed) ────
+        # Required: BB extreme + RSI extreme (above)
+        # Scored:   VWAP, StochRSI, Volume exhaustion, Reversal candle
+        vol_3bar = df['volume'].iloc[-3:].values
+        vol_exhaustion = False
+        if len(vol_3bar) >= 3:
+            vol_declining_count = sum(
+                vol_3bar[i] < vol_3bar[i - 1] for i in range(1, len(vol_3bar))
+            )
+            vol_exhaustion = vol_declining_count >= 2 or (vol_ma > 0 and vol_ratio < 1.5)
         else:
-            bb_extreme_score = max(0, (bb_pct - (1 - MR_BB_PCT_MAX)) / MR_BB_PCT_MAX)
-            rsi_extreme_score = max(0, (rsi - (100 - MR_RSI_MAX)) / MR_RSI_MAX)
+            vol_exhaustion = vol_ma > 0 and vol_ratio < 1.5
+
+        reversal = (curr_close > curr_open) if direction == "LONG" else (curr_close < curr_open)
+
+        bonus_score = 0
+        if direction == "LONG":
+            if vwap_bullish and vwap_extreme:  bonus_score += 1
+            if stoch_rsi_ok:                   bonus_score += 1
+            if vol_exhaustion:                 bonus_score += 1
+            if reversal:                       bonus_score += 1
+        else:
+            if vwap_bearish and vwap_extreme:  bonus_score += 1
+            if stoch_rsi_ok:                   bonus_score += 1
+            if vol_exhaustion:                 bonus_score += 1
+            if reversal:                       bonus_score += 1
+
+        if bonus_score < 2:  # Need at least 2 of 4 bonus conditions
+            return None
+
+        # Confidence from confluence strength + bonus score
+        if direction == "LONG":
+            bb_extreme_score = max(0.0, (MR_BB_PCT_MAX - bb_pct) / MR_BB_PCT_MAX)
+            rsi_extreme_score = max(0.0, (MR_RSI_MAX - rsi) / MR_RSI_MAX)
+        else:
+            bb_extreme_score = max(0.0, (bb_pct - (1 - MR_BB_PCT_MAX)) / MR_BB_PCT_MAX)
+            rsi_extreme_score = max(0.0, (rsi - (100 - MR_RSI_MAX)) / MR_RSI_MAX)
 
         vwap_score = min(vwap_dist / 0.01, 1.0)  # Normalized to 1% threshold
+        bonus_contribution = (bonus_score / 4.0) * 0.15  # up to 15% from bonus conditions
         mtf_bonus = mtf_score * 0.15 if mtf_aligned >= MTF_MIN_ALIGNMENT else 0.0
 
         confidence = min(
             0.50 +
-            bb_extreme_score * 0.25 +
-            rsi_extreme_score * 0.25 +
-            vwap_score * 0.15 +
-            mtf_bonus * 0.10 +
-            0.05,  # Reversal bonus
+            bb_extreme_score * 0.20 +
+            rsi_extreme_score * 0.20 +
+            vwap_score * 0.10 +
+            bonus_contribution +
+            mtf_bonus,
             0.88
         )
         confidence += session_bonus
@@ -904,19 +943,28 @@ class SignalEngine:
         if risk < close * 0.003:
             return None
 
-        # TP Strategy: Fibonacci retracement levels
-        mean_target = ema21
+        # v5: Dynamic TP — use whichever target (EMA21 or VWAP20) is closer and reachable
+        ema21_target = ema21
+        vwap_20_val = float(last.get('vwap_20', ema21) or ema21)
+
         if direction == "LONG":
+            # Closest target ABOVE current price
+            candidates = [t for t in [ema21_target, vwap_20_val] if t > close]
+            mean_target = min(candidates) if candidates else ema21_target
             if mean_target <= close:
                 return None
-            # Primary TP at BB midband
-            tp1 = mean_target
-            # Secondary TP: Fibonacci extension (38.2% above mean)
-            tp2 = mean_target + (mean_target - close) * 0.382
         else:
+            # Closest target BELOW current price
+            candidates = [t for t in [ema21_target, vwap_20_val] if t < close]
+            mean_target = max(candidates) if candidates else ema21_target
             if mean_target >= close:
                 return None
-            tp1 = mean_target
+
+        tp1 = mean_target
+        # Secondary TP: Fibonacci extension
+        if direction == "LONG":
+            tp2 = mean_target + (mean_target - close) * 0.382
+        else:
             tp2 = mean_target - (close - mean_target) * 0.382
 
         # FIX #2: enforce R:R ≥ MR_MIN_RR (2.0) for MeanRev
@@ -949,6 +997,345 @@ class SignalEngine:
             mtf_aligned=mtf_aligned,
             session_bonus=session_bonus,
             volume_exhaustion=vol_exhaustion,
+        )
+
+    # ─── Strategy 4: Pullback in Trend ───────────────────────────────────────
+
+    def _pullback_trend(
+        self,
+        df: pd.DataFrame,
+        regime: int,
+        atr: float,
+        close: float,
+        mtf_score: float = 0.0,
+        mtf_aligned: int = 0,
+        session_bonus: float = 0.0,
+    ) -> Optional[Signal]:
+        """
+        Pullback in Trend — institutional-style entry on mean-reversion within trending markets.
+
+        Catches the "dip buy / rally sell" pattern used by professional traders.
+        Superior R:R vs raw breakout entries. Only active in confirmed TRENDING regimes.
+
+        Conditions:
+        - ADX > PULLBACK_ADX_MIN (trend confirmed)
+        - EMA9/21/50 aligned with regime direction
+        - Price within PULLBACK_EMA_ZONE of EMA21 (or within 1% of EMA50)
+        - RSI in neutral zone PULLBACK_RSI_MIN–PULLBACK_RSI_MAX (not overbought at entry)
+        - Volume declining 2+ bars (pullback losing steam = exhaustion confirmed)
+        - MACD histogram still positive (LONG) / negative (SHORT) — trend intact
+
+        Exit: SL = swing L/H + 0.3 ATR, TP = PULLBACK_TP_R (3.0) x risk
+        """
+        last = df.iloc[-1]
+        cols_needed = ['ema_9', 'ema_21', 'ema_50', 'adx', 'macd_hist', 'rsi_14', 'volume', 'volume_ma_20']
+        if not all(c in df.columns for c in cols_needed):
+            return None
+        if len(df) < 30:
+            return None
+
+        adx      = float(last.get('adx', 0) or 0)
+        ema9     = float(last['ema_9'])
+        ema21    = float(last['ema_21'])
+        ema50    = float(last['ema_50'])
+        macd_h   = float(last.get('macd_hist', 0) or 0)
+        rsi      = float(last.get('rsi_14', 50) or 50)
+        vol      = float(last.get('volume', 0) or 0)
+        vol_ma   = float(last.get('volume_ma_20', vol) or vol)
+
+        if adx < PULLBACK_ADX_MIN:
+            return None
+
+        if regime == TRENDING_UP:
+            direction = "LONG"
+            if not (ema9 > ema21 and ema21 > ema50):  # Bull EMA alignment required
+                return None
+            ema21_dist = abs(close - ema21) / close
+            ema50_dist = abs(close - ema50) / close
+            if ema21_dist > PULLBACK_EMA_ZONE and ema50_dist > PULLBACK_EMA_ZONE * 2:
+                return None  # Price not near EMA21 or EMA50
+            if not (PULLBACK_RSI_MIN <= rsi <= PULLBACK_RSI_MAX):
+                return None
+            if macd_h <= 0:
+                return None  # Trend must still be intact
+
+        elif regime == TRENDING_DOWN:
+            direction = "SHORT"
+            if not (ema9 < ema21 and ema21 < ema50):  # Bear EMA alignment required
+                return None
+            ema21_dist = abs(close - ema21) / close
+            ema50_dist = abs(close - ema50) / close
+            if ema21_dist > PULLBACK_EMA_ZONE and ema50_dist > PULLBACK_EMA_ZONE * 2:
+                return None
+            if not (PULLBACK_RSI_MIN <= rsi <= PULLBACK_RSI_MAX):
+                return None
+            if macd_h >= 0:
+                return None
+        else:
+            return None
+
+        # Volume declining — pullback losing steam (exhaustion)
+        vol_declining = False
+        if len(df) >= 4 and vol_ma > 0:
+            recent_vols = df['volume'].iloc[-4:].values
+            dec_count = sum(recent_vols[i] < recent_vols[i - 1] for i in range(1, len(recent_vols)))
+            vol_declining = dec_count >= PULLBACK_VOL_DECLINE_BARS
+
+        # Score-based confidence
+        adx_strength    = min((adx - PULLBACK_ADX_MIN) / 15.0, 1.0)
+        ema21_closeness = max(0.0, 1.0 - (abs(close - ema21) / close / max(PULLBACK_EMA_ZONE, 1e-9)))
+        rsi_centrality  = 1.0 - abs(rsi - 50) / 50.0  # RSI closer to 50 = better pullback
+        vol_bonus       = 0.10 if vol_declining else 0.0
+        mtf_bonus       = mtf_score * 0.15 if mtf_aligned >= MTF_MIN_ALIGNMENT else 0.0
+
+        score = (adx_strength * 0.30 + ema21_closeness * 0.30 +
+                 rsi_centrality * 0.20 + vol_bonus + mtf_bonus)
+
+        confidence = min(0.52 + score * 0.35 + session_bonus, 0.92)
+        confidence = max(confidence, 0.45)
+
+        # SL: swing low/high + small ATR buffer
+        lookback = min(SWING_LOOKBACK, len(df) - 1)
+        if direction == "LONG":
+            sl = float(df['low'].iloc[-lookback:].min()) - atr * 0.3
+        else:
+            sl = float(df['high'].iloc[-lookback:].max()) + atr * 0.3
+
+        sl = self._safety_sl(sl, direction, close)
+        if sl <= 0:
+            return None
+
+        risk = abs(close - sl)
+        if risk < close * 0.003:
+            return None
+
+        tp1 = (close + risk * PULLBACK_TP_R) if direction == "LONG" else (close - risk * PULLBACK_TP_R)
+        tp2 = tp1
+        expected_pct = abs(tp1 - close) / close * 100
+        if expected_pct < self._min_profit:
+            return None
+
+        composite = score if direction == "LONG" else -score
+        return Signal(
+            timestamp=df.index[-1], direction=direction,
+            entry_price=close, stop_loss=sl, take_profit=tp1, take_profit_2=tp2,
+            atr=atr, regime=regime, strategy="PullbackTrend",
+            confidence=confidence, expected_profit_pct=expected_pct,
+            composite_score=composite, vol_size_mult=self._vol_size_mult(df),
+            mtf_score=mtf_score, mtf_aligned=mtf_aligned, session_bonus=session_bonus,
+        )
+
+    # ─── Strategy 5: Session Open Breakout ───────────────────────────────────
+
+    def _session_open_breakout(
+        self,
+        df: pd.DataFrame,
+        regime: int,
+        atr: float,
+        close: float,
+        mtf_score: float = 0.0,
+        mtf_aligned: int = 0,
+        session_bonus: float = 0.0,
+    ) -> Optional[Signal]:
+        """
+        Session Open Breakout — directional momentum at London/NY market opens.
+
+        Crypto follows traditional FX session patterns. London (08-10 UTC) and
+        NY (13-15 UTC) opens create strong directional moves as new capital enters.
+
+        Entry: Break of Asian session high/low with volume surge.
+        Stop:  Opposite Asian session boundary.
+        TP:    SESSION_OPEN_TP_RANGE_MULT x Asian session range.
+        """
+        if not self._session_enabled:
+            return None
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return None
+        if len(df) < SESSION_OPEN_LOOKBACK_BARS + 5:
+            return None
+
+        current_hour = df.index[-1].hour
+        london_open = LONDON_OPEN_HOURS[0] <= current_hour <= LONDON_OPEN_HOURS[1]
+        ny_open     = NY_OPEN_HOURS[0]     <= current_hour <= NY_OPEN_HOURS[1]
+        if not london_open and not ny_open:
+            return None
+
+        last    = df.iloc[-1]
+        lookback_n  = min(SESSION_OPEN_LOOKBACK_BARS, len(df) - 1)
+        asian_data  = df.iloc[-(lookback_n + 1):-1]
+        asian_high  = float(asian_data['high'].max())
+        asian_low   = float(asian_data['low'].min())
+        asian_range = asian_high - asian_low
+        if asian_range < atr * 0.5:
+            return None
+
+        vol    = float(last.get('volume', 0) or 0)
+        vol_ma = float(last.get('volume_ma_20', vol) or vol)
+        vol_ratio = vol / vol_ma if vol_ma > 0 else 1.0
+        if vol_ratio < SESSION_OPEN_VOLUME_MIN:
+            return None
+
+        prev_close      = float(df['close'].iloc[-2])
+        bullish_break   = close > asian_high and prev_close <= asian_high
+        bearish_break   = close < asian_low  and prev_close >= asian_low
+        if not bullish_break and not bearish_break:
+            return None
+
+        direction = "LONG" if bullish_break else "SHORT"
+
+        vol_score           = min((vol_ratio - SESSION_OPEN_VOLUME_MIN) / 2.0, 1.0)
+        range_score         = min(asian_range / (atr * 3.0), 1.0)
+        session_type_bonus  = 0.08 if ny_open else 0.05
+        mtf_bonus           = mtf_score * 0.10 if mtf_aligned >= MTF_MIN_ALIGNMENT else 0.0
+
+        confidence = min(
+            0.55 + vol_score * 0.20 + range_score * 0.10 + session_type_bonus + mtf_bonus, 0.90
+        )
+        confidence = max(confidence, 0.45)
+
+        if direction == "LONG":
+            sl = asian_low  - atr * 0.2
+        else:
+            sl = asian_high + atr * 0.2
+        sl = self._safety_sl(sl, direction, close)
+        if sl <= 0:
+            return None
+
+        risk = abs(close - sl)
+        if risk < close * 0.003:
+            return None
+
+        if direction == "LONG":
+            tp1 = close + asian_range * SESSION_OPEN_TP_RANGE_MULT
+        else:
+            tp1 = close - asian_range * SESSION_OPEN_TP_RANGE_MULT
+
+        rr = abs(tp1 - close) / risk if risk > 0 else 0
+        if rr < 1.5:
+            tp1 = (close + risk * 1.5) if direction == "LONG" else (close - risk * 1.5)
+        tp2 = tp1
+
+        expected_pct = abs(tp1 - close) / close * 100
+        if expected_pct < self._min_profit:
+            return None
+
+        composite = confidence if direction == "LONG" else -confidence
+        return Signal(
+            timestamp=df.index[-1], direction=direction,
+            entry_price=close, stop_loss=sl, take_profit=tp1, take_profit_2=tp2,
+            atr=atr, regime=regime, strategy="SessionOpen",
+            confidence=confidence, expected_profit_pct=expected_pct,
+            composite_score=composite, vol_size_mult=self._vol_size_mult(df),
+            mtf_score=mtf_score, mtf_aligned=mtf_aligned, session_bonus=session_bonus,
+        )
+
+    # ─── Strategy 6: RSI Divergence Entry ────────────────────────────────────
+
+    def _rsi_divergence_entry(
+        self,
+        df: pd.DataFrame,
+        regime: int,
+        atr: float,
+        close: float,
+        mtf_score: float = 0.0,
+        mtf_aligned: int = 0,
+        session_bonus: float = 0.0,
+    ) -> Optional[Signal]:
+        """
+        RSI Divergence Entry — uses the rsi_divergence column computed in features.py.
+
+        RSI divergence (price makes new extreme but RSI doesn't follow) is one of the
+        strongest counter-trend reversal signals. The feature was calculated but never
+        consumed by any strategy — this closes that gap.
+
+        Conditions:
+        - rsi_divergence != 0 (detected in last 3 bars)
+        - ADX < RSI_DIV_ADX_MAX (divergences fail in strong trends)
+        - Confirming reversal candle
+        - Volume not in climax (< 3x MA)
+
+        Exit: SL = 1.5 ATR, TP = RSI_DIV_TP_R (2.5) x risk
+        """
+        if 'rsi_divergence' not in df.columns:
+            return None
+        if len(df) < 20:
+            return None
+
+        last = df.iloc[-1]
+        # Check last 3 bars for a divergence signal (signal can persist briefly)
+        rsi_div = 0.0
+        for i in range(1, min(4, len(df))):
+            v = float(df['rsi_divergence'].iloc[-i] or 0)
+            if v != 0:
+                rsi_div = v
+                break
+
+        if rsi_div == 0:
+            return None
+
+        adx       = float(last.get('adx', 25) or 25)
+        rsi       = float(last.get('rsi_14', 50) or 50)
+        vol       = float(last.get('volume', 0) or 0)
+        vol_ma    = float(last.get('volume_ma_20', vol) or vol)
+        vol_ratio = vol / vol_ma if vol_ma > 0 else 1.0
+        curr_open = float(last['open'])
+        curr_close = float(last['close'])
+
+        if adx > RSI_DIV_ADX_MAX:
+            return None  # Divergences unreliable in strong trends
+        if vol_ratio > 3.0:
+            return None  # Climax volume = dangerous
+
+        if rsi_div > 0:  # Bullish divergence — expect bounce up
+            direction = "LONG"
+            if rsi > 60:  # RSI too high for bullish divergence
+                return None
+            if curr_close <= curr_open:  # Need bullish candle to confirm
+                return None
+        elif rsi_div < 0:  # Bearish divergence — expect drop
+            direction = "SHORT"
+            if rsi < 40:  # RSI too low for bearish divergence
+                return None
+            if curr_close >= curr_open:  # Need bearish candle to confirm
+                return None
+        else:
+            return None
+
+        rsi_extreme_score = abs(rsi - 50) / 50.0
+        adx_range_score   = max(0.0, (RSI_DIV_ADX_MAX - adx) / RSI_DIV_ADX_MAX)
+        vol_confirm       = min(vol_ratio / 2.0, 1.0)
+        mtf_bonus         = mtf_score * 0.10 if mtf_aligned >= MTF_MIN_ALIGNMENT else 0.0
+
+        confidence = min(
+            0.50 + rsi_extreme_score * 0.20 + adx_range_score * 0.15 +
+            vol_confirm * 0.10 + mtf_bonus + session_bonus,
+            0.85
+        )
+        confidence = max(confidence, 0.40)
+
+        sl = (close - atr * 1.5) if direction == "LONG" else (close + atr * 1.5)
+        sl = self._safety_sl(sl, direction, close)
+        if sl <= 0:
+            return None
+
+        risk = abs(close - sl)
+        if risk < close * 0.003:
+            return None
+
+        tp1 = (close + risk * RSI_DIV_TP_R) if direction == "LONG" else (close - risk * RSI_DIV_TP_R)
+        tp2 = tp1
+        expected_pct = abs(tp1 - close) / close * 100
+        if expected_pct < self._min_profit:
+            return None
+
+        composite = confidence if direction == "LONG" else -confidence
+        return Signal(
+            timestamp=df.index[-1], direction=direction,
+            entry_price=close, stop_loss=sl, take_profit=tp1, take_profit_2=tp2,
+            atr=atr, regime=regime, strategy="RSIDivergence",
+            confidence=confidence, expected_profit_pct=expected_pct,
+            composite_score=composite, vol_size_mult=self._vol_size_mult(df),
+            mtf_score=mtf_score, mtf_aligned=mtf_aligned, session_bonus=session_bonus,
         )
 
     # ─── Helpers ──────────────────────────────────────────────────
