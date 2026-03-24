@@ -71,8 +71,14 @@ def _build_exchange() -> ccxt.Exchange:
         if '_demo' in EXCHANGE_RAW:
             # Bybit's "Demo Trading" (live app integration)
             exchange.options['demo'] = True
-            exchange.urls['api']['public'] = 'https://api-demo.bybit.com'
-            exchange.urls['api']['private'] = 'https://api-demo.bybit.com'
+            
+            # Override all endpoints to use api-demo.bybit.com
+            if isinstance(exchange.urls['api'], dict):
+                for key in exchange.urls['api']:
+                    exchange.urls['api'][key] = 'https://api-demo.bybit.com'
+            else:
+                exchange.urls['api'] = 'https://api-demo.bybit.com'
+                
             if not exchange.headers: exchange.headers = {}
             exchange.headers['X-DEMO-TRADING'] = '1'
             log.info("Bybit mode: DEMO TRADING (api-demo)")

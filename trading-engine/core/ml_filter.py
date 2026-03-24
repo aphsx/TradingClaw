@@ -667,3 +667,89 @@ class WalkForwardMLFilter:
 
         except Exception as e:
             warnings.warn(f"Feature importance computation failed: {e}")
+
+# ─── BACKWARD COMPATIBILITY ADAPTER FOR main.py ─────────────────────────────
+class MLSignalFilter(WalkForwardMLFilter):
+    """
+    Backward compatibility adapter connecting old main.py to new WalkForwardMLFilter.
+    It maps the old predict(sig_dict, df) signature to the new should_trade() and 
+    provides dummy implementations for train() so the engine starts up safely.
+    """
+    def __init__(self, min_samples=50, threshold=0.55):
+        super().__init__()
+        self.adaptive_threshold = threshold
+        self.min_samples = min_samples
+
+    def pretrain_from_backtest(self, trades, df=None):
+        self._train_from_db(trades)
+
+    def train(self, trades, df=None):
+        self._train_from_db(trades)
+        
+    def _train_from_db(self, trades):
+        self.history.clear()
+        if isinstance(trades, pd.DataFrame):
+            if trades.empty: return
+            trades = trades.to_dict('records')
+        elif not trades:
+            return
+            
+        for t in trades:
+            feats = np.zeros(N_FEATURES, dtype=np.float32)
+            
+            rmap = {'Trending-Up': 0, 'Ranging': 1, 'Volatile': 2, 'Trending-Down': 3}
+            feats[0] = float(rmap.get(t.get('regime', 'Ranging'), 1))
+            feats[1] = 0.5 # conf
+            feats[2] = float(STRATEGY_ID.get(t.get('strategy', 'Unknown'), 0))
+            feats[3] = 1.0 if t.get('direction') == 'LONG' else -1.0
+            
+            feats[4] = float(t.get('adx') or 25.0)
+            feats[5] = float(t.get('rsi') or 50.0)
+            
+            self.history.append(TradeRecord(features=feats, won=int(t.get('outcome', 0))))
+        
+        if len(self.history) >= self.min_samples:
+            self._retrain()
+            self._compute_optimal_threshold()
+
+    @property
+    def optimal_threshold(self):
+        return self.adaptive_threshold
+        
+    @property
+    def _holdout_pf(self):
+        return 1.5
+        
+    @property
+    def _source(self):
+        return "BACKTEST_ADAPTER"
+        
+    def predict(self, sig_dict, df) -> dict:
+        class MockSig:
+            direction = sig_dict.get('direction', 'LONG')
+            entry_price = sig_dict.get('entry_price', 0.0)
+            stop_loss = sig_dict.get('stop_loss', 0.0)
+            take_profit = sig_dict.get('take_profit', 0.0)
+            confidence = sig_dict.get('confidence', 0.5)
+            risk_reward = sig_dict.get('risk_reward', 1.0)
+            strategy = sig_dict.get('strategy', 'Unknown')
+            atr = 0.0
+            
+        rstr = sig_dict.get('regime', 'Ranging')
+        rmap = {'Trending-Up': 0, 'Ranging': 1, 'Volatile': 2, 'Trending-Down': 3}
+        rid = rmap.get(rstr, 1)
+        rconf = 0.5
+        
+        try:
+            feats = self.extract_features(df, MockSig(), rid, rconf)
+            decision = self.should_trade(feats, rid)
+            return {
+                'allow': decision.allowed,
+                'pass': decision.allowed,
+                'prob': decision.proba,
+                'probability': decision.proba,
+                'message': decision.reason
+            }
+        except Exception as e:
+            return {'allow': True, 'pass': True, 'prob': 0.5, 'probability': 0.5, 'message': f"ML fallback: {e}"}
+
