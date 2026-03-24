@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server';
 import { query, redisGet, redisSmembers } from '@/lib/db';
+import { getEngineHttpUrl } from '@/lib/engine-url';
 
 export const dynamic = 'force-dynamic';
 
-const ENGINE_HTTP_URL =
-  process.env.TRADING_ENGINE_HTTP_URL ||
-  process.env.NEXT_PUBLIC_ENGINE_HTTP_URL ||
-  'http://trading-engine:8081';
-
 export async function GET() {
+  const engineUrl = getEngineHttpUrl();
   let open_positions: any[] = [];
   let monitorStatus = null;
   let equity = null;
@@ -65,7 +62,7 @@ export async function GET() {
   // All Binance positions (bot-managed + manual) — always fetch (non-fatal)
   let binancePositions: any[] = [];
   try {
-    const engineRes = await fetch(`${ENGINE_HTTP_URL}/manual-positions`, {
+    const engineRes = await fetch(`${engineUrl}/manual-positions`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(4000),

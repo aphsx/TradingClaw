@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
+import { getEngineHttpUrl } from '@/lib/engine-url';
 
 export const dynamic = 'force-dynamic';
-const ENGINE_HTTP_URL = process.env.TRADING_ENGINE_HTTP_URL || 'http://localhost:8081';
 
 export async function GET() {
   try {
-    const res = await fetch(`${ENGINE_HTTP_URL}/health`, {
+    const engineUrl = getEngineHttpUrl();
+    const res = await fetch(`${engineUrl}/health`, {
       cache: 'no-store',
     });
     if (!res.ok) throw new Error('Health probe failed');
