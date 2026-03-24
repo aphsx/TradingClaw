@@ -282,7 +282,8 @@ class BacktestEngine:
                          'stop_loss': cp.signal.stop_loss,
                          'direction': cp.signal.direction},
                         cp.exit_price)
-                    self.monitor.record_outcome(cp.signal.regime, r)
+                    pid = pos_db_ids.get(id(cp)) or f"BT_{id(cp) % 10000}"
+                    self.monitor.record_outcome(cp.signal.regime, r, pos_id=pid)
                     cp._monitor_recorded = True
 
                     # Walk-forward ML: record outcome AFTER trade closes (no leakage)

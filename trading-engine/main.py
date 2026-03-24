@@ -368,7 +368,7 @@ def run_live():
                                     if flip_order.get('orderId'):
                                         pnl = float(pos.get('unrealized_pnl', 0))
                                         r_mult = regime_mon.estimate_r_multiple(pos, price)
-                                        regime_mon.record_outcome(entry_reg_id, r_mult)
+                                        regime_mon.record_outcome(entry_reg_id, r_mult, pos_id=pos.get('id'))
                                         mon.publish_position_close(pos['id'], {
                                             'exit_price': price, 'reason': 'Regime Flip',
                                             'pnl': pnl, 'r_multiple': r_mult,
@@ -413,7 +413,7 @@ def run_live():
                                         if entry_regime >= 0:
                                             # Estimate exit price from unrealized PnL or last price
                                             r = regime_mon.estimate_r_multiple(closed_pos, price)
-                                            regime_mon.record_outcome(entry_regime, r)
+                                            regime_mon.record_outcome(entry_regime, r, pos_id=closed_id)
                                 except Exception:
                                     pass
                     except Exception as e:
