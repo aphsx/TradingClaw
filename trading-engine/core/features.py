@@ -67,13 +67,18 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
     df['macd_hist_slope'] = df['macd_hist'].diff(3)
 
     # ─── Ichimoku Cloud ───
+    # LEAK-SAFE NOTES:
+    #   ichimoku_tenkan/kijun   → only look back, no leakage ✓
+    #   ichimoku_senkou_a/b     → shift(+26): value at T = cloud computed from T-26. ✓
+    #                             Equivalent to "cloud from 26 bars ago projected to now".
+    #   ichimoku_chikou         → shift(-26): USES FUTURE CLOSE → REMOVED to prevent leakage ✗
     df['ichimoku_tenkan'] = (df['high'].rolling(9).max() + df['low'].rolling(9).min()) / 2
     df['ichimoku_kijun'] = (df['high'].rolling(26).max() + df['low'].rolling(26).min()) / 2
     df['ichimoku_senkou_a'] = ((df['ichimoku_tenkan'] + df['ichimoku_kijun']) / 2).shift(26)
     df['ichimoku_senkou_b'] = (
         (df['high'].rolling(52).max() + df['low'].rolling(52).min()) / 2
     ).shift(26)
-    df['ichimoku_chikou'] = df['close'].shift(-26)
+    # ichimoku_chikou intentionally omitted: close.shift(-26) uses T+26 future price.
 
     # Ichimoku cloud position: above=1, inside=0, below=-1
     cloud_top = df[['ichimoku_senkou_a', 'ichimoku_senkou_b']].max(axis=1)

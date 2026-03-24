@@ -17,6 +17,7 @@ from core.features import calculate_features, get_regime_features
 from core.regime_detector import RegimeDetector, REGIME_NAMES
 from core.risk_manager import RiskManager
 from core.regime_monitor import RegimeMonitor
+from core.ml_filter import WalkForwardMLFilter
 from strategies.signal_engine import SignalEngine
 
 try:
@@ -47,6 +48,7 @@ class BacktestEngine:
         self.risk_mgr   = RiskManager(initial_capital=capital, taker_fee=self.taker_fee)
         self.sig_engine = SignalEngine(taker_fee=self.taker_fee, maker_fee=self.maker_fee)
         self.monitor    = RegimeMonitor()
+        self.ml_filter  = WalkForwardMLFilter()  # walk-forward, zero-leakage ML gate
 
         try:
             from core.correlation import CorrelationManager
@@ -114,6 +116,7 @@ class BacktestEngine:
         REGIME_LOOKBACK = 120
         print(f"\n[SIGNAL] Generating signals (no-lookahead, window={REGIME_LOOKBACK})...")
         all_signals = []
+        ml_feat_map = {}   # signal.timestamp → ML feature vector (extracted at signal time)
         for i in range(60, len(test_df)):
             bar_df       = test_df.iloc[:i + 1]
             window_start = max(0, i + 1 - REGIME_LOOKBACK)
@@ -128,6 +131,12 @@ class BacktestEngine:
 
             sigs = self.sig_engine.generate_signals(
                 bar_df, regime=regime_id, regime_confidence=regime_conf)
+
+            for s in sigs:
+                # Extract ML features NOW (at signal bar) — strictly backward-looking
+                ml_feats = self.ml_filter.extract_features(bar_df, s, regime_id, regime_conf)
+                ml_feat_map[id(s)] = ml_feats
+
             all_signals.extend(sigs)
 
         print(f"   Raw signals: {len(all_signals)}")
@@ -146,8 +155,11 @@ class BacktestEngine:
         for s in all_signals:
             signal_map.setdefault(s.timestamp, []).append(s)
 
-        pos_db_ids = {}
-        executed   = 0
+        pos_db_ids    = {}
+        executed      = 0
+        # Maps position id → ML feature vector used to generate its signal
+        # Needed to record outcome when the position closes
+        pos_ml_feats: dict = {}
 
         # Pre-compute per-bar regime for trade health monitor
         bar_regime_map = {}
@@ -219,7 +231,7 @@ class BacktestEngine:
                     elif sig.direction == "SHORT" and action.new_sl < sig.stop_loss:
                         sig.stop_loss = action.new_sl
 
-            # ── Record R-multiples for regime monitor ──
+            # ── Record R-multiples for regime monitor + ML filter outcomes ──
             for cp in list(self.risk_mgr.closed_positions):
                 if not getattr(cp, '_monitor_recorded', False):
                     r = self.monitor.estimate_r_multiple(
@@ -229,6 +241,11 @@ class BacktestEngine:
                         cp.exit_price)
                     self.monitor.record_outcome(cp.signal.regime, r)
                     cp._monitor_recorded = True
+
+                    # Walk-forward ML: record outcome AFTER trade closes (no leakage)
+                    ml_feats = pos_ml_feats.get(id(cp))
+                    if ml_feats is not None:
+                        self.ml_filter.record_outcome(ml_feats, won=(cp.pnl > 0))
 
             # Write closed positions to DB
             if self.use_db:
@@ -252,6 +269,15 @@ class BacktestEngine:
                     if not mon_ok:
                         continue
 
+                    # Walk-forward ML gate (zero-leakage — trained only on past closed trades)
+                    ml_feats  = ml_feat_map.get(id(signal))
+                    if ml_feats is not None:
+                        ml_dec = self.ml_filter.should_trade(ml_feats)
+                        if not ml_dec.allowed:
+                            continue
+                    else:
+                        ml_feats = None  # no features available → allow (warming up)
+
                     # Correlation gate
                     if self.corr_mgr is not None:
                         open_pos_dicts = [
@@ -265,6 +291,9 @@ class BacktestEngine:
 
                     pos = self.risk_mgr.open_position(signal, idx)
                     if pos:
+                        # Store ML features on position for outcome recording at close
+                        if ml_feats is not None:
+                            pos_ml_feats[id(pos)] = ml_feats
                         # Scale by volatility multiplier
                         total_mult = signal.vol_size_mult
                         mon_mult   = self.monitor.get_size_multiplier(signal.regime)
@@ -312,6 +341,17 @@ class BacktestEngine:
         trade_stats  = self.risk_mgr.get_stats()
         health_report = self.monitor.get_health_report()
 
+        ml_stats = self.ml_filter.get_stats()
+        if ml_stats.get('active'):
+            print(f"\n[ML FILTER] Active | Trades seen: {ml_stats['trades_in_memory']} | "
+                  f"Pass rate: {ml_stats['pass_rate']} | "
+                  f"Observed win rate: {ml_stats['observed_win_rate']}")
+            fi = self.ml_filter.feature_importance()
+            top5 = list(fi.items())[:5]
+            print(f"   Top features: {', '.join(f'{k}={v:.3f}' for k,v in top5)}")
+        else:
+            print(f"\n[ML FILTER] Warming up ({ml_stats['trades_in_memory']}/{50} trades needed)")
+
         self.results = {
             "data": {
                 "symbol": SYMBOL, "timeframe": TIMEFRAME,
@@ -324,8 +364,9 @@ class BacktestEngine:
                 "test_distribution": {
                     REGIME_NAMES[r]: int(c) for r, c in regime_counts.items()},
             },
-            "trading": trade_stats,
-            "monitor": health_report,
+            "trading":    trade_stats,
+            "monitor":    health_report,
+            "ml_filter":  ml_stats,
             "config": {
                 "initial_capital":     INITIAL_CAPITAL,
                 "risk_per_trade":      f"{RISK_PER_TRADE*100}%",
