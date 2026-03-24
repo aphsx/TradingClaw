@@ -578,6 +578,7 @@ export default function Dashboard({ data }: { data: any }) {
                   <table className="w-full text-sm whitespace-nowrap">
                     <thead>
                       <tr className="text-gray-500 text-xs uppercase tracking-wider">
+                        <th className="text-left pb-3 pr-3">Pos ID</th>
                         <th className="text-left pb-3 pr-3">Time</th>
                         <th className="text-left pb-3 pr-3">Dir</th>
                         <th className="text-left pb-3 pr-3">Strategy</th>
@@ -598,6 +599,7 @@ export default function Dashboard({ data }: { data: any }) {
                         const feeAsset = t.entry_commission_asset || t.exit_commission_asset || 'USDT';
                         return (
                         <tr key={t.id} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
+                          <td className="py-2 pr-3 text-gray-500 font-mono text-[10px]">#{t.id}</td>
                           <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(t.entry_time)}</td>
                           <td className="py-2 pr-3">
                             <Badge color={t.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{t.direction}</Badge>
@@ -682,6 +684,7 @@ export default function Dashboard({ data }: { data: any }) {
               <table className="w-full text-sm whitespace-nowrap">
                 <thead>
                   <tr className="text-gray-500 text-xs uppercase tracking-wider">
+                    <th className="text-left pb-3 pr-4">ID</th>
                     <th className="text-left pb-3 pr-4">Symbol / Dir</th>
                     <th className="text-left pb-3 pr-4">Strategy</th>
                     <th className="text-right pb-3 pr-4">Entry</th>
@@ -704,6 +707,7 @@ export default function Dashboard({ data }: { data: any }) {
                     const scoreColor = score === null ? '#666' : score >= 0.6 ? '#22c55e' : score >= 0.4 ? '#86efac' : score <= -0.6 ? '#ef4444' : score <= -0.4 ? '#f87171' : '#9ca3af';
                     return (
                       <tr key={i} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
+                        <td className="py-3 pr-4 text-gray-500 font-mono text-xs">#{p.id || '—'}</td>
                         <td className="py-3 pr-4">
                           <div className="flex items-center gap-2">
                             <Badge color={p.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{p.direction}</Badge>
