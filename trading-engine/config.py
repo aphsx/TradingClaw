@@ -36,7 +36,7 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 # ─── Trading ───
 TRADING_MODE = os.getenv("TRADING_MODE", "live")
 SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
-TIMEFRAME = os.getenv("TIMEFRAME", "15m")   # 15m: best for VolBreakout compression + TrendFollow
+TIMEFRAME = os.getenv("TIMEFRAME", "5m")    # 5m: more signals, ML filter warms up faster
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "180"))
 
 # ─── Capital Tiers ───────────────────────────────────────────
@@ -192,21 +192,24 @@ TRADE_HEALTH_R_THRESHOLD    = -0.35  # If at this R-multiple, tighten SL
 TRADE_HEALTH_SL_TIGHTEN_PCT = 0.50   # Move SL this fraction toward entry price
 
 # ─── v3 Strategy Parameters ──────────────────────────────────
+# Tuned for 5m BTC/USDT — balance between selectivity and signal frequency.
+# On 5m: ADX is noisier, so lower threshold; EMA200 alignment is too slow
+# to require fully; RSI extremes are more common; volume spikes are smaller.
 
 # Strategy 1: Trend Follow
-TREND_ADX_MIN              = 25     # ADX must be above this to enter trend trade
-TREND_EMA_ALIGN_REQUIRED   = 3      # Out of 3 EMA alignments (9>21, 21>50, 50>200)
+TREND_ADX_MIN              = 20     # 25→20: 5m ADX still meaningful at 20+
+TREND_EMA_ALIGN_REQUIRED   = 2      # 3→2: require 2/3 alignments (9>21 + 21>50 sufficient)
 
 # Strategy 2: Volatility Breakout
-BREAKOUT_DONCHIAN_PERIOD   = 20     # Donchian channel lookback
-BREAKOUT_VOLUME_MULT       = 1.5    # Volume must be >= this multiple of average
+BREAKOUT_DONCHIAN_PERIOD   = 20     # 20 bars = 100 min lookback on 5m (fine)
+BREAKOUT_VOLUME_MULT       = 1.2    # 1.5→1.2: 5m spikes are smaller but still meaningful
 BREAKOUT_ATR_EXPAND        = 1.05   # ATR must be expanding by this ratio
 
-# Strategy 3: Mean Reversion (very tight — only RANGING regime)
-MR_BB_PCT_MAX              = 0.08   # BB %B must be <= this for long (extreme oversold)
-MR_RSI_MAX                 = 28     # RSI must be <= this for long
-MR_ADX_MAX                 = 20     # ADX must be <= this (truly ranging)
-MR_CONFIDENCE_MIN          = 0.65   # Regime confidence must be >= this for MR
+# Strategy 3: Mean Reversion (RANGING only)
+MR_BB_PCT_MAX              = 0.15   # 0.08→0.15: less extreme, more opportunities
+MR_RSI_MAX                 = 35     # 28→35: 5m RSI extremes are hit more often
+MR_ADX_MAX                 = 22     # 20→22: slight relaxation for 5m noise
+MR_CONFIDENCE_MIN          = 0.60   # 0.65→0.60: easier to meet on 5m
 
 # General signal gate
-REGIME_CONFIDENCE_MIN      = 0.52   # Skip ALL entries if regime confidence below this
+REGIME_CONFIDENCE_MIN      = 0.50   # 0.52→0.50: allow slightly less certain regimes

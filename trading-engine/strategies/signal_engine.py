@@ -178,16 +178,20 @@ class SignalEngine:
 
         if regime == TRENDING_UP:
             direction  = "LONG"
+            # Priority: fast EMA alignment (9>21, 21>50); EMA200 optional (too slow on 5m)
             ema_checks = [ema9 > ema21, ema21 > ema50, ema50 > ema200]
             if sum(ema_checks) < TREND_EMA_ALIGN_REQUIRED:
                 return None
-            if close < ema50 * 0.998:
+            # Allow price slightly under ema50 — 5m can dip and recover fast
+            if close < ema50 * 0.995:
                 return None
             if macd_hist <= 0:
                 return None
-            if not (45 <= rsi <= 78):
+            # Wider RSI: 5m sees RSI extremes more often, 40-82 still filters chasing
+            if not (40 <= rsi <= 82):
                 return None
-            if macd_slope < -abs(macd_hist) * 0.5:
+            # Softer slope check: only reject if MACD is aggressively rolling over (>1x)
+            if macd_slope < -abs(macd_hist) * 1.0:
                 return None
 
         elif regime == TRENDING_DOWN:
@@ -195,13 +199,14 @@ class SignalEngine:
             ema_checks = [ema9 < ema21, ema21 < ema50, ema50 < ema200]
             if sum(ema_checks) < TREND_EMA_ALIGN_REQUIRED:
                 return None
-            if close > ema50 * 1.002:
+            if close > ema50 * 1.005:
                 return None
             if macd_hist >= 0:
                 return None
-            if not (22 <= rsi <= 55):
+            # Wider RSI for short: 18-60 (from 22-55)
+            if not (18 <= rsi <= 60):
                 return None
-            if macd_slope > abs(macd_hist) * 0.5:
+            if macd_slope > abs(macd_hist) * 1.0:
                 return None
         else:
             return None
@@ -280,7 +285,10 @@ class SignalEngine:
 
         if not bullish_breakout and not bearish_breakout:
             return None
-        if not atr_expanding and not had_squeeze:
+        # On 5m: ATR expanding alone is sufficient — squeezes take many bars to form
+        # On 15m+ had_squeeze was more common; on 5m allow ATR expansion without prior squeeze
+        if not atr_expanding and not had_squeeze and vol_ratio < BREAKOUT_VOLUME_MULT * 1.5:
+            # Only reject if ATR flat AND no squeeze AND volume only barely above threshold
             return None
 
         direction     = "LONG" if bullish_breakout else "SHORT"
@@ -349,8 +357,14 @@ class SignalEngine:
         if bb_pct <= MR_BB_PCT_MAX and rsi <= MR_RSI_MAX:
             direction    = "LONG"
             vol_3bar     = df['volume'].iloc[-3:].values
-            vol_declining = (vol_3bar[-1] < vol_3bar[-2]) or (vol_ma > 0 and vol_ratio < 1.2)
-            reversal      = (curr_close > curr_open) and (curr_close > prev_close)
+            # 5m: vol declining OR just not surging (ratio < 1.5) — exhaustion confirmed either way
+            vol_declining = (
+                (vol_3bar[-1] < vol_3bar[-2]) or
+                (vol_ma > 0 and vol_ratio < 1.5)
+            )
+            # Reversal: current close above open (bullish candle) — don't require beating prev close
+            # on 5m the bar is too short; candle color is sufficient
+            reversal = (curr_close > curr_open)
             if not vol_declining or not reversal:
                 return None
 
@@ -358,8 +372,11 @@ class SignalEngine:
         elif bb_pct >= (1.0 - MR_BB_PCT_MAX) and rsi >= (100 - MR_RSI_MAX):
             direction    = "SHORT"
             vol_3bar     = df['volume'].iloc[-3:].values
-            vol_declining = (vol_3bar[-1] < vol_3bar[-2]) or (vol_ma > 0 and vol_ratio < 1.2)
-            reversal      = (curr_close < curr_open) and (curr_close < prev_close)
+            vol_declining = (
+                (vol_3bar[-1] < vol_3bar[-2]) or
+                (vol_ma > 0 and vol_ratio < 1.5)
+            )
+            reversal = (curr_close < curr_open)
             if not vol_declining or not reversal:
                 return None
         else:
