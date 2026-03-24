@@ -55,12 +55,12 @@ CAPITAL_TIERS = [
 ADX_THRESHOLD = 20
 VOLATILITY_THRESHOLD = 1.5
 
-# ─── Fees ───
-MAKER_FEE = 0.001
-TAKER_FEE = 0.001
-SLIPPAGE = 0.0005
+# ─── Fees (OKX Futures: VIP0 tier) ───
+MAKER_FEE = 0.0002      # OKX maker 0.02%
+TAKER_FEE = 0.0005      # OKX taker 0.05%
+SLIPPAGE = 0.0003       # Tighter slippage for OKX liquidity
 TOTAL_FEE_PER_TRADE = (TAKER_FEE * 2) + SLIPPAGE
-FEE_MULTIPLIER = 3.0
+FEE_MULTIPLIER = 2.5    # Lower multiplier with OKX lower fees
 
 # ─── Risk ───
 # INITIAL_CAPITAL is used ONLY as a fallback when the live balance
@@ -100,18 +100,40 @@ LOOP_INTERVAL_SECONDS = 60
 MONITOR_INTERVAL_SECONDS = 15  # Check positions every 15s
 
 # ─── Multi-Symbol & Multi-Timeframe ───
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
-TIMEFRAMES = ["1h", "4h"]
+SYMBOLS = ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]  # OKX format
+TIMEFRAMES = ["5m", "15m", "1h", "4h"]
 
-# ─── Trailing Stops ───
+# ─── Multi-Timeframe Confluence (NEW v6) ───
+# Higher timeframes confirm 5m entries — the single biggest upgrade for signal quality
+MTF_ENABLED = True
+MTF_PRIMARY_TF = "5m"           # Entry timeframe
+MTF_CONFIRM_TFS = ["15m", "1h"] # Confirmation timeframes
+MTF_TREND_TF = "4h"             # Overall trend bias
+MTF_MIN_ALIGNMENT = 2           # Min # of HTFs that must agree (out of 3: 15m, 1h, 4h)
+MTF_TREND_WEIGHT = 0.30         # Weight of 4h trend in final score
+MTF_CONFIRM_WEIGHT = 0.25       # Weight of each confirmation TF
+
+# ─── Trailing Stops (v6: ATR-adaptive) ───
 TRAILING_STOP_ACTIVATION = 0.005  # Activate trailing stop at 0.5% profit
-TRAILING_STOP_DISTANCE = 0.003    # Trail 0.3% behind price
+TRAILING_STOP_DISTANCE = 0.003    # Trail 0.3% behind price (fallback only)
+TRAILING_ATR_MULT_INITIAL = 2.5   # Initial trail = 2.5x ATR
+TRAILING_ATR_MULT_PROFIT = 1.8    # Tighten to 1.8x ATR after 1R profit
+TRAILING_ATR_MULT_EXTENDED = 1.2  # Tighten to 1.2x ATR after 2R profit
+TRAILING_RATCHET_ENABLED = True   # Ratchet: tighten trail as profit grows
 
 # ─── Position Management ───
 MAX_POSITION_AGE_HOURS = 24       # Close if open >24h with no progress
 MIN_WIN_RATE_SAMPLE = 20          # Minimum trades before Kelly sizing kicks in
 KELLY_FRACTION = 0.5              # Use half Kelly to be conservative
 MAX_CORRELATED_POSITIONS = 2      # Max positions with correlation > 0.7
+
+# ─── Smart Partial TP (NEW v6) ───
+PARTIAL_TP_ENABLED = True         # Enable intelligent partial profit-taking
+PARTIAL_TP_LEVEL_1_R = 1.0       # First partial at 1R
+PARTIAL_TP_LEVEL_2_R = 2.0       # Second partial at 2R
+PARTIAL_TP_FRACTION_1 = 0.33     # Close 33% at TP1
+PARTIAL_TP_FRACTION_2 = 0.33     # Close 33% at TP2, trail rest
+PARTIAL_TP_MEANREV_AT_TARGET = 0.70  # MeanRev: close 70% at BB mid, trail 30%
 
 # ─── Volatility Adjustment ───
 VOLATILITY_SCALE_HIGH = 1.5       # Scale down position if vol > 1.5x average
@@ -150,15 +172,24 @@ FACTOR_WEIGHT_MOMENTUM  = 0.20
 FACTOR_WEIGHT_VOLUME    = 0.20
 FACTOR_WEIGHT_VOLATILITY = 0.15
 
-# ─── HMM Regime Detection ───
+# ─── Regime Detection v6 (Enhanced Rule-Based + Adaptive) ───
 HMM_N_STATES         = 4      # Trend-Up, Trend-Down, Range, Volatile
 HMM_RETRAIN_BARS     = 500    # Retrain every N new bars per symbol
 HMM_N_ITER           = 200    # Max EM iterations
+REGIME_HYSTERESIS_BARS = 3    # Min bars before regime can flip (anti-whipsaw)
+REGIME_TRANSITION_DECAY = 0.85 # Confidence decay rate during transitions
+REGIME_VOLATILITY_LOOKBACK = 50  # Bars for adaptive volatility thresholds
+REGIME_STRENGTH_SMOOTHING = 5    # EMA smoothing for regime strength
 
-# ─── ML Ensemble Filter ───
+# ─── ML Ensemble Filter v6 ───
 ML_WALK_FORWARD_SPLITS = 5    # TimeSeriesSplit folds
 ML_MIN_SAMPLES         = 50   # Min trades before training
 ML_THRESHOLD           = 0.55 # Default threshold (tuned per retrain)
+ML_ENSEMBLE_ENABLED    = True  # Use ensemble of models
+ML_N_ESTIMATORS_GBM    = 150   # GBM trees
+ML_N_ESTIMATORS_RF     = 100   # Random Forest trees
+ML_REGIME_CONDITIONAL  = True  # Train separate models per regime
+ML_FEATURE_IMPORTANCE_TRACK = True  # Track SHAP-like importance
 
 # ─── Scaled Entry / Exit ───
 SCALED_ENTRY_LEGS      = 3              # 1=market only, 3=split entry
@@ -213,3 +244,23 @@ MR_CONFIDENCE_MIN          = 0.60   # 0.65→0.60: easier to meet on 5m
 
 # General signal gate
 REGIME_CONFIDENCE_MIN      = 0.50   # 0.52→0.50: allow slightly less certain regimes
+
+# ─── v6 Advanced Risk Parameters ───
+CVAR_CONFIDENCE      = 0.95   # CVaR at 95% confidence level
+MAX_CVAR_PCT         = 0.08   # Max CVaR allowed (8% of capital)
+ANTI_MARTINGALE      = True   # Increase size after wins, decrease after losses
+WIN_STREAK_BONUS     = 0.10   # Add 10% size per consecutive win (max 3)
+LOSS_STREAK_PENALTY  = 0.15   # Reduce 15% size per consecutive loss (max 3)
+
+# ─── Session-Based Trading (NEW v6) ───
+SESSION_FILTER_ENABLED = True
+ASIAN_SESSION    = (0, 8)     # UTC 00:00 - 08:00 (lower vol, range-friendly)
+EUROPE_SESSION   = (8, 16)    # UTC 08:00 - 16:00 (medium vol, trend-friendly)
+US_SESSION       = (14, 22)   # UTC 14:00 - 22:00 (high vol, breakout-friendly)
+DEAD_ZONE_HOURS  = [23, 0, 1] # Low liquidity hours — reduce size or skip
+
+# ─── Order Flow & Microstructure (NEW v6) ───
+ORDERFLOW_ENABLED     = True
+LIQUIDATION_CLUSTER_LOOKBACK = 100  # Bars to estimate liquidation levels
+OI_DIVERGENCE_THRESHOLD = 0.02     # 2% OI change for divergence signal
+FUNDING_PREDICTION_ENABLED = True   # Predict next funding rate direction
