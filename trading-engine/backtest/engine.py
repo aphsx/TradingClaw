@@ -72,6 +72,17 @@ class BacktestEngine:
 
         self.results  = {}
         self.use_db   = use_db and HAS_DB
+        self._bt_order_seq = 0
+
+    def _next_bt_order_id(self, ts: datetime = None) -> int:
+        """
+        Generate a synthetic broker-like numeric order id for backtest rows.
+        Format: <epoch_ms><4-digit sequence>, fits BIGINT.
+        """
+        self._bt_order_seq += 1
+        base_ts = ts or datetime.utcnow()
+        epoch_ms = int(base_ts.timestamp() * 1000)
+        return int(f"{epoch_ms}{self._bt_order_seq % 10000:04d}")
 
     def run(self, df: pd.DataFrame, train_ratio: float = 0.6,
             pretrained: bool = False, htf_data: dict = None) -> dict:
@@ -199,6 +210,8 @@ class BacktestEngine:
             signal_map.setdefault(s.timestamp, []).append(s)
 
         pos_db_ids    = {}
+        pos_broker_meta = {}
+        bt_close_leg_counts = defaultdict(int)
         executed      = 0
         # Maps position id → ML feature vector used to generate its signal
         # Needed to record outcome when the position closes
@@ -298,8 +311,18 @@ class BacktestEngine:
                     if pid and not getattr(cp, '_db_closed', False):
                         pnl_pct = cp.pnl / (cp.entry_price * cp.quantity) * 100 \
                                   if cp.quantity > 0 else 0
+                        meta = pos_broker_meta.get(id(cp), {})
+                        parent_client_oid = meta.get("parent_client_oid", f"BT-{pid}")
+                        bt_close_leg_counts[parent_client_oid] += 1
+                        close_leg = bt_close_leg_counts[parent_client_oid]
+                        exit_order_id = self._next_bt_order_id(cp.exit_time)
                         db_close_position(pid, cp.exit_price, cp.exit_time,
-                                          cp.exit_reason, cp.pnl, pnl_pct, cp.fees_paid)
+                                          cp.exit_reason, cp.pnl, pnl_pct, cp.fees_paid,
+                                          exit_order_id=exit_order_id,
+                                          exit_client_oid=f"{parent_client_oid}-C{close_leg}",
+                                          exit_fill_price=cp.exit_price,
+                                          exit_fill_qty=cp.quantity,
+                                          exit_status="FILLED")
                         cp._db_closed = True
 
             self.risk_mgr.record_equity(idx, bar['close'])
@@ -357,12 +380,23 @@ class BacktestEngine:
                         executed += 1
                         if self.use_db:
                             sid  = signal_id_map.get(signal.timestamp, None)
+                            entry_order_id = self._next_bt_order_id(idx)
+                            parent_client_oid = f"BT-{entry_order_id}"
                             dbid = db_open_position(
                                 None, sid, SYMBOL, signal.direction, signal.strategy,
                                 signal.regime, pos.entry_price, idx, pos.quantity,
                                 pos.fees_paid, signal.stop_loss, signal.take_profit,
-                                signal.risk_reward)
+                                signal.risk_reward,
+                                entry_order_id=entry_order_id,
+                                entry_client_oid=parent_client_oid,
+                                entry_fill_price=pos.entry_price,
+                                entry_fill_qty=pos.quantity,
+                                entry_status="FILLED")
                             pos_db_ids[id(pos)] = dbid
+                            pos_broker_meta[id(pos)] = {
+                                "entry_order_id": entry_order_id,
+                                "parent_client_oid": parent_client_oid,
+                            }
 
         # Force close remaining open positions at end
         if self.risk_mgr.open_positions:
@@ -375,8 +409,18 @@ class BacktestEngine:
                 if pid and not getattr(cp, '_db_closed', False):
                     pnl_pct = cp.pnl / (cp.entry_price * cp.quantity) * 100 \
                               if cp.quantity > 0 else 0
+                    meta = pos_broker_meta.get(id(cp), {})
+                    parent_client_oid = meta.get("parent_client_oid", f"BT-{pid}")
+                    bt_close_leg_counts[parent_client_oid] += 1
+                    close_leg = bt_close_leg_counts[parent_client_oid]
+                    exit_order_id = self._next_bt_order_id(cp.exit_time)
                     db_close_position(pid, cp.exit_price, cp.exit_time,
-                                      cp.exit_reason, cp.pnl, pnl_pct, cp.fees_paid)
+                                      cp.exit_reason, cp.pnl, pnl_pct, cp.fees_paid,
+                                      exit_order_id=exit_order_id,
+                                      exit_client_oid=f"{parent_client_oid}-C{close_leg}",
+                                      exit_fill_price=cp.exit_price,
+                                      exit_fill_qty=cp.quantity,
+                                      exit_status="FILLED")
                     cp._db_closed = True
 
         print(f"   Executed: {executed} trades")

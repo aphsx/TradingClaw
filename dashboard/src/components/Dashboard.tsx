@@ -639,6 +639,11 @@ export default function Dashboard({ data }: { data: any }) {
                             {t.exit_order_id && (
                               <div title="Exit Order ID">↓ {String(t.exit_order_id).slice(-8)}</div>
                             )}
+                            {(t.entry_client_oid || t.exit_client_oid) && (
+                              <div title="Order Group">
+                                grp {String(t.entry_client_oid || t.exit_client_oid).slice(-10)}
+                              </div>
+                            )}
                           </td>
                         </tr>
                         );
@@ -1034,6 +1039,7 @@ export default function Dashboard({ data }: { data: any }) {
                     <th className="text-right pb-3 pr-3">Entry</th>
                     <th className="text-right pb-3 pr-3">Exit</th>
                     <th className="text-right pb-3 pr-3">PnL</th>
+                    <th className="text-left pb-3 pr-3">Order IDs</th>
                     <th className="text-left pb-3">Reason</th>
                   </tr>
                 </thead>
@@ -1049,6 +1055,11 @@ export default function Dashboard({ data }: { data: any }) {
                       <td className="py-2 pr-3 text-right">${Number(t.exit_price).toLocaleString()}</td>
                       <td className={`py-2 pr-3 text-right ${Number(t.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                         ${Number(t.pnl).toFixed(2)}
+                      </td>
+                      <td className="py-2 pr-3 text-[10px] text-gray-500 font-mono">
+                        {t.entry_order_id ? <div title="Entry Order ID">↑ {String(t.entry_order_id).slice(-8)}</div> : <div>↑ —</div>}
+                        {t.exit_order_id ? <div title="Exit Order ID">↓ {String(t.exit_order_id).slice(-8)}</div> : <div>↓ —</div>}
+                        {t.entry_client_oid ? <div title="Order Group">{String(t.entry_client_oid).slice(-12)}</div> : null}
                       </td>
                       <td className="py-2 text-xs text-gray-400">{t.exit_reason}</td>
                     </tr>
@@ -1071,3 +1082,4 @@ export default function Dashboard({ data }: { data: any }) {
     </div>
   );
 }
+

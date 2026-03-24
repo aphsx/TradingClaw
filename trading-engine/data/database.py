@@ -173,29 +173,46 @@ def close_position_live(position_id, exit_price, exit_time, exit_reason,
 # ═══════════════════════════════════════
 def open_position_bt(run_id, signal_id, symbol, direction, strategy, regime,
                      entry_price, entry_time, quantity, entry_fee,
-                     stop_loss, take_profit, risk_reward):
+                     stop_loss, take_profit, risk_reward,
+                     entry_order_id=None, entry_client_oid=None,
+                     entry_fill_price=None, entry_fill_qty=None,
+                     entry_status="FILLED"):
     with get_engine().begin() as c:
         r = c.execute(text("""
             INSERT INTO positions (source,run_id,signal_id,symbol,direction,strategy,regime,status,
-                entry_price,entry_time,quantity,stop_loss,take_profit,risk_reward,total_fees)
+                entry_price,entry_time,quantity,
+                entry_order_id,entry_client_oid,entry_fill_price,entry_fill_qty,entry_status,
+                stop_loss,take_profit,risk_reward,total_fees)
             VALUES('BACKTEST',:rid,:sid,:sym,:dir,:strat,:reg,'CLOSED',
-                :ep,:et,:qty,:sl,:tp,:rr,:ef)
+                :ep,:et,:qty,:eoid,:ecoid,:efp,:efq,:es,:sl,:tp,:rr,:ef)
         """), {"rid":run_id,"sid":signal_id,"sym":symbol,"dir":direction,
-               "strat":strategy,"reg":regime,"ep":entry_price,"et":entry_time,
-               "qty":quantity,"sl":stop_loss,"tp":take_profit,"rr":risk_reward,"ef":entry_fee})
+                "strat":strategy,"reg":regime,"ep":entry_price,"et":entry_time,
+               "qty":quantity,"eoid":entry_order_id,"ecoid":entry_client_oid,
+               "efp":entry_fill_price if entry_fill_price is not None else entry_price,
+               "efq":entry_fill_qty if entry_fill_qty is not None else quantity,
+               "es":entry_status,
+               "sl":stop_loss,"tp":take_profit,"rr":risk_reward,"ef":entry_fee})
         return r.lastrowid
 
 
 def close_position_bt(position_id, exit_price, exit_time, exit_reason,
-                      pnl, pnl_pct, total_fees):
+                      pnl, pnl_pct, total_fees,
+                      exit_order_id=None, exit_client_oid=None,
+                      exit_fill_price=None, exit_fill_qty=None,
+                      exit_status="FILLED"):
     with get_engine().begin() as c:
         # Truncate exit_reason to fit DB column (VARCHAR 50)
         if exit_reason and len(exit_reason) > 50:
             exit_reason = exit_reason[:47] + "..."
         c.execute(text("""
             UPDATE positions SET exit_price=:ep,exit_time=:et,exit_reason=:er,
+                exit_order_id=:eoid,exit_client_oid=:ecoid,
+                exit_fill_price=:efp,exit_fill_qty=:efq,exit_status=:es,
                 pnl=:pnl,pnl_pct=:pp,total_fees=:tf WHERE id=:id
         """), {"ep":exit_price,"et":exit_time,"er":exit_reason,
+               "eoid":exit_order_id,"ecoid":exit_client_oid,
+               "efp":exit_fill_price if exit_fill_price is not None else exit_price,
+               "efq":exit_fill_qty, "es":exit_status,
                "pnl":pnl,"pp":pnl_pct,"tf":total_fees,"id":position_id})
 
 
