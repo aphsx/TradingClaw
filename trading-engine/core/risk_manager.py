@@ -21,13 +21,21 @@ from config import (LEVERAGE, MAX_MARGIN_RATIO, EMERGENCY_MARGIN_RATIO, LIQUIDAT
 def get_risk_tier(capital: float) -> dict:
     """
     Return risk settings based on account size.
-    Smaller accounts get a higher risk% so trades remain meaningful in dollar terms.
+    Smaller accounts get higher risk% and higher leverage so trades are meaningful.
+    Each tier has its own leverage (min 10x, max 20x).
     """
-    for max_cap, risk_pct, min_notional, label in CAPITAL_TIERS:
+    for row in CAPITAL_TIERS:
+        max_cap, risk_pct, min_notional, label = row[0], row[1], row[2], row[3]
+        tier_leverage = int(row[4]) if len(row) > 4 else LEVERAGE
         if capital <= max_cap:
-            return {"risk_pct": risk_pct, "min_notional": min_notional, "label": label}
-    # Fallback (should never reach here due to float('inf') tier)
-    return {"risk_pct": 0.01, "min_notional": 10.0, "label": "Large $2k+"}
+            return {
+                "risk_pct":    risk_pct,
+                "min_notional": min_notional,
+                "label":       label,
+                "leverage":    max(10, tier_leverage),  # enforce minimum 10x
+            }
+    # Fallback
+    return {"risk_pct": 0.01, "min_notional": 10.0, "label": "Large $2k+", "leverage": 10}
 
 
 class FeeFilter:
@@ -128,9 +136,10 @@ class RiskManager:
 
         # Dynamic tier — recalculated whenever capital is synced
         tier = get_risk_tier(start_capital)
-        self._risk_pct: float = tier["risk_pct"]
+        self._risk_pct: float    = tier["risk_pct"]
         self._min_notional: float = tier["min_notional"]
-        self._tier_label: str = tier["label"]
+        self._tier_label: str    = tier["label"]
+        self._leverage: int      = tier["leverage"]      # per-tier leverage (min 10x)
         self._capital_synced: bool = (initial_capital > 0)
 
     def sync_capital(self, live_balance: float) -> str:
@@ -157,14 +166,16 @@ class RiskManager:
 
         # Recalculate tier based on new capital
         tier = get_risk_tier(live_balance)
-        self._risk_pct = tier["risk_pct"]
+        self._risk_pct     = tier["risk_pct"]
         self._min_notional = tier["min_notional"]
-        self._tier_label = tier["label"]
+        self._tier_label   = tier["label"]
+        self._leverage     = tier["leverage"]
 
         return (
             f"[BALANCE] Capital synced: ${old_capital:.2f} → ${live_balance:.2f} | "
             f"Tier: {self._tier_label} | "
             f"Risk/trade: {self._risk_pct*100:.1f}% | "
+            f"Leverage: {self._leverage}x | "
             f"Min notional: ${self._min_notional:.1f}"
         )
 
@@ -174,6 +185,7 @@ class RiskManager:
             "capital": round(self.capital, 2),
             "tier": self._tier_label,
             "risk_pct": f"{self._risk_pct*100:.1f}%",
+            "leverage": self._leverage,
             "min_notional_usd": self._min_notional,
             "risk_amount_usd": round(self.capital * self._risk_pct, 2),
         }
@@ -196,28 +208,29 @@ class RiskManager:
 
         Uses self._risk_pct (tier-adjusted) instead of the static RISK_PER_TRADE.
         Returns the fraction of capital to risk per trade (margin side),
-        already divided by LEVERAGE so actual notional exposure stays controlled.
+        already divided by self._leverage (tier-aware) so actual notional
+        exposure stays controlled.
         Cap at _risk_pct / 2 so Kelly can be adaptive above the fixed floor.
         """
         risk_pct = self._risk_pct  # tier-aware
         kelly_cap = risk_pct / 2
 
         if len(self.trade_results) < MIN_WIN_RATE_SAMPLE:
-            return risk_pct / LEVERAGE
+            return risk_pct / self._leverage
         recent = list(self.trade_results)[-MIN_WIN_RATE_SAMPLE:]
         wins   = [t for t in recent if t > 0]
         losses = [t for t in recent if t <= 0]
         if not wins or not losses:
-            return risk_pct / LEVERAGE
+            return risk_pct / self._leverage
         win_rate = len(wins) / len(recent)
         avg_win  = sum(wins) / len(wins)
         avg_loss = abs(sum(losses) / len(losses))
         if avg_loss == 0:
-            return risk_pct / LEVERAGE
+            return risk_pct / self._leverage
         b = avg_win / avg_loss
         kelly = (b * win_rate - (1 - win_rate)) / b
         kelly = max(0, kelly) * KELLY_FRACTION
-        return min(kelly, kelly_cap) / LEVERAGE
+        return min(kelly, kelly_cap) / self._leverage
 
     def _get_vol_adjustment(self, current_atr_pct: float, avg_atr_pct: float) -> float:
         """Scale position size based on current vs average volatility.
@@ -240,8 +253,8 @@ class RiskManager:
         """
         Calculate position size based on adaptive Kelly sizing + volatility adjustment.
 
-        Kelly size is already expressed as a fraction of margin capital (÷ LEVERAGE),
-        so risk_amount is the margin committed, and actual notional = risk_amount × LEVERAGE.
+        Kelly size is already expressed as a fraction of margin capital (÷ self._leverage),
+        so risk_amount is the margin committed, and actual notional = risk_amount × leverage.
         Position size = risk_amount / risk_per_unit  (standard ATR/SL-based sizing).
         """
         if self.is_circuit_broken:
@@ -263,12 +276,12 @@ class RiskManager:
             vol_adj = self._get_vol_adjustment(current_atr_pct, avg_atr_pct)
             position_size *= vol_adj
 
-        # ── Max notional cap: total notional across all positions ≤ capital × LEVERAGE ──
-        # This prevents 5x leverage × 3 trades = 15x effective exposure
+        # ── Max notional cap: total notional across all positions ≤ capital × leverage ──
+        # This prevents e.g. 20x leverage × 3 trades = 60x effective exposure
         current_open_notional = sum(
             p.entry_price * p.quantity for p in self.open_positions
         )
-        max_total_notional = self.capital * LEVERAGE
+        max_total_notional = self.capital * self._leverage
         remaining_notional = max_total_notional - current_open_notional
         if remaining_notional <= 0:
             return 0.0
@@ -276,7 +289,7 @@ class RiskManager:
 
         # Also cap per-trade at 50% of capital margin (not 50% of leveraged notional)
         max_margin_per_trade = self.capital * 0.5
-        max_size_by_margin = (max_margin_per_trade * LEVERAGE) / signal.entry_price
+        max_size_by_margin = (max_margin_per_trade * self._leverage) / signal.entry_price
 
         position_size = min(position_size, max_size_by_notional, max_size_by_margin)
 

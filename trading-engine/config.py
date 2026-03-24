@@ -36,22 +36,19 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 # ─── Trading ───
 TRADING_MODE = os.getenv("TRADING_MODE", "live")
 SYMBOL = os.getenv("SYMBOL", "BTCUSDT")
-TIMEFRAME = os.getenv("TIMEFRAME", "1h")
+TIMEFRAME = os.getenv("TIMEFRAME", "15m")   # 15m: best for VolBreakout compression + TrendFollow
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "180"))
 
 # ─── Capital Tiers ───────────────────────────────────────────
-# (max_capital_usd, risk_pct, min_notional_usd, label)
-# Risk % scales UP for small accounts so trades are still meaningful.
-# min_notional is the smallest order value the engine will attempt.
-# Binance Futures minimum notional is ~$5 for most pairs.
+# (max_capital_usd, risk_pct, min_notional_usd, label, leverage)
+# leverage ขั้นต่ำ 10x — เพิ่มสำหรับบัญชีเล็กให้ notional มีนัยสำคัญ
 CAPITAL_TIERS = [
-    # (max_capital, risk_pct, min_order_usd, label)
-    # min_order คือ order ขั้นต่ำสุดที่ bot จะ place (ยก size ขึ้นมาถึงค่านี้ถ้า Kelly ให้น้อยกว่า)
-    (50,           0.15,  6.0,  "Micro    <$50"),    # $30  → Kelly ~$0.09  → min order $6
-    (200,          0.12, 10.0,  "Small    $50-200"), # $100 → Kelly ~$0.24  → min order $10
-    (500,          0.08, 15.0,  "Medium   $200-500"),# $300 → Kelly ~$0.72  → min order $15
-    (2_000,        0.05, 25.0,  "Standard $500-2k"), # $1k  → Kelly ~$3.0   → min order $25
-    (float("inf"), 0.02, 50.0,  "Large    $2k+"),    # $10k → Kelly ~$40.0  → min order $50
+    # (max_capital, risk_pct, min_order_usd, label,              leverage)
+    (50,           0.15,  6.0,  "Micro    <$50",     20),   # เล็กสุด → lev สูงสุดเพื่อ meaningful size
+    (200,          0.12, 10.0,  "Small    $50-200",  20),
+    (500,          0.08, 15.0,  "Medium   $200-500", 15),
+    (2_000,        0.05, 25.0,  "Standard $500-2k",  12),
+    (float("inf"), 0.02, 50.0,  "Large    $2k+",     10),   # minimum 10x
 ]
 
 # ─── Regime ───
@@ -121,7 +118,7 @@ VOLATILITY_SCALE_HIGH = 1.5       # Scale down position if vol > 1.5x average
 VOLATILITY_SCALE_LOW = 0.5        # Scale up position if vol < 0.5x average
 
 # ─── Futures Settings ───
-LEVERAGE = int(os.getenv("LEVERAGE", "10"))         # 10x leverage — meaningful PnL on small capital
+LEVERAGE = int(os.getenv("LEVERAGE", "20"))         # fallback max — actual leverage is per CAPITAL_TIER (min 10x)
 MARGIN_TYPE = os.getenv("MARGIN_TYPE", "ISOLATED")  # ISOLATED or CROSSED
 MAX_MARGIN_RATIO = 0.75                              # Warn when margin ratio > 75%
 EMERGENCY_MARGIN_RATIO = 0.90                        # Force close all at 90%
