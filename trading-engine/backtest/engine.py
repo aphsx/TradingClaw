@@ -14,6 +14,7 @@ World-class validation engine with:
 import pandas as pd
 import numpy as np
 import json, os, sys
+import copy
 from collections import defaultdict, namedtuple
 from datetime import datetime, timedelta
 
@@ -23,6 +24,8 @@ from core.features import calculate_features, get_regime_features, calculate_htf
 from core.regime_detector import RegimeDetector, REGIME_NAMES
 from core.risk_manager import RiskManager
 from core.regime_monitor import RegimeMonitor
+from core.performance_guard import StrategyPerformanceGuard
+from core.market_profiles import resolve_market_profile
 from core.ml_filter import WalkForwardMLFilter
 from core.position_manager import PositionManager
 from strategies.signal_engine import SignalEngine
@@ -31,7 +34,8 @@ try:
     from data.database import (save_candles, save_regimes, save_signal,
         open_position_bt as db_open_position,
         close_position_bt as db_close_position,
-        save_equity_batch, save_backtest_run, clear_backtest_data,
+        save_equity_batch, save_backtest_run, create_backtest_run,
+        update_signal_entry_status, ensure_extended_schema, clear_backtest_data,
         log as db_log)
     HAS_DB = True
 except Exception:
@@ -58,11 +62,15 @@ class BacktestEngine:
             self.maker_fee = MAKER_FEE
 
         self.detector   = RegimeDetector()
-        self.risk_mgr   = RiskManager(initial_capital=capital, taker_fee=self.taker_fee)
+        self.risk_mgr   = RiskManager(
+            initial_capital=capital, taker_fee=self.taker_fee, maker_fee=self.maker_fee
+        )
         self.sig_engine = SignalEngine(taker_fee=self.taker_fee, maker_fee=self.maker_fee)
         self.monitor    = RegimeMonitor()
+        self.perf_guard = StrategyPerformanceGuard()
         self.ml_filter  = WalkForwardMLFilter()  # walk-forward, zero-leakage ML gate
         self.pos_mgr    = PositionManager()
+        self._rng       = np.random.default_rng(20260324)
 
         try:
             from core.correlation import CorrelationManager
@@ -85,6 +93,56 @@ class BacktestEngine:
         epoch_ms = int(base_ts.timestamp() * 1000)
         return int(f"{epoch_ms}{self._bt_order_seq % 10000:04d}")
 
+    def _clone_signal_for_fill(self, signal, fill_price: float):
+        cloned = copy.deepcopy(signal)
+        offset = fill_price - cloned.entry_price
+        cloned.entry_price = fill_price
+        cloned.stop_loss += offset
+        cloned.take_profit += offset
+        cloned.take_profit_2 += offset
+        if getattr(cloned, "initial_stop_loss", 0):
+            cloned.initial_stop_loss += offset
+        else:
+            cloned.initial_stop_loss = cloned.stop_loss
+        return cloned
+
+    def _entry_fill_from_bar(self, signal, bar: pd.Series) -> dict:
+        execution = getattr(signal, "execution_profile", {}) or {}
+        missed_prob = float(execution.get("missed_entry_probability", 0.02))
+        partial_prob = float(execution.get("partial_fill_probability", 0.0))
+        partial_min = float(execution.get("partial_fill_min_ratio", 0.45))
+        partial_max = float(execution.get("partial_fill_max_ratio", 0.85))
+        max_drift_atr = float(execution.get("max_entry_drift_atr", 0.35))
+        slip_mult = float(execution.get("entry_slippage_mult", 0.55))
+
+        if self._rng.random() < missed_prob:
+            return {"fill_price": None, "status": "missed_fill", "fill_ratio": 0.0, "detail": "entry never filled"}
+
+        bar_open = float(bar.get("open", signal.entry_price))
+        fill_price = bar_open * (1 + SLIPPAGE * slip_mult) if signal.direction == "LONG" else bar_open * (1 - SLIPPAGE * slip_mult)
+        max_drift = max(float(getattr(signal, "atr", 0) or 0), signal.entry_price * 0.001) * max_drift_atr
+        if abs(fill_price - signal.entry_price) > max_drift:
+            return {"fill_price": None, "status": "entry_drift", "fill_ratio": 0.0, "detail": "fill drift exceeded ATR threshold"}
+
+        if self._rng.random() < partial_prob:
+            fill_ratio = round(float(self._rng.uniform(partial_min, partial_max)), 6)
+            return {
+                "fill_price": fill_price,
+                "status": "partial_fill",
+                "fill_ratio": fill_ratio,
+                "detail": f"partial fill {fill_ratio:.2%}",
+            }
+
+        return {"fill_price": fill_price, "status": "filled", "fill_ratio": 1.0, "detail": "filled at delayed entry open"}
+
+    def _position_r_multiple(self, position) -> float:
+        initial_sl = float(getattr(position.signal, "initial_stop_loss", 0) or position.signal.stop_loss)
+        risk = abs(position.entry_price - initial_sl)
+        if risk <= 0:
+            return 0.0
+        raw_pnl = position.exit_price - position.entry_price if position.signal.direction == "LONG" else position.entry_price - position.exit_price
+        return raw_pnl / risk
+
     def run(self, df: pd.DataFrame, train_ratio: float = 0.6,
             pretrained: bool = False, htf_data: dict = None) -> dict:
         """
@@ -102,6 +160,8 @@ class BacktestEngine:
         print("\n" + "=" * 60)
         print("[START] WORLD-CLASS BACKTEST ENGINE v4")
         print("=" * 60)
+        from data.fetcher import attach_funding_history, timeframe_to_hours
+        bar_hours = timeframe_to_hours(TIMEFRAME)
 
         # ── Step 1: Features ──
         print("\n[FEAT] Calculating features...")
@@ -110,6 +170,7 @@ class BacktestEngine:
         common_idx      = df.index.intersection(regime_features.index)
         df              = df.loc[common_idx]
         regime_features = regime_features.loc[common_idx]
+        df              = attach_funding_history(df, symbol=SYMBOL)
         print(f"   {len(regime_features.columns)} features, {len(df)} bars")
 
         # ── Multi-timeframe support ──
@@ -126,6 +187,7 @@ class BacktestEngine:
                     print(f"   {tf_name}: ERROR - {e}")
 
         if self.use_db:
+            ensure_extended_schema()
             clear_backtest_data()
             save_candles(df, SYMBOL, TIMEFRAME)
 
@@ -144,6 +206,23 @@ class BacktestEngine:
             train_feat = regime_features.iloc[:split_idx]
             test_feat  = regime_features.iloc[split_idx:]
             print(f"\n[DATA] Train: {len(train_df)} | Test: {len(test_df)}")
+
+        run_id = None
+        run_config = {
+            "initial_capital": self.risk_mgr.initial_capital,
+            "start_date": test_df.index[0].to_pydatetime() if len(test_df) else None,
+            "end_date": test_df.index[-1].to_pydatetime() if len(test_df) else None,
+            "take_profit_mode": TAKE_PROFIT_MODE,
+            "symbol": SYMBOL,
+            "timeframe": TIMEFRAME,
+        }
+        if self.use_db:
+            run_id = create_backtest_run(
+                SYMBOL,
+                TIMEFRAME,
+                self.risk_mgr.initial_capital,
+                run_config,
+            )
 
         # ── Step 3: Fit regime detector ──
         if not pretrained:
@@ -181,7 +260,8 @@ class BacktestEngine:
                 regime_conf = 0.5
 
             sigs = self.sig_engine.generate_signals(
-                bar_df, regime=regime_id, regime_confidence=regime_conf)
+                bar_df, regime=regime_id, regime_confidence=regime_conf,
+                symbol=SYMBOL, timeframe=TIMEFRAME)
 
             for s in sigs:
                 # FIX #5: Fee threshold gate — skip if expected profit too small vs fees
@@ -201,12 +281,13 @@ class BacktestEngine:
         signal_id_map = {}
         if self.use_db:
             for s in all_signals:
-                sid = save_signal(s, SYMBOL, source="BACKTEST", fee_filtered=True)
-                signal_id_map[s.timestamp] = sid
+                sid = save_signal(s, SYMBOL, source="BACKTEST", run_id=run_id, fee_filtered=True)
+                signal_id_map[id(s)] = sid
 
         # ── Step 6: Execute backtest loop ──
         print("\n[FAST] Executing backtest...")
         self.risk_mgr.reset()
+        self.perf_guard.reset()
         signal_map = {}
         for s in all_signals:
             signal_map.setdefault(s.timestamp, []).append(s)
@@ -215,6 +296,9 @@ class BacktestEngine:
         pos_broker_meta = {}
         bt_close_leg_counts = defaultdict(int)
         executed      = 0
+        pending_entries = []
+        entry_status_counts = defaultdict(int)
+        gate_status_counts = defaultdict(int)
         # Maps position id → ML feature vector used to generate its signal
         # Needed to record outcome when the position closes
         pos_ml_feats: dict = {}
@@ -230,9 +314,115 @@ class BacktestEngine:
             except Exception:
                 bar_regime_map[test_df.index[i]] = 1
 
-        for idx, bar in test_df.iterrows():
+        for bar_num, (idx, bar) in enumerate(test_df.iterrows()):
             self.monitor.tick()
+            self.perf_guard.tick()
             current_regime_for_bar = bar_regime_map.get(idx, 1)
+
+            # Execute delayed entries at the next bar open with drift / missed-fill checks
+            due_entries = [p for p in pending_entries if p['execute_bar'] <= bar_num]
+            pending_entries = [p for p in pending_entries if p['execute_bar'] > bar_num]
+            for pending in due_entries:
+                signal = pending['signal']
+                signal_id = signal_id_map.get(id(signal))
+                fill_result = self._entry_fill_from_bar(signal, bar)
+                fill_price = fill_result["fill_price"]
+                status = fill_result["status"]
+                fill_ratio = float(fill_result.get("fill_ratio", 1.0) or 0.0)
+                entry_status_counts[status] += 1
+                if fill_price is None:
+                    pending['status'] = status
+                    if self.use_db:
+                        update_signal_entry_status(signal_id, False, status.upper(), fill_result.get("detail"))
+                    continue
+
+                filled_signal = self._clone_signal_for_fill(signal, fill_price)
+                pos = self.risk_mgr.open_position(filled_signal, idx)
+                if not pos:
+                    entry_status_counts["rejected_risk"] += 1
+                    if self.use_db:
+                        update_signal_entry_status(signal_id, False, "REJECTED_RISK", "risk manager rejected entry")
+                    continue
+
+                ml_feats = pending.get('ml_feats')
+                if ml_feats is not None:
+                    pos_ml_feats[id(pos)] = ml_feats
+
+                total_mult = signal.vol_size_mult
+                total_mult *= self.monitor.get_size_multiplier(signal.regime)
+                total_mult *= self.perf_guard.get_size_multiplier(
+                    signal.symbol or SYMBOL,
+                    signal.timeframe or TIMEFRAME,
+                    signal.strategy,
+                    signal.regime,
+                )
+                total_mult *= fill_ratio if fill_ratio > 0 else 1.0
+
+                if total_mult < 1.0 and pos.quantity > 0:
+                    original_qty = pos.quantity
+                    new_qty = round(original_qty * total_mult, 6)
+                    qty_delta = original_qty - new_qty
+                    if qty_delta > 0:
+                        scale = new_qty / original_qty
+                        original_notional = original_qty * pos.entry_price
+                        reduced_notional = new_qty * pos.entry_price
+                        notional_refund = original_notional - reduced_notional
+                        margin_refund = getattr(pos, "margin_used", 0.0) * (1 - scale)
+                        fee_refund = notional_refund * self.taker_fee
+                        self.risk_mgr.capital += margin_refund + fee_refund
+                        pos.margin_used = round(getattr(pos, "margin_used", 0.0) * scale, 8)
+                        pos.fees_paid = round(pos.fees_paid * scale, 8)
+                        pos.entry_fee = round(getattr(pos, "entry_fee", pos.fees_paid) * scale, 8)
+                        pos.quantity = new_qty
+
+                pos.fill_ratio = fill_ratio if fill_ratio > 0 else 1.0
+                pos.entry_latency_bars = pending.get("entry_latency", 0)
+                executed += 1
+                if self.use_db:
+                    update_signal_entry_status(
+                        signal_id,
+                        True,
+                        "PARTIALLY_FILLED" if status == "partial_fill" else "FILLED",
+                        fill_result.get("detail"),
+                    )
+                if self.use_db:
+                    sid = signal_id
+                    entry_order_id = self._next_bt_order_id(idx)
+                    parent_client_oid = f"BT-{entry_order_id}"
+                    dbid = db_open_position(
+                        run_id, sid, SYMBOL, filled_signal.direction, filled_signal.strategy,
+                        filled_signal.regime, pos.entry_price, idx, pos.quantity,
+                        pos.entry_fee, filled_signal.stop_loss, filled_signal.take_profit,
+                        filled_signal.risk_reward,
+                        entry_order_id=entry_order_id,
+                        entry_client_oid=parent_client_oid,
+                        entry_fill_price=pos.entry_price,
+                        entry_fill_qty=pos.quantity,
+                        entry_status="PARTIALLY_FILLED" if status == "partial_fill" else "FILLED",
+                        timeframe=getattr(filled_signal, "timeframe", TIMEFRAME),
+                        regime_name=getattr(filled_signal, "regime_name", REGIME_NAMES.get(filled_signal.regime, "")),
+                        market_profile=getattr(filled_signal, "market_profile", ""),
+                        exit_profile=getattr(filled_signal, "exit_profile", ""),
+                        leverage_used=getattr(pos, "leverage_used", LEVERAGE),
+                        fill_ratio=pos.fill_ratio,
+                        entry_latency_bars=pos.entry_latency_bars,
+                        entry_status_detail=fill_result.get("detail"),
+                        execution_profile=getattr(filled_signal, "execution_profile", {}),
+                        trade_metadata={
+                            "symbol": SYMBOL,
+                            "timeframe": getattr(filled_signal, "timeframe", TIMEFRAME),
+                            "regime_name": getattr(filled_signal, "regime_name", ""),
+                            "exit_profile_reason": getattr(filled_signal, "exit_profile_reason", ""),
+                            "liquidation_price": getattr(pos, "liquidation_price", 0),
+                        })
+                    pos_db_ids[id(pos)] = dbid
+                    pos_broker_meta[id(pos)] = {
+                        "entry_order_id": entry_order_id,
+                        "parent_client_oid": parent_client_oid,
+                    }
+
+            # Apply prorated funding costs using historical funding rates
+            self.risk_mgr.apply_funding_costs(bar, bar_hours)
 
             # ── Check exits (SL/TP hits) ──
             self.risk_mgr.check_exits(bar, idx)
@@ -240,6 +430,8 @@ class BacktestEngine:
             # ── Breakeven stop: move SL to entry once 1R touched ──
             for pos in list(self.risk_mgr.open_positions):
                 sig  = pos.signal
+                if not getattr(sig, "trail_enabled", False):
+                    continue
                 risk = abs(pos.entry_price - sig.stop_loss)
                 if risk > 0:
                     if sig.direction == "LONG":
@@ -254,6 +446,8 @@ class BacktestEngine:
             # ── Trailing stop ──
             for pos in list(self.risk_mgr.open_positions):
                 sig      = pos.signal
+                if not getattr(sig, "trail_enabled", False):
+                    continue
                 pos_dict = {
                     'entry_price': pos.entry_price,
                     'stop_loss':   sig.stop_loss,
@@ -294,11 +488,19 @@ class BacktestEngine:
                 if not getattr(cp, '_monitor_recorded', False):
                     r = self.monitor.estimate_r_multiple(
                         {'entry_fill_price': cp.entry_price,
-                         'stop_loss': cp.signal.stop_loss,
+                         'stop_loss': getattr(cp.signal, 'initial_stop_loss', cp.signal.stop_loss),
                          'direction': cp.signal.direction},
                         cp.exit_price)
                     pid = pos_db_ids.get(id(cp)) or f"BT_{id(cp) % 10000}"
                     self.monitor.record_outcome(cp.signal.regime, r, pos_id=pid)
+                    self.perf_guard.record_outcome(
+                        symbol=getattr(cp.signal, "symbol", SYMBOL) or SYMBOL,
+                        timeframe=getattr(cp.signal, "timeframe", TIMEFRAME) or TIMEFRAME,
+                        strategy=cp.signal.strategy,
+                        regime=cp.signal.regime,
+                        pnl=cp.pnl,
+                        r_multiple=r,
+                    )
                     cp._monitor_recorded = True
 
                     # Walk-forward ML: record outcome AFTER trade closes (no leakage)
@@ -324,18 +526,50 @@ class BacktestEngine:
                                           exit_client_oid=f"{parent_client_oid}-C{close_leg}",
                                           exit_fill_price=cp.exit_price,
                                           exit_fill_qty=cp.quantity,
-                                          exit_status="FILLED")
+                                          exit_status="FILLED",
+                                          gross_pnl=getattr(cp, "gross_pnl", cp.pnl + cp.fees_paid),
+                                          exit_fee=getattr(cp, "exit_fee", 0.0),
+                                          funding_fee=getattr(cp, "funding_fee", 0.0),
+                                          fee_details={
+                                              "entry_fee": getattr(cp, "entry_fee", 0.0),
+                                              "exit_fee": getattr(cp, "exit_fee", 0.0),
+                                              "funding_fee": getattr(cp, "funding_fee", 0.0),
+                                              "total_fees": cp.fees_paid,
+                                          },
+                                          exit_reason_detail=getattr(cp, "exit_reason_detail", None),
+                                          trade_metadata={
+                                              "market_profile": getattr(cp.signal, "market_profile", ""),
+                                              "exit_profile": getattr(cp.signal, "exit_profile", ""),
+                                              "regime_name": getattr(cp.signal, "regime_name", ""),
+                                              "execution_path": getattr(cp, "execution_path", ""),
+                                              "event_counters": getattr(cp, "event_counters", {}),
+                                          })
                         cp._db_closed = True
 
             self.risk_mgr.record_equity(idx, bar['close'])
 
-            # ── Open new positions ──
+            # ── Queue new positions (executed on later bars for latency realism) ──
             if idx in signal_map:
                 for signal in signal_map[idx]:
                     # Regime monitor gate
                     mon_ok, mon_reason = self.monitor.can_trade(
                         signal.regime, getattr(signal, 'confidence', 0.5))
                     if not mon_ok:
+                        gate_status_counts["blocked_regime"] += 1
+                        if self.use_db:
+                            update_signal_entry_status(signal_id_map.get(id(signal)), False, "BLOCKED_REGIME", mon_reason)
+                        continue
+
+                    perf_ok, perf_reason = self.perf_guard.can_trade(
+                        signal.symbol or SYMBOL,
+                        signal.timeframe or TIMEFRAME,
+                        signal.strategy,
+                        signal.regime,
+                    )
+                    if not perf_ok:
+                        gate_status_counts["blocked_performance"] += 1
+                        if self.use_db:
+                            update_signal_entry_status(signal_id_map.get(id(signal)), False, "BLOCKED_PERFORMANCE", perf_reason)
                         continue
 
                     # Walk-forward ML gate (zero-leakage — trained only on past closed trades)
@@ -343,6 +577,9 @@ class BacktestEngine:
                     if ml_feats is not None:
                         ml_dec = self.ml_filter.should_trade(ml_feats)
                         if not ml_dec.allowed:
+                            gate_status_counts["blocked_ml"] += 1
+                            if self.use_db:
+                                update_signal_entry_status(signal_id_map.get(id(signal)), False, "BLOCKED_ML", ml_dec.reason)
                             continue
                     else:
                         ml_feats = None  # no features available → allow (warming up)
@@ -356,59 +593,41 @@ class BacktestEngine:
                         corr_result = self.corr_mgr.can_open_position(
                             SYMBOL, signal.direction, open_pos_dicts)
                         if not corr_result['allowed']:
+                            gate_status_counts["blocked_correlation"] += 1
+                            if self.use_db:
+                                update_signal_entry_status(signal_id_map.get(id(signal)), False, "BLOCKED_CORRELATION", corr_result.get('reason'))
                             continue
-
-                    pos = self.risk_mgr.open_position(signal, idx)
-                    if pos:
-                        # Store ML features on position for outcome recording at close
-                        if ml_feats is not None:
-                            pos_ml_feats[id(pos)] = ml_feats
-                        # Scale by volatility multiplier
-                        total_mult = signal.vol_size_mult
-                        mon_mult   = self.monitor.get_size_multiplier(signal.regime)
-                        total_mult = total_mult * mon_mult
-
-                        if total_mult < 1.0 and pos.quantity > 0:
-                            original_qty   = pos.quantity
-                            new_qty        = round(original_qty * total_mult, 6)
-                            qty_delta      = original_qty - new_qty
-                            if qty_delta > 0:
-                                scale = new_qty / original_qty
-                                original_notional = original_qty * pos.entry_price
-                                reduced_notional = new_qty * pos.entry_price
-                                notional_refund = original_notional - reduced_notional
-                                margin_refund = getattr(pos, "margin_used", 0.0) * (1 - scale)
-                                fee_refund = notional_refund * self.taker_fee
-                                self.risk_mgr.capital += margin_refund + fee_refund
-                                pos.margin_used = round(getattr(pos, "margin_used", 0.0) * scale, 8)
-                                pos.fees_paid = round(pos.fees_paid * scale, 8)
-                                pos.quantity = new_qty
-
-                        executed += 1
-                        if self.use_db:
-                            sid  = signal_id_map.get(signal.timestamp, None)
-                            entry_order_id = self._next_bt_order_id(idx)
-                            parent_client_oid = f"BT-{entry_order_id}"
-                            dbid = db_open_position(
-                                None, sid, SYMBOL, signal.direction, signal.strategy,
-                                signal.regime, pos.entry_price, idx, pos.quantity,
-                                pos.fees_paid, signal.stop_loss, signal.take_profit,
-                                signal.risk_reward,
-                                entry_order_id=entry_order_id,
-                                entry_client_oid=parent_client_oid,
-                                entry_fill_price=pos.entry_price,
-                                entry_fill_qty=pos.quantity,
-                                entry_status="FILLED")
-                            pos_db_ids[id(pos)] = dbid
-                            pos_broker_meta[id(pos)] = {
-                                "entry_order_id": entry_order_id,
-                                "parent_client_oid": parent_client_oid,
-                            }
+                    entry_latency = int((getattr(signal, "execution_profile", {}) or {}).get("entry_latency_bars", 1))
+                    gate_status_counts["queued"] += 1
+                    pending_entries.append({
+                        "signal": signal,
+                        "execute_bar": bar_num + max(entry_latency, 1),
+                        "ml_feats": ml_feats,
+                        "entry_latency": entry_latency,
+                    })
 
         # Force close remaining open positions at end
         if self.risk_mgr.open_positions:
             self.risk_mgr.force_close_all(
                 test_df.iloc[-1]['close'], test_df.index[-1])
+
+        for cp in list(self.risk_mgr.closed_positions):
+            if not getattr(cp, '_monitor_recorded', False):
+                r = self._position_r_multiple(cp)
+                pid = pos_db_ids.get(id(cp)) or f"BT_{id(cp) % 10000}"
+                self.monitor.record_outcome(cp.signal.regime, r, pos_id=pid)
+                self.perf_guard.record_outcome(
+                    symbol=getattr(cp.signal, "symbol", SYMBOL) or SYMBOL,
+                    timeframe=getattr(cp.signal, "timeframe", TIMEFRAME) or TIMEFRAME,
+                    strategy=cp.signal.strategy,
+                    regime=cp.signal.regime,
+                    pnl=cp.pnl,
+                    r_multiple=r,
+                )
+                ml_feats = pos_ml_feats.get(id(cp))
+                if ml_feats is not None:
+                    self.ml_filter.record_outcome(ml_feats, won=(cp.pnl > 0))
+                cp._monitor_recorded = True
 
         if self.use_db:
             for cp in self.risk_mgr.closed_positions:
@@ -427,7 +646,24 @@ class BacktestEngine:
                                       exit_client_oid=f"{parent_client_oid}-C{close_leg}",
                                       exit_fill_price=cp.exit_price,
                                       exit_fill_qty=cp.quantity,
-                                      exit_status="FILLED")
+                                      exit_status="FILLED",
+                                      gross_pnl=getattr(cp, "gross_pnl", cp.pnl + cp.fees_paid),
+                                      exit_fee=getattr(cp, "exit_fee", 0.0),
+                                      funding_fee=getattr(cp, "funding_fee", 0.0),
+                                      fee_details={
+                                          "entry_fee": getattr(cp, "entry_fee", 0.0),
+                                          "exit_fee": getattr(cp, "exit_fee", 0.0),
+                                          "funding_fee": getattr(cp, "funding_fee", 0.0),
+                                          "total_fees": cp.fees_paid,
+                                      },
+                                      exit_reason_detail=getattr(cp, "exit_reason_detail", None),
+                                      trade_metadata={
+                                          "market_profile": getattr(cp.signal, "market_profile", ""),
+                                          "exit_profile": getattr(cp.signal, "exit_profile", ""),
+                                          "regime_name": getattr(cp.signal, "regime_name", ""),
+                                          "execution_path": getattr(cp, "execution_path", ""),
+                                          "event_counters": getattr(cp, "event_counters", {}),
+                                      })
                     cp._db_closed = True
 
         print(f"   Executed: {executed} trades")
@@ -444,7 +680,7 @@ class BacktestEngine:
             if not hasattr(cp, 'max_adverse_excursion'):
                 cp.max_adverse_excursion = 0
             if not hasattr(cp, 'r_multiple'):
-                risk = abs(cp.signal.stop_loss - cp.entry_price)
+                risk = abs((getattr(cp.signal, 'initial_stop_loss', 0) or cp.signal.stop_loss) - cp.entry_price)
                 if risk > 0:
                     pnl = cp.exit_price - cp.entry_price if cp.signal.direction == "LONG" else cp.entry_price - cp.exit_price
                     cp.r_multiple = pnl / risk
@@ -466,6 +702,12 @@ class BacktestEngine:
 
         # Regime-aware performance
         regime_performance = self._compute_regime_performance(
+            self.risk_mgr.closed_positions)
+
+        bucket_performance = self._compute_bucket_performance(
+            self.risk_mgr.closed_positions)
+
+        exit_reason_breakdown = self._compute_exit_reason_breakdown(
             self.risk_mgr.closed_positions)
 
         # Drawdown analysis
@@ -496,11 +738,22 @@ class BacktestEngine:
         wfo_results = self._run_walk_forward_analysis(
             test_df, test_feat, n_splits=5)
 
+        validation_results = self._compute_validation_suite(
+            self.risk_mgr.closed_positions, train_df, test_df
+        )
+
         self.results = {
+            "run": {
+                "id": run_id,
+                "status": "COMPLETED",
+                "latest_only": True,
+            },
             "data": {
                 "symbol": SYMBOL, "timeframe": TIMEFRAME,
                 "total_bars": len(df), "test_bars": len(test_df),
                 "test_period": f"{test_df.index[0]} → {test_df.index[-1]}",
+                "test_period_start": test_df.index[0].to_pydatetime() if len(test_df) else None,
+                "test_period_end": test_df.index[-1].to_pydatetime() if len(test_df) else None,
             },
             "regime_detection": {
                 "model": train_stats.get('model', 'RuleBased'),
@@ -512,18 +765,32 @@ class BacktestEngine:
             "enhanced_stats":  enhanced_stats,
             "strategy_breakdown": strategy_breakdown,
             "regime_performance": regime_performance,
+            "bucket_performance": bucket_performance,
+            "exit_reason_breakdown": exit_reason_breakdown,
             "drawdown_analysis": drawdown_analysis,
             "monte_carlo":     monte_carlo_results,
             "walk_forward":    wfo_results,
+            "validation":      validation_results,
             "monitor":         health_report,
             "ml_filter":       ml_stats,
+            "performance_guard": self.perf_guard.get_report(),
+            "execution_realism": {
+                "entry_latency_bars": "profile-dependent",
+                "uses_intrabar_path": True,
+                "uses_funding_history": 'funding_rate' in df.columns,
+                "uses_liquidation_checks": True,
+                "uses_maker_taker_split": True,
+                "entry_status_counts": dict(entry_status_counts),
+                "gate_status_counts": dict(gate_status_counts),
+            },
             "config": {
-                "initial_capital":     INITIAL_CAPITAL,
+                "initial_capital":     self.risk_mgr.initial_capital,
                 "risk_per_trade":      f"{RISK_PER_TRADE*100}%",
                 "leverage":            LEVERAGE,
                 "max_drawdown_limit":  f"{MAX_DRAWDOWN*100}%",
                 "fee_per_trade":       f"{TOTAL_FEE_PER_TRADE*100:.2f}%",
                 "fee_multiplier":      FEE_MULTIPLIER,
+                "take_profit_mode":    TAKE_PROFIT_MODE,
             }
         }
 
@@ -539,8 +806,8 @@ class BacktestEngine:
                 peak = max(peak, e['equity'])
                 e['peak_equity']  = peak
                 e['drawdown_pct'] = (peak - e['equity']) / peak * 100 if peak > 0 else 0
-            save_equity_batch(self.equity_curve, source="BACKTEST")
-            save_backtest_run(self.results, self.results['config'])
+            save_equity_batch(self.equity_curve, source="BACKTEST", run_id=run_id)
+            save_backtest_run(self.results, self.results['config'], run_id=run_id)
             db_log("INFO", "backtest", "Backtest completed", self.results['trading'])
 
         self._print_results()
@@ -556,6 +823,7 @@ class BacktestEngine:
             ("Total Trades",  t['total_trades']),
             ("Win Rate",      t['win_rate']),
             ("Profit Factor", t['profit_factor']),
+            ("Gross PnL",     f"${t.get('gross_pnl_before_fees', t['total_pnl'])}"),
             ("Total PnL",     f"${t['total_pnl']}"),
             ("Fees Paid",     f"${t['total_fees_paid']}"),
             ("Max Drawdown",  t['max_drawdown']),
@@ -715,6 +983,8 @@ class BacktestEngine:
         breakdown = {}
         for strategy, trades in by_strategy.items():
             returns = np.array([t.pnl for t in trades])
+            gross = np.array([getattr(t, 'gross_pnl', t.pnl + t.fees_paid) for t in trades])
+            fees = np.array([t.fees_paid for t in trades])
             wins = len(returns[returns > 0])
             total = len(returns)
             win_rate = wins / total if total > 0 else 0
@@ -731,6 +1001,8 @@ class BacktestEngine:
                 'avg_loss': round(abs(returns[returns < 0].mean()), 2) if (total - wins) > 0 else 0,
                 'profit_factor': round(returns[returns > 0].sum() / abs(returns[returns < 0].sum()), 2) \
                                 if (total - wins) > 0 and returns[returns < 0].sum() != 0 else 0,
+                'gross_pnl': round(gross.sum(), 2),
+                'fees': round(fees.sum(), 2),
                 'pnl': round(returns.sum(), 2),
                 'sharpe': round(sharpe, 4),
             }
@@ -747,18 +1019,120 @@ class BacktestEngine:
         performance = {}
         for regime, trades in by_regime.items():
             returns = np.array([t.pnl for t in trades])
+            gross = np.array([getattr(t, 'gross_pnl', t.pnl + t.fees_paid) for t in trades])
+            fees = np.array([t.fees_paid for t in trades])
             pnl = returns.sum()
             wins = len(returns[returns > 0])
             total = len(returns)
 
             performance[regime] = {
                 'trades': int(total),
+                'gross_pnl': round(gross.sum(), 2),
+                'fees': round(fees.sum(), 2),
                 'pnl': round(pnl, 2),
                 'win_rate': f"{wins/total*100:.1f}%" if total > 0 else "0%",
                 'avg_return': round(np.mean(returns), 2) if len(returns) > 0 else 0,
             }
 
         return performance
+
+    def _compute_bucket_performance(self, closed_trades):
+        buckets = defaultdict(list)
+        for trade in closed_trades:
+            key = (
+                getattr(trade.signal, "symbol", SYMBOL) or SYMBOL,
+                getattr(trade.signal, "timeframe", TIMEFRAME) or TIMEFRAME,
+                getattr(trade.signal, "strategy", "Unknown"),
+                getattr(trade.signal, "regime_name", REGIME_NAMES.get(trade.signal.regime, str(trade.signal.regime))),
+                getattr(trade.signal, "exit_profile", "unknown"),
+            )
+            buckets[key].append(trade)
+
+        rows = []
+        for (symbol, timeframe, strategy, regime_name, exit_profile), trades in buckets.items():
+            gross = sum(getattr(t, "gross_pnl", t.pnl + t.fees_paid) for t in trades)
+            fees = sum(t.fees_paid for t in trades)
+            net = sum(t.pnl for t in trades)
+            wins = sum(1 for t in trades if t.pnl > 0)
+            rows.append({
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "strategy": strategy,
+                "regime": regime_name,
+                "exit_profile": exit_profile,
+                "trades": len(trades),
+                "win_rate": round((wins / max(len(trades), 1)) * 100, 1),
+                "gross_pnl": round(gross, 2),
+                "fees": round(fees, 2),
+                "net_pnl": round(net, 2),
+            })
+
+        rows.sort(key=lambda row: (-row["net_pnl"], row["symbol"], row["timeframe"], row["strategy"]))
+        return rows
+
+    def _compute_exit_reason_breakdown(self, closed_trades):
+        by_reason = defaultdict(list)
+        for trade in closed_trades:
+            by_reason[getattr(trade, "exit_reason", "Unknown") or "Unknown"].append(trade)
+
+        rows = []
+        for reason, trades in by_reason.items():
+            gross = sum(getattr(t, "gross_pnl", t.pnl + t.fees_paid) for t in trades)
+            fees = sum(t.fees_paid for t in trades)
+            net = sum(t.pnl for t in trades)
+            rows.append({
+                "reason": reason,
+                "trades": len(trades),
+                "gross_pnl": round(gross, 2),
+                "fees": round(fees, 2),
+                "net_pnl": round(net, 2),
+            })
+
+        rows.sort(key=lambda row: (-row["trades"], row["reason"]))
+        return rows
+
+    def _compute_validation_suite(self, closed_trades, train_df, test_df):
+        if not closed_trades:
+            return {
+                "in_sample_bars": len(train_df),
+                "out_of_sample_bars": len(test_df),
+                "fee_sensitivity": [],
+                "high_volatility_stress": {},
+            }
+
+        gross = np.array([getattr(t, "gross_pnl", t.pnl + t.fees_paid) for t in closed_trades], dtype=float)
+        fees = np.array([t.fees_paid for t in closed_trades], dtype=float)
+
+        fee_sensitivity = []
+        for label, multiplier in [("base", 1.0), ("fees+10pct", 1.10), ("fees+25pct", 1.25)]:
+            adjusted_net = gross - (fees * multiplier)
+            expectancy = adjusted_net.mean() if len(adjusted_net) > 0 else 0.0
+            fee_sensitivity.append({
+                "scenario": label,
+                "total_net": round(float(adjusted_net.sum()), 2),
+                "expectancy": round(float(expectancy), 4),
+                "survives": bool(expectancy >= 0),
+            })
+
+        volatile_trades = [
+            t for t in closed_trades
+            if getattr(t.signal, "regime_name", REGIME_NAMES.get(t.signal.regime, "")) == "Volatile"
+        ]
+        volatile_net = sum(t.pnl for t in volatile_trades)
+        volatile_fees = sum(t.fees_paid for t in volatile_trades)
+
+        return {
+            "in_sample_bars": len(train_df),
+            "out_of_sample_bars": len(test_df),
+            "out_of_sample_ratio": round(len(test_df) / max(len(train_df) + len(test_df), 1), 4),
+            "walk_forward_enabled": True,
+            "fee_sensitivity": fee_sensitivity,
+            "high_volatility_stress": {
+                "trades": len(volatile_trades),
+                "net_pnl": round(volatile_net, 2),
+                "fees": round(volatile_fees, 2),
+            },
+        }
 
     def _analyze_drawdowns(self, equity_curve, test_df):
         """Track all drawdown events with start, bottom, recovery."""

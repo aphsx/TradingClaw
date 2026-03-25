@@ -104,12 +104,24 @@ class Position:
     quantity: float
     entry_time: pd.Timestamp
     margin_used: float = 0.0
+    funding_paid: float = 0.0
+    liquidation_price: float = 0.0
+    leverage_used: float = 0.0
     pnl: float = 0.0
+    gross_pnl: float = 0.0
     exit_price: float = 0.0
     exit_time: Optional[pd.Timestamp] = None
     exit_reason: str = ""
+    exit_reason_detail: str = ""
     is_open: bool = True
     fees_paid: float = 0.0
+    entry_fee: float = 0.0
+    exit_fee: float = 0.0
+    funding_fee: float = 0.0
+    fill_ratio: float = 1.0
+    entry_latency_bars: int = 0
+    event_counters: Dict[str, int] = field(default_factory=dict)
+    execution_path: str = ""
 
 
 class RiskManager:
@@ -133,10 +145,13 @@ class RiskManager:
                  max_drawdown=MAX_DRAWDOWN,
                  max_open_trades=MAX_OPEN_TRADES,
                  taker_fee=None,
+                 maker_fee=None,
                  exchange="okx"):
 
         self.taker_fee = taker_fee if taker_fee is not None else TAKER_FEE
+        self.maker_fee = maker_fee if maker_fee is not None else MAKER_FEE
         self.exchange = exchange.lower()  # 'okx', 'binance', 'bybit'
+        self._rng = np.random.default_rng(42)
 
         # Use provided capital; 0 means "not yet synced from exchange"
         start_capital = initial_capital if initial_capital > 0 else 1000.0
@@ -179,6 +194,14 @@ class RiskManager:
         # Regime-specific tracking
         self._current_regime = "TRENDING"  # Will be updated by caller
         self._regime_kelly_cache: Dict[str, float] = {}  # Cache regime-specific Kelly
+
+    def _signal_execution_profile(self, signal) -> dict:
+        return getattr(signal, "execution_profile", {}) or {}
+
+    def _effective_leverage(self, signal) -> int:
+        profile = self._signal_execution_profile(signal)
+        cap = int(profile.get("leverage_cap", self._leverage) or self._leverage)
+        return max(1, min(self._leverage, cap))
 
     def sync_capital(self, live_balance: float) -> str:
         """
@@ -486,11 +509,12 @@ class RiskManager:
 
         # 1. Base Kelly sizing (regime-aware)
         regime = regime or self._current_regime
+        effective_leverage = self._effective_leverage(signal)
         kelly_size = self._calculate_kelly_size(regime)
 
         # 2. Get regime-specific risk budget
         regime_risk_pct = self._get_regime_risk_budget(regime)
-        kelly_size = min(kelly_size, regime_risk_pct / self._leverage)
+        kelly_size = min(kelly_size, regime_risk_pct / effective_leverage)
 
         # 3. Apply anti-martingale streak multiplier
         streak_mult = self.get_streak_multiplier()
@@ -528,7 +552,7 @@ class RiskManager:
         current_open_notional = sum(
             p.entry_price * p.quantity for p in self.open_positions
         )
-        max_total_notional = self.capital * self._leverage * 0.8  # 80% cap
+        max_total_notional = self.capital * effective_leverage * 0.8  # 80% cap
         remaining_notional = max_total_notional - current_open_notional
 
         if remaining_notional <= 0:
@@ -538,7 +562,7 @@ class RiskManager:
 
         # 10. Also cap per-trade at 50% of capital margin
         max_margin_per_trade = self.capital * 0.5
-        max_size_by_margin = (max_margin_per_trade * self._leverage) / signal.entry_price
+        max_size_by_margin = (max_margin_per_trade * effective_leverage) / signal.entry_price
 
         position_size = min(position_size, max_size_by_notional, max_size_by_margin)
 
@@ -607,20 +631,27 @@ class RiskManager:
         if not can_trade:
             return None
 
+        effective_leverage = self._effective_leverage(signal)
+        signal.stop_loss = self.validate_stop_vs_liquidation(
+            signal.entry_price, signal.stop_loss, signal.direction, effective_leverage
+        )
         quantity = self.calculate_position_size(signal, current_time=current_time, regime=regime)
         notional = signal.entry_price * quantity
-        margin_required = notional / max(self._leverage, 1)
-        entry_fee = notional * self.taker_fee
+        margin_required = notional / max(effective_leverage, 1)
+        execution_profile = getattr(signal, "execution_profile", {}) or {}
+        entry_fee_rate = float(execution_profile.get("entry_fee_rate", self.taker_fee))
+        entry_fee = notional * entry_fee_rate
+        liquidation_price = self.calculate_liquidation_price(signal.entry_price, signal.direction, effective_leverage)
 
         # Futures need margin + fee, not the full notional.
         if margin_required + entry_fee > self.capital:
             quantity = (self.capital * 0.95) / (
-                signal.entry_price * ((1 / max(self._leverage, 1)) + self.taker_fee)
+                signal.entry_price * ((1 / max(effective_leverage, 1)) + entry_fee_rate)
             )
             quantity = round(quantity, 6)
             notional = signal.entry_price * quantity
-            margin_required = notional / max(self._leverage, 1)
-            entry_fee = notional * self.taker_fee
+            margin_required = notional / max(effective_leverage, 1)
+            entry_fee = notional * entry_fee_rate
             # Hard reject only if balance itself is too small to cover even min notional
             if notional < self._min_notional:
                 return None
@@ -631,7 +662,11 @@ class RiskManager:
             quantity=quantity,
             entry_time=current_time,
             margin_used=margin_required,
-            fees_paid=entry_fee
+            liquidation_price=liquidation_price,
+            leverage_used=effective_leverage,
+            fees_paid=entry_fee,
+            entry_fee=entry_fee,
+            entry_latency_bars=int(execution_profile.get("entry_latency_bars", 0) or 0),
         )
 
         self.open_positions.append(position)
@@ -639,55 +674,115 @@ class RiskManager:
 
         return position
 
-    def check_exits(self, current_bar: pd.Series, current_time: pd.Timestamp):
-        """Check all open positions for exit conditions.
+    def _bar_path(self, current_bar: pd.Series) -> list[float]:
+        opn = float(current_bar.get('open', current_bar.get('close', 0)))
+        high = float(current_bar.get('high', opn))
+        low = float(current_bar.get('low', opn))
+        close = float(current_bar.get('close', opn))
+        return [opn, low, high, close] if close >= opn else [opn, high, low, close]
 
-        Exit prices include SLIPPAGE in the adverse direction to simulate
-        realistic fills (SL fills worse, TP fills worse).
-        """
-        positions_to_close = []
+    def _segment_crosses(self, start: float, end: float, price: float) -> bool:
+        if start <= end:
+            return start <= price <= end
+        return end <= price <= start
 
+    def _resolve_exit_fill(self, position: Position, reason: str, trigger_price: float) -> tuple[float, float]:
+        execution_profile = getattr(position.signal, "execution_profile", {}) or {}
+        stop_mult = float(execution_profile.get("stop_slippage_mult", 1.0))
+        liq_mult = float(execution_profile.get("liquidation_slippage_mult", 1.75))
+
+        if reason == "Take Profit":
+            if position.signal.direction == "LONG":
+                return trigger_price, self.maker_fee
+            return trigger_price, self.maker_fee
+
+        if reason == "Liquidation":
+            if position.signal.direction == "LONG":
+                return trigger_price * (1 - SLIPPAGE * liq_mult), self.taker_fee
+            return trigger_price * (1 + SLIPPAGE * liq_mult), self.taker_fee
+
+        if position.signal.direction == "LONG":
+            return trigger_price * (1 - SLIPPAGE * stop_mult), self.taker_fee
+        return trigger_price * (1 + SLIPPAGE * stop_mult), self.taker_fee
+
+    def _bump_event(self, position: Position, key: str):
+        position.event_counters[key] = position.event_counters.get(key, 0) + 1
+
+    def _pick_intrabar_event(self, position: Position, current_bar: pd.Series):
+        levels = []
+        if position.signal.direction == "LONG":
+            levels.append(("Liquidation", float(position.liquidation_price or 0)))
+            levels.append(("Stop Loss", float(position.signal.stop_loss or 0)))
+            levels.append(("Take Profit", float(position.signal.take_profit or 0)))
+        else:
+            levels.append(("Liquidation", float(position.liquidation_price or 0)))
+            levels.append(("Stop Loss", float(position.signal.stop_loss or 0)))
+            levels.append(("Take Profit", float(position.signal.take_profit or 0)))
+
+        path = self._bar_path(current_bar)
+        path_str = " -> ".join(f"{p:.4f}" for p in path)
+        for start, end in zip(path, path[1:]):
+            hits = []
+            for reason, level in levels:
+                if level <= 0 or not self._segment_crosses(start, end, level):
+                    continue
+                hits.append((abs(level - start), 0 if reason == "Liquidation" else 1 if reason == "Stop Loss" else 2, reason, level))
+
+            if not hits:
+                continue
+
+            hits.sort(key=lambda item: (item[0], item[1]))
+            _, _, reason, trigger_price = hits[0]
+
+            execution_profile = getattr(position.signal, "execution_profile", {}) or {}
+            if reason == "Take Profit":
+                fill_prob = float(execution_profile.get("maker_fill_probability", 0.97))
+                reduce_only_reject_prob = float(execution_profile.get("reduce_only_reject_probability", 0.01))
+                maker_missed = self._rng.random() > fill_prob
+                reduce_only_rejected = self._rng.random() < reduce_only_reject_prob
+                if maker_missed or reduce_only_rejected:
+                    if maker_missed:
+                        self._bump_event(position, "maker_missed")
+                    if reduce_only_rejected:
+                        self._bump_event(position, "reduce_only_rejected")
+                    continue
+
+            exit_price, exit_fee_rate = self._resolve_exit_fill(position, reason, trigger_price)
+            position.execution_path = path_str
+            position.exit_reason_detail = (
+                f"path={path_str}; trigger={reason}@{trigger_price:.4f}; "
+                f"fill={exit_price:.4f}; fee_type={'maker' if exit_fee_rate == self.maker_fee else 'taker'}"
+            )
+            return exit_price, reason, exit_fee_rate
+        return None
+
+    def apply_funding_costs(self, current_bar: pd.Series, bar_hours: float):
+        funding_rate = float(current_bar.get("funding_rate", 0) or 0)
+        if funding_rate == 0 or bar_hours <= 0:
+            return
         for pos in self.open_positions:
-            high = current_bar['high']
-            low = current_bar['low']
-            close = current_bar['close']
-            signal = pos.signal
+            mark_notional = float(current_bar.get("close", pos.entry_price)) * pos.quantity
+            side_mult = 1.0 if pos.signal.direction == "LONG" else -1.0
+            funding_cost = mark_notional * funding_rate * (bar_hours / 8.0) * side_mult
+            pos.funding_paid += funding_cost
+            pos.funding_fee += funding_cost
+            pos.fees_paid += funding_cost
+            self.capital -= funding_cost
 
-            exit_price = None
-            exit_reason = ""
+    def check_exits(self, current_bar: pd.Series, current_time: pd.Timestamp):
+        """Check exits using intrabar price path, maker/taker fees, and liquidation."""
+        positions_to_close = []
+        for pos in list(self.open_positions):
+            event = self._pick_intrabar_event(pos, current_bar)
+            if event:
+                exit_price, exit_reason, exit_fee_rate = event
+                positions_to_close.append((pos, exit_price, exit_reason, current_time, exit_fee_rate))
 
-            if signal.direction == "LONG":
-                # Check stop loss
-                if low <= signal.stop_loss:
-                    # SL: fill below stop (adverse slip)
-                    exit_price = signal.stop_loss * (1 - SLIPPAGE)
-                    exit_reason = "Stop Loss"
-                # Check take profit
-                elif high >= signal.take_profit:
-                    # TP: fill below TP (adverse slip)
-                    exit_price = signal.take_profit * (1 - SLIPPAGE)
-                    exit_reason = "Take Profit"
-
-            elif signal.direction == "SHORT":
-                # Check stop loss
-                if high >= signal.stop_loss:
-                    # SL: fill above stop (adverse slip)
-                    exit_price = signal.stop_loss * (1 + SLIPPAGE)
-                    exit_reason = "Stop Loss"
-                # Check take profit
-                elif low <= signal.take_profit:
-                    # TP: fill above TP (adverse slip)
-                    exit_price = signal.take_profit * (1 + SLIPPAGE)
-                    exit_reason = "Take Profit"
-
-            if exit_price is not None:
-                positions_to_close.append((pos, exit_price, exit_reason, current_time))
-
-        for pos, exit_price, exit_reason, exit_time in positions_to_close:
-            self._close_position(pos, exit_price, exit_reason, exit_time)
+        for pos, exit_price, exit_reason, exit_time, exit_fee_rate in positions_to_close:
+            self._close_position(pos, exit_price, exit_reason, exit_time, exit_fee_rate=exit_fee_rate)
 
     def _close_position(self, position: Position, exit_price: float,
-                        reason: str, exit_time: pd.Timestamp):
+                        reason: str, exit_time: pd.Timestamp, exit_fee_rate: float = None):
         """Close a position and update capital."""
         position.exit_price = exit_price
         position.exit_reason = reason
@@ -702,10 +797,13 @@ class RiskManager:
 
         # Exit fee
         exit_notional = exit_price * position.quantity
-        exit_fee = exit_notional * self.taker_fee
+        fee_rate = self.taker_fee if exit_fee_rate is None else exit_fee_rate
+        exit_fee = exit_notional * fee_rate
+        position.exit_fee = exit_fee
         position.fees_paid += exit_fee
 
         # Net PnL after all fees
+        position.gross_pnl = pnl
         position.pnl = pnl - position.fees_paid
 
         # Track trade result for Kelly sizing (as a percentage return)
@@ -718,7 +816,7 @@ class RiskManager:
             self._recent_returns.append(pnl_return)
 
             # Track by regime for regime-specific Kelly
-            regime = self._current_regime
+            regime = getattr(position.signal, "regime", self._current_regime)
             if regime not in self.trade_results_by_regime:
                 self.trade_results_by_regime[regime] = deque(maxlen=100)
             self.trade_results_by_regime[regime].append(pnl_return)
@@ -812,6 +910,7 @@ class RiskManager:
     def force_close_all(self, current_price: float, current_time: pd.Timestamp):
         """Force close all open positions (end of backtest)."""
         for pos in list(self.open_positions):
+            pos.exit_reason_detail = "Backtest ended with the position still open."
             self._close_position(pos, current_price, "Force Close", current_time)
 
     def record_equity(self, timestamp: pd.Timestamp, price: float):
@@ -839,6 +938,7 @@ class RiskManager:
 
         total_pnl = sum(pnls)
         total_fees = sum(t.fees_paid for t in trades)
+        gross_pnl = sum(getattr(t, "gross_pnl", t.pnl + t.fees_paid) for t in trades)
 
         # Drawdown calculation
         equity = pd.Series([e['equity'] for e in self.equity_curve])
@@ -874,6 +974,7 @@ class RiskManager:
             "losing_trades": len(losses),
             "win_rate": f"{len(wins)/len(trades)*100:.1f}%",
             "total_pnl": round(total_pnl, 2),
+            "gross_pnl_before_fees": round(gross_pnl, 2),
             "total_pnl_pct": f"{total_pnl/self.initial_capital*100:.2f}%",
             "total_fees_paid": round(total_fees, 2),
             "fees_pct_of_capital": f"{total_fees/self.initial_capital*100:.2f}%",

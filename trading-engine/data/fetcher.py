@@ -14,6 +14,19 @@ from config import *
 
 from data import ccxt_client
 
+
+def timeframe_to_hours(interval: str) -> float:
+    mapping = {
+        '1m': 1 / 60,
+        '5m': 5 / 60,
+        '15m': 15 / 60,
+        '30m': 0.5,
+        '1h': 1.0,
+        '4h': 4.0,
+        '1d': 24.0,
+    }
+    return mapping.get((interval or '1h').lower(), 1.0)
+
 def test_connection() -> dict:
     """Test API connectivity and account access."""
     return ccxt_client.test_connection()
@@ -243,6 +256,36 @@ def fetch_funding_rates(symbol: str = SYMBOL, limit: int = 100) -> pd.DataFrame:
     df['fundingRate'] = df['fundingRate'].astype(float)
     df.set_index('fundingTime', inplace=True)
     return df
+
+
+def attach_funding_history(df: pd.DataFrame, symbol: str = SYMBOL, limit: int = None) -> pd.DataFrame:
+    """Attach historical funding rate to each bar using backward asof merge."""
+    out = df.copy()
+    if out.empty:
+        out['funding_rate'] = 0.0
+        return out
+
+    try:
+        if limit is None:
+            span_hours = max((out.index[-1] - out.index[0]).total_seconds() / 3600, 8)
+            limit = max(50, int(span_hours / 8) + 10)
+        rates = fetch_funding_rates(symbol=symbol, limit=limit)
+        if rates.empty:
+            out['funding_rate'] = 0.0
+            return out
+
+        left = out.sort_index().reset_index()
+        left_ts = left.columns[0]
+        left = left.rename(columns={left_ts: 'timestamp'})
+        right = rates.sort_index().reset_index().rename(columns={'fundingTime': 'timestamp', 'fundingRate': 'funding_rate'})
+        merged = pd.merge_asof(left, right[['timestamp', 'funding_rate']], on='timestamp', direction='backward')
+        merged['funding_rate'] = merged['funding_rate'].ffill().fillna(0.0)
+        merged = merged.set_index('timestamp')
+        return merged
+    except Exception as e:
+        print(f"[WARN] Funding history unavailable for {symbol}: {e}")
+        out['funding_rate'] = 0.0
+        return out
 
 
 def fetch_mark_price_klines(symbol: str = SYMBOL, interval: str = "1h", limit: int = 500) -> pd.DataFrame:

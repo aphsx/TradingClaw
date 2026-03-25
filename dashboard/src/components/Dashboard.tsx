@@ -67,6 +67,11 @@ function fmtTime(ts: string | number | undefined): string {
   } catch { return String(ts); }
 }
 
+function fmtUsd(value: any): string {
+  const num = Number(value || 0);
+  return `$${num.toFixed(2)}`;
+}
+
 export default function Dashboard({ data }: { data: any }) {
   const [tab, setTab] = useState<'live' | 'positions' | 'futures' | 'backtest'>('live');
   const [liveData, setLiveData] = useState<any>(null);
@@ -298,6 +303,18 @@ export default function Dashboard({ data }: { data: any }) {
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '—';
   const totalPnl = trades.reduce((s: number, t: any) => s + Number(t.pnl), 0);
   const totalFees = trades.reduce((s: number, t: any) => s + Number(t.total_fees || 0), 0);
+  const btRun = data?.btRun || null;
+  const btTrades = data?.btTrades || [];
+  const btResults = btRun?.results_json || {};
+  const btStrategyBreakdown = btResults?.strategy_breakdown || {};
+  const btBucketPerformance = btResults?.bucket_performance || [];
+  const btRegimePerformance = btResults?.regime_performance || {};
+  const btValidation = btResults?.validation || btRun?.validation_json || {};
+  const btExecutionRealism = btResults?.execution_realism || {};
+  const btExitReasons = data?.btExitReasons || btResults?.exit_reason_breakdown || [];
+  const btGross = btTrades.reduce((sum: number, trade: any) => sum + Number(trade.gross_pnl ?? (Number(trade.pnl || 0) + Number(trade.total_fees || 0))), 0);
+  const btFees = btTrades.reduce((sum: number, trade: any) => sum + Number(trade.total_fees || 0), 0);
+  const btNet = btTrades.reduce((sum: number, trade: any) => sum + Number(trade.pnl || 0), 0);
 
   const monitor = liveData?.positions?.monitor || {};
   const regime = monitor.regime || {};
@@ -997,12 +1014,12 @@ export default function Dashboard({ data }: { data: any }) {
                           <div className="font-mono text-red-400">${sl.toLocaleString()} <span className="text-gray-600">({slDistance.toFixed(1)}%)</span></div>
                         </div>
                         <div>
-                          <div className="text-gray-500 mb-0.5">TP1 (33%)</div>
+                          <div className="text-gray-500 mb-0.5">Take Profit</div>
                           <div className="font-mono text-green-400">${tp.toLocaleString()}</div>
                         </div>
-                        {tp2Val && (
+                        {tp2Val && tp2Val !== tp && (
                           <div>
-                            <div className="text-gray-500 mb-0.5">TP2 (33%)</div>
+                            <div className="text-gray-500 mb-0.5">Alt TP</div>
                             <div className="font-mono text-green-300">${tp2Val.toLocaleString()}</div>
                           </div>
                         )}
@@ -1027,15 +1044,139 @@ export default function Dashboard({ data }: { data: any }) {
       {/* ═══ BACKTEST TAB ═══ */}
       {tab === 'backtest' && (
         <Card>
-          <div className="text-sm font-semibold mb-4">Backtest history (simulated)</div>
-          {data?.btTrades?.length > 0 ? (
-            <div className="overflow-x-auto">
+          <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+            <div>
+              <div className="text-sm font-semibold">Latest backtest run</div>
+              <div className="text-xs text-gray-500 mt-1">
+                {btRun ? 'Only the newest BACKTEST run is shown. Older runs are auto-cleared before each rerun.' : 'Run with TRADING_MODE=backtest to generate the first run.'}
+              </div>
+            </div>
+            {btRun && (
+              <div className="text-xs text-gray-400">
+                <div>Run #{btRun.id} {btRun.run_name ? `• ${btRun.run_name}` : ''}</div>
+                <div>{btRun.symbol} • {btRun.timeframe} • {btRun.status || 'COMPLETED'}</div>
+              </div>
+            )}
+          </div>
+          {btRun ? (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <Metric label="Gross PnL" value={fmtUsd(btGross)} color={btGross >= 0 ? 'text-green-400' : 'text-red-400'} />
+                <Metric label="Fees" value={fmtUsd(btFees)} color="text-amber-400" />
+                <Metric label="Net PnL" value={fmtUsd(btNet)} color={btNet >= 0 ? 'text-green-400' : 'text-red-400'} />
+                <Metric label="Closed Trades" value={btTrades.length} sub={btRun.win_rate ? `Win rate ${btRun.win_rate}%` : undefined} />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs mb-6">
+                <div className="bg-[#161622] border border-[#1e1e2e] rounded-lg p-4">
+                  <div className="text-gray-500 mb-2 uppercase tracking-wider text-[10px]">Run Snapshot</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>Created</div><div className="text-right text-gray-300">{fmtTime(btRun.created_at)}</div>
+                    <div>Period</div><div className="text-right text-gray-300">{btResults?.data?.test_period || 'â€”'}</div>
+                    <div>Final capital</div><div className="text-right text-gray-300">{fmtUsd(btRun.final_capital)}</div>
+                    <div>Max drawdown</div><div className="text-right text-gray-300">{btRun.max_drawdown ?? 'â€”'}%</div>
+                  </div>
+                </div>
+                <div className="bg-[#161622] border border-[#1e1e2e] rounded-lg p-4">
+                  <div className="text-gray-500 mb-2 uppercase tracking-wider text-[10px]">Validation & Realism</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>In-sample bars</div><div className="text-right text-gray-300">{btValidation?.in_sample_bars ?? 'â€”'}</div>
+                    <div>Out-of-sample bars</div><div className="text-right text-gray-300">{btValidation?.out_of_sample_bars ?? 'â€”'}</div>
+                    <div>Walk-forward</div><div className="text-right text-gray-300">{btValidation?.walk_forward_enabled ? 'enabled' : 'â€”'}</div>
+                    <div>Regime buckets</div><div className="text-right text-gray-300">{Object.keys(btRegimePerformance || {}).length}</div>
+                    <div>Intrabar path</div><div className="text-right text-gray-300">{btExecutionRealism?.uses_intrabar_path ? 'on' : 'off'}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+                <div className="overflow-x-auto">
+                  <div className="text-xs uppercase tracking-wider text-gray-500 mb-3">By Strategy</div>
+                  <table className="w-full text-sm whitespace-nowrap">
+                    <thead>
+                      <tr className="text-gray-500 text-[10px] uppercase tracking-wider">
+                        <th className="text-left pb-2 pr-3">Strategy</th>
+                        <th className="text-right pb-2 pr-3">Trades</th>
+                        <th className="text-right pb-2 pr-3">Gross</th>
+                        <th className="text-right pb-2 pr-3">Fees</th>
+                        <th className="text-right pb-2">Net</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(btStrategyBreakdown).map(([name, stats]: [string, any]) => (
+                        <tr key={name} className="border-t border-[#1e1e2e]">
+                          <td className="py-2 pr-3 text-gray-300">{name}</td>
+                          <td className="py-2 pr-3 text-right text-gray-400">{stats?.trades ?? 0}</td>
+                          <td className="py-2 pr-3 text-right">{fmtUsd(stats?.gross_pnl)}</td>
+                          <td className="py-2 pr-3 text-right text-amber-400/80">{fmtUsd(stats?.fees)}</td>
+                          <td className={`py-2 text-right ${Number(stats?.pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtUsd(stats?.pnl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <div className="text-xs uppercase tracking-wider text-gray-500 mb-3">By Exit Reason</div>
+                  <table className="w-full text-sm whitespace-nowrap">
+                    <thead>
+                      <tr className="text-gray-500 text-[10px] uppercase tracking-wider">
+                        <th className="text-left pb-2 pr-3">Reason</th>
+                        <th className="text-right pb-2 pr-3">Trades</th>
+                        <th className="text-right pb-2 pr-3">Gross</th>
+                        <th className="text-right pb-2 pr-3">Fees</th>
+                        <th className="text-right pb-2">Net</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {btExitReasons.map((row: any) => (
+                        <tr key={row.reason || 'unknown'} className="border-t border-[#1e1e2e]">
+                          <td className="py-2 pr-3 text-gray-300">{row.reason || 'â€”'}</td>
+                          <td className="py-2 pr-3 text-right text-gray-400">{row.trades}</td>
+                          <td className="py-2 pr-3 text-right">{fmtUsd(row.gross_pnl)}</td>
+                          <td className="py-2 pr-3 text-right text-amber-400/80">{fmtUsd(row.fees)}</td>
+                          <td className={`py-2 text-right ${Number(row.net_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtUsd(row.net_pnl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto mb-6">
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-3">By Symbol / TF / Strategy / Regime</div>
+                <table className="w-full text-sm whitespace-nowrap">
+                  <thead>
+                    <tr className="text-gray-500 text-[10px] uppercase tracking-wider">
+                      <th className="text-left pb-2 pr-3">Bucket</th>
+                      <th className="text-right pb-2 pr-3">Trades</th>
+                      <th className="text-right pb-2 pr-3">Fees</th>
+                      <th className="text-right pb-2">Net</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {btBucketPerformance.map((row: any) => (
+                      <tr key={`${row.symbol}-${row.timeframe}-${row.strategy}-${row.regime}-${row.exit_profile}`} className="border-t border-[#1e1e2e]">
+                        <td className="py-2 pr-3 text-gray-300 text-xs">{row.symbol} / {row.timeframe} / {row.strategy} / {row.regime}</td>
+                        <td className="py-2 pr-3 text-right text-gray-400">{row.trades}</td>
+                        <td className="py-2 pr-3 text-right text-amber-400/80">{fmtUsd(row.fees)}</td>
+                        <td className={`py-2 text-right ${Number(row.net_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtUsd(row.net_pnl)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="text-sm font-semibold mb-4">Backtest history (latest run only)</div>
+              <div className="overflow-x-auto">
               <table className="w-full text-sm whitespace-nowrap">
                 <thead>
                   <tr className="text-gray-500 text-xs uppercase tracking-wider">
                     <th className="text-left pb-3 pr-3">Time</th>
                     <th className="text-left pb-3 pr-3">Dir</th>
                     <th className="text-left pb-3 pr-3">Strategy</th>
+                    <th className="text-left pb-3 pr-3">Regime</th>
+                    <th className="text-left pb-3 pr-3">Exit Profile</th>
                     <th className="text-right pb-3 pr-3">Entry</th>
                     <th className="text-right pb-3 pr-3">Exit</th>
                     <th className="text-right pb-3 pr-3" title="PnL before fees">Gross</th>
@@ -1046,35 +1187,38 @@ export default function Dashboard({ data }: { data: any }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.btTrades.map((t: any) => (
+                  {btTrades.map((t: any) => (
                     <tr key={t.id} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
                       <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(t.entry_time)}</td>
                       <td className="py-2 pr-3">
                         <Badge color={t.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{t.direction}</Badge>
                       </td>
                       <td className="py-2 pr-3 text-gray-300 text-xs">{t.strategy}</td>
+                      <td className="py-2 pr-3 text-gray-400 text-xs">{t.regime_name || t.regime}</td>
+                      <td className="py-2 pr-3 text-gray-400 text-xs">{t.exit_profile || 'â€”'}</td>
                       <td className="py-2 pr-3 text-right">${Number(t.entry_price).toLocaleString()}</td>
                       <td className="py-2 pr-3 text-right">${Number(t.exit_price).toLocaleString()}</td>
-                      <td className={`py-2 pr-3 text-right ${(Number(t.pnl) + Number(t.total_fees || 0)) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        ${(Number(t.pnl) + Number(t.total_fees || 0)).toFixed(2)}
+                      <td className={`py-2 pr-3 text-right ${Number(t.gross_pnl ?? (Number(t.pnl) + Number(t.total_fees || 0))) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {fmtUsd(t.gross_pnl ?? (Number(t.pnl) + Number(t.total_fees || 0)))}
                       </td>
                       <td className="py-2 pr-3 text-right text-amber-400/80">
-                        ${Number(t.total_fees || 0).toFixed(2)}
+                        {fmtUsd(t.total_fees)}
                       </td>
                       <td className={`py-2 pr-3 text-right font-medium ${Number(t.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        ${Number(t.pnl).toFixed(2)}
+                        {fmtUsd(t.pnl)}
                       </td>
                       <td className="py-2 pr-3 text-[10px] text-gray-500 font-mono">
                         {t.entry_order_id ? <div title="Entry Order ID">↑ {String(t.entry_order_id).slice(-8)}</div> : <div>↑ —</div>}
                         {t.exit_order_id ? <div title="Exit Order ID">↓ {String(t.exit_order_id).slice(-8)}</div> : <div>↓ —</div>}
                         {t.entry_client_oid ? <div title="Order Group">{String(t.entry_client_oid).slice(-12)}</div> : null}
                       </td>
-                      <td className="py-2 text-xs text-gray-400">{t.exit_reason}</td>
+                      <td className="py-2 text-xs text-gray-400" title={t.exit_reason_detail || t.exit_reason}>{t.exit_reason}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            </>
           ) : (
             <div className="text-center py-12 text-gray-500">
               <p>No backtest runs yet</p>

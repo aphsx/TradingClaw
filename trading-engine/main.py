@@ -121,6 +121,7 @@ def run_live():
     from core.position_manager import PositionManager
     from core.execution_analytics import ExecutionAnalytics  # Issue #10
     from core.regime_monitor import RegimeMonitor
+    from core.performance_guard import StrategyPerformanceGuard
     from strategies.signal_engine import SignalEngine
 
     print("=" * 60)
@@ -158,7 +159,11 @@ def run_live():
     print(f"   Taker: {real_fees['taker']*100:.3f}% | Maker: {real_fees['maker']*100:.3f}%")
 
     detector    = RegimeDetector()
-    risk_mgr    = RiskManager(initial_capital=live_balance, taker_fee=real_fees['taker'])
+    risk_mgr    = RiskManager(
+        initial_capital=live_balance,
+        taker_fee=real_fees['taker'],
+        maker_fee=real_fees['maker'],
+    )
     ml_filter   = MLSignalFilter(min_samples=ML_MIN_SAMPLES, threshold=ML_THRESHOLD)
     corr_mgr    = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
                                      correlation_threshold=0.7)
@@ -166,6 +171,7 @@ def run_live():
     sig_engine  = SignalEngine(taker_fee=real_fees['taker'], maker_fee=real_fees['maker'])
     exec_analytics = ExecutionAnalytics(window=50)  # Issue #10
     regime_mon  = RegimeMonitor()                   # Per-regime circuit breakers
+    perf_guard  = StrategyPerformanceGuard()        # Per strategy+regime after-fee guard
 
     # Shared dict for monitor thread to read current regime per symbol (no DB round-trip)
     _current_regimes: dict = {}  # symbol → {'regime': int, 'confidence': float}

@@ -59,8 +59,10 @@ from config import (
     SESSION_OPEN_LOOKBACK_BARS, SESSION_OPEN_VOLUME_MIN, SESSION_OPEN_TP_RANGE_MULT,
     LONDON_OPEN_HOURS, NY_OPEN_HOURS,
     RSI_DIV_ADX_MAX, RSI_DIV_TP_R,
+    TIMEFRAME,
 )
 from core.regime_detector import TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE, REGIME_NAMES
+from core.market_profiles import resolve_market_profile
 from strategies.factors.volume_flow import VolumeFlowFactor
 from strategies.factors.open_interest import OpenInterestFactor
 
@@ -98,6 +100,16 @@ class Signal:
     session_bonus: float = 0.0      # Session-based confidence bonus
     failed_breakout_risk: bool = False  # High risk of failed breakout
     volume_exhaustion: bool = False  # Volume exhaustion pattern detected
+    symbol: str = ""
+    timeframe: str = ""
+    market_profile: str = ""
+    initial_stop_loss: float = 0.0
+    execution_profile: Dict[str, float] = field(default_factory=dict)
+    regime_name: str = ""
+    regime_group: str = ""
+    exit_profile: str = ""
+    exit_profile_reason: str = ""
+    trail_enabled: bool = False
 
     @property
     def risk_reward(self) -> float:
@@ -156,6 +168,7 @@ class SignalEngine:
         htf_data: Dict[str, pd.DataFrame] = None,
         regime: int = -1,
         symbol: str = None,
+        timeframe: str = TIMEFRAME,
         btc_composite: float = 0.0,
         regime_confidence: float = 0.5,
         df_4h: pd.DataFrame = None,  # Legacy parameter for backward compatibility
@@ -214,6 +227,7 @@ class SignalEngine:
             session_bonus = self._compute_session_bonus(df, regime)
 
         signals = []
+        market_profile = resolve_market_profile(symbol, timeframe)
 
         # Strategy 1: Trend Follow — Trending regimes only
         if regime in (TRENDING_UP, TRENDING_DOWN):
@@ -221,7 +235,7 @@ class SignalEngine:
                 df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
             )
             if sig:
-                signals.append(sig)
+                signals.append(self._apply_market_profile(sig, df, regime, symbol, timeframe, market_profile))
 
         # Strategy 2: Volatility Breakout — any regime except Ranging
         if regime != RANGING:
@@ -229,7 +243,7 @@ class SignalEngine:
                 df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
             )
             if sig:
-                signals.append(sig)
+                signals.append(self._apply_market_profile(sig, df, regime, symbol, timeframe, market_profile))
 
         # Strategy 3: Mean Reversion — Ranging only, strict
         if regime == RANGING and regime_confidence >= MR_CONFIDENCE_MIN:
@@ -237,7 +251,7 @@ class SignalEngine:
                 df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
             )
             if sig:
-                signals.append(sig)
+                signals.append(self._apply_market_profile(sig, df, regime, symbol, timeframe, market_profile))
 
         # Strategy 4: Pullback in Trend — Trending regimes (institutional-style entry)
         if regime in (TRENDING_UP, TRENDING_DOWN):
@@ -245,7 +259,7 @@ class SignalEngine:
                 df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
             )
             if sig:
-                signals.append(sig)
+                signals.append(self._apply_market_profile(sig, df, regime, symbol, timeframe, market_profile))
 
         # Strategy 5: Session Open Breakout — London/NY opens only
         if self._session_enabled:
@@ -253,14 +267,14 @@ class SignalEngine:
                 df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
             )
             if sig:
-                signals.append(sig)
+                signals.append(self._apply_market_profile(sig, df, regime, symbol, timeframe, market_profile))
 
         # Strategy 6: RSI Divergence — any regime, strongest when ADX < 30
         sig = self._rsi_divergence_entry(
             df, regime, atr, close, mtf_score, mtf_aligned, session_bonus
         )
         if sig:
-            signals.append(sig)
+            signals.append(self._apply_market_profile(sig, df, regime, symbol, timeframe, market_profile))
 
         if not signals:
             return []
@@ -268,6 +282,86 @@ class SignalEngine:
         # Return best signal by confidence
         best = max(signals, key=lambda s: s.confidence)
         return [best]
+
+    def _regime_bias(self, regime: int, market_profile) -> float:
+        if regime == RANGING:
+            return market_profile.exit.regime_tp_bias_range
+        if regime == VOLATILE:
+            return market_profile.exit.regime_tp_bias_vol
+        return market_profile.exit.regime_tp_bias_trend
+
+    def _resolve_exit_profile(self, signal: Signal, regime: int) -> tuple[str, str, bool]:
+        regime_name = REGIME_NAMES.get(regime, f"Regime{regime}")
+        if signal.strategy in {"TrendFollow", "PullbackTrend"}:
+            return "trend_wide_trail", f"{regime_name} regime favors wider targets with trailing risk lock.", True
+        if signal.strategy == "MeanRev":
+            return "meanrev_fixed_tight", f"{regime_name} regime uses a fixed target and tighter stop for reversion.", False
+        if signal.strategy in {"RSIDivergence", "VolBreakout", "SessionOpen"} or regime == VOLATILE:
+            return "atr_vol_expansion", f"{regime_name} regime widens ATR exits to survive volatility.", False
+        return "balanced_single", f"{regime_name} regime uses the default single-target profile.", False
+
+    def _apply_market_profile(
+        self,
+        signal: Signal,
+        df: pd.DataFrame,
+        regime: int,
+        symbol: str | None,
+        timeframe: str,
+        market_profile,
+    ) -> Signal:
+        close = signal.entry_price
+        bias = self._regime_bias(regime, market_profile)
+        direction_mult = 1 if signal.direction == "LONG" else -1
+        volatility_bias = 1.15 if regime == VOLATILE else 1.0
+        exit_profile, exit_profile_reason, trail_enabled = self._resolve_exit_profile(signal, regime)
+        target = signal.take_profit
+
+        if signal.strategy == "MeanRev":
+            stop_dist = max(signal.atr * market_profile.exit.meanrev_stop_atr_mult, close * 0.0025)
+            signal.stop_loss = close - (direction_mult * stop_dist)
+        elif signal.strategy in {"VolBreakout", "SessionOpen"}:
+            stop_dist = max(signal.atr * market_profile.exit.breakout_sl_atr_mult * volatility_bias, close * 0.003)
+            signal.stop_loss = close - (direction_mult * stop_dist)
+        elif signal.strategy == "RSIDivergence":
+            stop_dist = max(signal.atr * market_profile.exit.rsi_div_stop_atr_mult * volatility_bias, close * 0.003)
+            signal.stop_loss = close - (direction_mult * stop_dist)
+
+        risk = abs(signal.entry_price - signal.stop_loss)
+        if risk <= 0:
+            return signal
+
+        if signal.strategy == "TrendFollow":
+            target = close + direction_mult * (risk * market_profile.exit.trend_rr * bias)
+        elif signal.strategy == "VolBreakout":
+            move = abs(signal.take_profit - close)
+            target_dist = max(move * market_profile.exit.breakout_target_mult * bias,
+                              risk * market_profile.exit.breakout_rr)
+            target = close + direction_mult * target_dist
+        elif signal.strategy == "MeanRev":
+            raw_target = signal.take_profit - direction_mult * (signal.atr * market_profile.exit.meanrev_target_buffer_atr)
+            min_target = close + direction_mult * (risk * market_profile.exit.meanrev_rr * bias)
+            target = max(raw_target, min_target) if signal.direction == "LONG" else min(raw_target, min_target)
+        elif signal.strategy == "PullbackTrend":
+            target = close + direction_mult * (risk * market_profile.exit.pullback_rr * bias)
+        elif signal.strategy == "SessionOpen":
+            target = close + direction_mult * (risk * market_profile.exit.session_open_rr * bias)
+        elif signal.strategy == "RSIDivergence":
+            target = close + direction_mult * (risk * market_profile.exit.rsi_div_rr * bias)
+
+        signal.take_profit = target
+        signal.take_profit_2 = target
+        signal.expected_profit_pct = abs(target - close) / max(close, 1e-9) * 100
+        signal.symbol = symbol or ""
+        signal.timeframe = timeframe
+        signal.market_profile = market_profile.name
+        signal.initial_stop_loss = signal.stop_loss
+        signal.execution_profile = market_profile.to_signal_payload()["execution"]
+        signal.regime_name = REGIME_NAMES.get(regime, f"Regime{regime}")
+        signal.regime_group = "trend" if regime in (TRENDING_UP, TRENDING_DOWN) else "range" if regime == RANGING else "volatile"
+        signal.exit_profile = exit_profile
+        signal.exit_profile_reason = exit_profile_reason
+        signal.trail_enabled = trail_enabled
+        return signal
 
     # ─── Multi-Timeframe Confluence System ────────────────────────
 
