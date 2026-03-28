@@ -134,3 +134,120 @@ class ExecutionAnalytics:
             }
 
         return report
+
+    # ── Feedback Loop Methods (NEW) ─────────────────────────────────────────
+
+    def get_sizing_penalty(self, symbol: str = None) -> float:
+        """
+        Return a 0.0–1.0 multiplier to scale down position size when
+        execution quality is poor.
+
+        1.0 = no penalty (normal sizing)
+        0.5 = half size (slippage consistently high)
+        0.0 = no trading (extreme slippage)
+
+        Thresholds (all in % of notional):
+          < 0.05% slippage → no penalty
+          0.05–0.10%       → linear penalty down to 0.7
+          0.10–0.20%       → penalty 0.7 → 0.5
+          > 0.20%          → penalty 0.5 → 0.25 (exchange issues likely)
+        """
+        eff_slip = self.get_effective_slippage(symbol)  # as fraction, e.g. 0.0005
+
+        if eff_slip < 0.0005:
+            return 1.0
+        elif eff_slip < 0.0010:
+            # Linear 1.0 → 0.70
+            t = (eff_slip - 0.0005) / (0.0010 - 0.0005)
+            return round(1.0 - t * 0.30, 3)
+        elif eff_slip < 0.0020:
+            # Linear 0.70 → 0.50
+            t = (eff_slip - 0.0010) / (0.0020 - 0.0010)
+            return round(0.70 - t * 0.20, 3)
+        else:
+            # Linear 0.50 → 0.25 for extreme slippage
+            t = min((eff_slip - 0.0020) / 0.0030, 1.0)
+            return round(0.50 - t * 0.25, 3)
+
+    def get_adjusted_fee_multiplier(self, base_multiplier: float = 3.0,
+                                    symbol: str = None) -> float:
+        """
+        Adjust FeeFilter multiplier dynamically based on observed slippage.
+        Higher slippage → higher fee multiplier → fewer but better trades.
+
+        E.g.:
+          Normal slippage (0.03%) → 3.0x (base)
+          High slippage   (0.10%) → 3.5x (filter more aggressively)
+          Extreme         (0.20%) → 4.0x
+        """
+        eff_slip = self.get_effective_slippage(symbol)
+
+        if eff_slip < 0.0005:
+            return base_multiplier
+        elif eff_slip < 0.0010:
+            extra = (eff_slip - 0.0005) / 0.0005 * 0.5
+            return round(base_multiplier + extra, 2)
+        elif eff_slip < 0.0020:
+            extra = 0.5 + (eff_slip - 0.0010) / 0.0010 * 0.5
+            return round(base_multiplier + extra, 2)
+        else:
+            return round(base_multiplier + 1.0, 2)  # cap at +1.0x
+
+    def should_pause_trading(self, symbol: str = None,
+                              adverse_rate_threshold: float = 0.80,
+                              min_fills: int = 10) -> tuple:
+        """
+        Circuit breaker: should we pause live trading due to bad execution?
+
+        Returns: (should_pause: bool, reason: str)
+
+        Triggers:
+        - Adverse fill rate > 80% (last 10 fills mostly bad)
+        - EMA slippage > 0.30% (extreme market conditions)
+        """
+        syms = [symbol] if symbol else list(self._records.keys())
+        for sym in syms:
+            recs = self._records.get(sym)
+            if not recs or len(recs) < min_fills:
+                continue
+
+            slippages = [r['slippage_pct'] for r in list(recs)[-min_fills:]]
+            adverse_rate = sum(1 for s in slippages if s > 0.001) / len(slippages)
+
+            if adverse_rate >= adverse_rate_threshold:
+                return True, (f"{sym}: {adverse_rate*100:.0f}% adverse fills "
+                              f"in last {min_fills} trades — execution degraded")
+
+            eff_slip = self._ema_slippage.get(sym, 0)
+            if eff_slip > 0.0030:
+                return True, (f"{sym}: EMA slippage {eff_slip*100:.3f}% "
+                              f"— extreme market microstructure")
+
+        return False, "OK"
+
+    def get_fill_quality_score(self, symbol: str = None) -> float:
+        """
+        0.0 = terrible execution, 1.0 = perfect execution.
+        Used as a feature for ML filter.
+        """
+        penalty = self.get_sizing_penalty(symbol)
+        # Penalty of 1.0 → quality 1.0, penalty of 0.25 → quality 0.25
+        return round(penalty, 3)
+
+    def get_dashboard_metrics(self) -> dict:
+        """Richer metrics for dashboard — includes all symbols + quality summary."""
+        report = self.get_report()
+        overall_quality = 1.0
+        if self._ema_slippage:
+            avg_slip = sum(self._ema_slippage.values()) / len(self._ema_slippage)
+            overall_quality = self.get_sizing_penalty()
+
+        pause, pause_reason = self.should_pause_trading()
+        return {
+            "per_symbol":      report,
+            "overall_quality": round(overall_quality, 3),
+            "pause_trading":   pause,
+            "pause_reason":    pause_reason,
+            "sizing_penalty":  self.get_sizing_penalty(),
+            "n_symbols":       len(self._records),
+        }
