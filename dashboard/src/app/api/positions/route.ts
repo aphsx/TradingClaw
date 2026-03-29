@@ -31,6 +31,15 @@ export async function GET() {
     lastPrice = await redisGet('monitor:last_price');
     margin = await redisGet('monitor:margin');
     funding = await redisGet('monitor:funding');
+    // v6 module snapshots (set every loop iteration; expire after 120s)
+    const [v6EventRisk, v6ExecAnalytics, v6Correlation, v6Orderbook, v6PerfGuard] =
+      await Promise.all([
+        redisGet('v6:event_risk'),
+        redisGet('v6:exec_analytics'),
+        redisGet('v6:correlation'),
+        redisGet('v6:orderbook'),
+        redisGet('v6:perf_guard'),
+      ]);
 
     if (redisPositions.length > 0) {
       open_positions = redisPositions;
@@ -92,6 +101,13 @@ export async function GET() {
       last_price: lastPrice,
       margin,
       funding,
+    },
+    v6: {
+      event_risk:    v6EventRisk,
+      exec_analytics: v6ExecAnalytics,
+      correlation:   v6Correlation,
+      orderbook:     v6Orderbook,
+      perf_guard:    v6PerfGuard,
     },
     _errors: errors.length > 0 ? errors : undefined,
   });

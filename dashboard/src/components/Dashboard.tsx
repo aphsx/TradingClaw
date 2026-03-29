@@ -331,6 +331,14 @@ export default function Dashboard({ data }: { data: any }) {
   const marginData = monitor.margin || {};
   const fundingData = monitor.funding || {};
 
+  // v6 module data (published every loop iteration, expire 120s)
+  const v6 = liveData?.positions?.v6 || {};
+  const v6EventRisk: Record<string, any>   = v6.event_risk    || {};
+  const v6Exec: Record<string, any>        = v6.exec_analytics || {};
+  const v6Correlation: Record<string, any> = v6.correlation   || {};
+  const v6Orderbook: Record<string, any>   = v6.orderbook     || {};
+  const v6PerfGuard: Record<string, any>   = v6.perf_guard    || {};
+
   // Balance from Binance API
   const usdtFree = balanceData?.usdt_free ?? null;
   const usdtLocked = balanceData?.usdt_locked ?? null;
@@ -538,7 +546,7 @@ export default function Dashboard({ data }: { data: any }) {
         {[
           { key: 'live', label: `Live trades (${totalTrades})` },
           { key: 'positions', label: `Open (${openPositions.length})` },
-          { key: 'futures', label: '[FAST] Futures info' },
+          { key: 'futures', label: 'Futures info' },
           { key: 'backtest', label: 'Backtest' },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key as any)}
@@ -955,10 +963,10 @@ export default function Dashboard({ data }: { data: any }) {
                   const upnl = Number(p.unrealized_pnl || 0);
                   const isLong = p.direction === 'LONG';
 
-                  // Estimated liquidation for isolated 5x:
+                  // Estimated liquidation price for isolated margin:
                   // Long: liq ≈ entry * (1 - 1/leverage + maint_margin_rate)
                   // Short: liq ≈ entry * (1 + 1/leverage - maint_margin_rate)
-                  const leverage = 5;
+                  const leverage = systemInfo?.leverage || 5;
                   const mmRate = 0.004; // 0.4% maint margin for most contracts
                   const liqPrice = isLong
                     ? entry * (1 - 1 / leverage + mmRate)
@@ -1038,6 +1046,110 @@ export default function Dashboard({ data }: { data: any }) {
               </div>
             </Card>
           )}
+
+          {/* ── v6 System Intelligence Panel ── */}
+          {(Object.keys(v6EventRisk).length > 0 || Object.keys(v6Exec).length > 0) && (
+            <Card className="mt-6">
+              <div className="flex items-center gap-2 mb-4">
+                <Zap size={14} className="text-purple-400" />
+                <span className="text-sm font-semibold">v6 System Intelligence</span>
+                <span className="text-[10px] text-gray-600 ml-1">Live module snapshots</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+
+                {/* Event Risk */}
+                <div className="bg-[#0e0e18] rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Event Risk</div>
+                  {Object.keys(v6EventRisk).length === 0 ? (
+                    <div className="text-gray-600 text-xs">No data</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {Object.entries(v6EventRisk).slice(0, 4).map(([sym, info]: [string, any]) => {
+                        const blocked = info?.active_events?.length > 0;
+                        return (
+                          <div key={sym} className="flex items-center justify-between">
+                            <span className="text-xs text-gray-400">{sym.replace('-USDT-SWAP', '')}</span>
+                            <div className="flex items-center gap-1">
+                              {blocked
+                                ? <span className="text-[10px] text-amber-400">{info.active_events[0]}</span>
+                                : <span className="text-[10px] text-green-400">clear</span>}
+                              <span className="text-[10px] text-gray-600">×{(info.size_mult ?? 1).toFixed(1)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Execution Analytics */}
+                <div className="bg-[#0e0e18] rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Execution Quality</div>
+                  {Object.keys(v6Exec).length === 0 ? (
+                    <div className="text-gray-600 text-xs">No data</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {Object.entries(v6Exec).slice(0, 4).map(([sym, info]: [string, any]) => {
+                        const slipBps = ((info?.ema_slippage ?? 0) * 10000).toFixed(1);
+                        const paused = info?.circuit_breaker_active;
+                        return (
+                          <div key={sym} className="flex items-center justify-between">
+                            <span className="text-xs text-gray-400">{sym.replace('-USDT-SWAP', '')}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-[10px] text-gray-300">{slipBps}bps</span>
+                              {paused && <span className="text-[10px] text-red-400">PAUSED</span>}
+                              <span className="text-[10px] text-gray-600">q={((info?.fill_quality ?? 1) * 100).toFixed(0)}%</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Orderbook Spread Quality */}
+                <div className="bg-[#0e0e18] rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Orderbook Spread</div>
+                  {Object.keys(v6Orderbook).length === 0 ? (
+                    <div className="text-gray-600 text-xs">No data</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {Object.entries(v6Orderbook).map(([sym, quality]: [string, any]) => {
+                        const color = quality === 'tight' ? '#22c55e' : quality === 'normal' ? '#9ca3af' : quality === 'wide' ? '#f59e0b' : '#ef4444';
+                        return (
+                          <div key={sym} className="flex items-center justify-between">
+                            <span className="text-xs text-gray-400">{sym.replace('-USDT-SWAP', '')}</span>
+                            <span className="text-[10px] font-semibold" style={{ color }}>{quality}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Correlation regime */}
+                <div className="bg-[#0e0e18] rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Correlation (EWM)</div>
+                  {Object.keys(v6Correlation).length === 0 ? (
+                    <div className="text-gray-600 text-xs">No data</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {Object.entries(v6Correlation).slice(0, 6).map(([pair, val]: [string, any]) => {
+                        const r = Number(val);
+                        const color = Math.abs(r) > 0.75 ? '#ef4444' : Math.abs(r) > 0.5 ? '#f59e0b' : '#22c55e';
+                        return (
+                          <div key={pair} className="flex items-center justify-between">
+                            <span className="text-[10px] text-gray-500">{pair}</span>
+                            <span className="font-mono text-[10px]" style={{ color }}>{r.toFixed(2)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 
@@ -1072,17 +1184,17 @@ export default function Dashboard({ data }: { data: any }) {
                   <div className="text-gray-500 mb-2 uppercase tracking-wider text-[10px]">Run Snapshot</div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>Created</div><div className="text-right text-gray-300">{fmtTime(btRun.created_at)}</div>
-                    <div>Period</div><div className="text-right text-gray-300">{btResults?.data?.test_period || 'â€”'}</div>
+                    <div>Period</div><div className="text-right text-gray-300">{btResults?.data?.test_period || '—'}</div>
                     <div>Final capital</div><div className="text-right text-gray-300">{fmtUsd(btRun.final_capital)}</div>
-                    <div>Max drawdown</div><div className="text-right text-gray-300">{btRun.max_drawdown ?? 'â€”'}%</div>
+                    <div>Max drawdown</div><div className="text-right text-gray-300">{btRun.max_drawdown ?? '—'}%</div>
                   </div>
                 </div>
                 <div className="bg-[#161622] border border-[#1e1e2e] rounded-lg p-4">
                   <div className="text-gray-500 mb-2 uppercase tracking-wider text-[10px]">Validation & Realism</div>
                   <div className="grid grid-cols-2 gap-2">
-                    <div>In-sample bars</div><div className="text-right text-gray-300">{btValidation?.in_sample_bars ?? 'â€”'}</div>
-                    <div>Out-of-sample bars</div><div className="text-right text-gray-300">{btValidation?.out_of_sample_bars ?? 'â€”'}</div>
-                    <div>Walk-forward</div><div className="text-right text-gray-300">{btValidation?.walk_forward_enabled ? 'enabled' : 'â€”'}</div>
+                    <div>In-sample bars</div><div className="text-right text-gray-300">{btValidation?.in_sample_bars ?? '—'}</div>
+                    <div>Out-of-sample bars</div><div className="text-right text-gray-300">{btValidation?.out_of_sample_bars ?? '—'}</div>
+                    <div>Walk-forward</div><div className="text-right text-gray-300">{btValidation?.walk_forward_enabled ? 'enabled' : '—'}</div>
                     <div>Regime buckets</div><div className="text-right text-gray-300">{Object.keys(btRegimePerformance || {}).length}</div>
                     <div>Intrabar path</div><div className="text-right text-gray-300">{btExecutionRealism?.uses_intrabar_path ? 'on' : 'off'}</div>
                   </div>
@@ -1131,7 +1243,7 @@ export default function Dashboard({ data }: { data: any }) {
                     <tbody>
                       {btExitReasons.map((row: any) => (
                         <tr key={row.reason || 'unknown'} className="border-t border-[#1e1e2e]">
-                          <td className="py-2 pr-3 text-gray-300">{row.reason || 'â€”'}</td>
+                          <td className="py-2 pr-3 text-gray-300">{row.reason || '—'}</td>
                           <td className="py-2 pr-3 text-right text-gray-400">{row.trades}</td>
                           <td className="py-2 pr-3 text-right">{fmtUsd(row.gross_pnl)}</td>
                           <td className="py-2 pr-3 text-right text-amber-400/80">{fmtUsd(row.fees)}</td>
@@ -1195,7 +1307,7 @@ export default function Dashboard({ data }: { data: any }) {
                       </td>
                       <td className="py-2 pr-3 text-gray-300 text-xs">{t.strategy}</td>
                       <td className="py-2 pr-3 text-gray-400 text-xs">{t.regime_name || t.regime}</td>
-                      <td className="py-2 pr-3 text-gray-400 text-xs">{t.exit_profile || 'â€”'}</td>
+                      <td className="py-2 pr-3 text-gray-400 text-xs">{t.exit_profile || '—'}</td>
                       <td className="py-2 pr-3 text-right">${Number(t.entry_price).toLocaleString()}</td>
                       <td className="py-2 pr-3 text-right">${Number(t.exit_price).toLocaleString()}</td>
                       <td className={`py-2 pr-3 text-right ${Number(t.gross_pnl ?? (Number(t.pnl) + Number(t.total_fees || 0))) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -1229,7 +1341,7 @@ export default function Dashboard({ data }: { data: any }) {
       )}
 
       <div className="mt-8 text-center text-xs text-gray-600">
-        v5 · Binance USDM Futures · HMM Regime · Multi-Factor Signals · Partial TP · Portfolio Heat
+        v6 · Multi-Exchange Futures · Regime-Aware · Event Risk · Orderbook Flow · Walk-Forward Optimized
       </div>
     </div>
   );

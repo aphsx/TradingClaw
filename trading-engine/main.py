@@ -1116,6 +1116,28 @@ def run_live():
             unrealized = mon.update_price(price)
             mon.update_equity(risk_mgr.capital + unrealized, risk_mgr.initial_capital, unrealized, len(open_pos))
 
+            # ── Publish v6 module status to Redis (for dashboard) ──────────────
+            try:
+                import redis as _redis, json as _json
+                _r = _redis.Redis(host=os.getenv('REDIS_HOST', 'localhost'),
+                                  port=int(os.getenv('REDIS_PORT', 6379)), decode_responses=True)
+                # EventRisk snapshot
+                _r.set('v6:event_risk', _json.dumps(
+                    event_risk.get_risk_dashboard(SYMBOLS)), ex=120)
+                # ExecutionAnalytics snapshot
+                _r.set('v6:exec_analytics', _json.dumps(
+                    exec_analytics.get_dashboard_metrics()), ex=120)
+                # Correlation heatmap
+                _r.set('v6:correlation', _json.dumps(
+                    corr_mgr.get_correlation_heatmap()), ex=120)
+                # OrderbookFlow spread quality per symbol
+                ob_quality = {sym: ob_flow.get_spread_quality(sym) for sym in SYMBOLS}
+                _r.set('v6:orderbook', _json.dumps(ob_quality), ex=120)
+                # StrategyPerformanceGuard summary
+                _r.set('v6:perf_guard', _json.dumps(perf_guard.get_report()), ex=120)
+            except Exception:
+                pass  # non-critical — dashboard degrades gracefully
+
         except Exception as e:
             print(f"[ERROR] Loop error: {e}")
             traceback.print_exc()
