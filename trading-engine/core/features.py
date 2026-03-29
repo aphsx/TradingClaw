@@ -17,7 +17,6 @@ All computations are vectorized (no per-bar loops), NaN-safe, and prevent look-a
 """
 import pandas as pd
 import numpy as np
-from typing import Tuple
 
 
 def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -161,7 +160,6 @@ def calculate_features(df: pd.DataFrame) -> pd.DataFrame:
     # ─── Candlestick Patterns ───
     body = df['close'] - df['open']
     body_abs = body.abs()
-    candle_range = df['high'] - df['low']
     upper_wick = df['high'] - df[['close', 'open']].max(axis=1)
     lower_wick = df[['close', 'open']].min(axis=1) - df['low']
 
@@ -484,8 +482,6 @@ def _add_volume_profile(df: pd.DataFrame) -> pd.DataFrame:
 
     for i in range(window - 1, len(df)):
         start = i - window + 1
-        window_high = df['high'].iloc[start:i+1].max()
-        window_low = df['low'].iloc[start:i+1].min()
         window_vol = df['volume'].iloc[start:i+1].sum()
         avg_vol = df['volume'].iloc[start:i+1].mean()
 

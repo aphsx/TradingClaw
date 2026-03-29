@@ -34,7 +34,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import (
     # Legacy imports
-    PARTIAL_TP_FRACTIONS, PARTIAL_TP1_R, PARTIAL_TP2_R,
     TRAILING_STOP_ACTIVATION, TRAILING_STOP_DISTANCE,
     CHANDELIER_PERIOD, CHANDELIER_MULT,
     MAX_FUNDING_RATE,
@@ -54,7 +53,6 @@ from config import (
 )
 
 import pandas as pd
-import numpy as np
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -630,7 +628,6 @@ class PositionManager:
             return None
 
         direction = pos.get('direction', 'LONG')
-        regime_conf = regime.get('confidence', 0) if regime else 0
 
         signals = []
 
@@ -687,9 +684,6 @@ class PositionManager:
             return None
 
         try:
-            current_price = float(df['close'].iloc[-1])
-            entry = float(pos.get('entry_fill_price') or pos.get('entry_price', 0))
-
             # Get recent RSI and price data
             rsi_values = df['rsi_14'].iloc[-5:].values
             prices = df['close'].iloc[-5:].values
@@ -727,8 +721,6 @@ class PositionManager:
             prev_close = float(df['close'].iloc[-2])
             curr_open = float(df['open'].iloc[-1])
             curr_close = float(df['close'].iloc[-1])
-            curr_high = float(df['high'].iloc[-1])
-            curr_low = float(df['low'].iloc[-1])
 
             # Bearish engulfing (against LONG)
             if direction == 'LONG':
@@ -737,7 +729,7 @@ class PositionManager:
                 if (curr_open > prev_close and curr_close < prev_open and
                     curr_body > prev_body):
                     return {
-                        'reason': f'Bearish engulfing candle detected',
+                        'reason': 'Bearish engulfing candle detected',
                         'strength': 'strong' if curr_body > prev_body * 1.5 else 'weak',
                     }
 
@@ -748,7 +740,7 @@ class PositionManager:
                 if (curr_open < prev_close and curr_close > prev_open and
                     curr_body > prev_body):
                     return {
-                        'reason': f'Bullish engulfing candle detected',
+                        'reason': 'Bullish engulfing candle detected',
                         'strength': 'strong' if curr_body > prev_body * 1.5 else 'weak',
                     }
         except Exception:

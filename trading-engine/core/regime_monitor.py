@@ -25,7 +25,6 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from collections import deque
-from typing import Optional
 from config import (
     REGIME_MIN_CONFIDENCE,
     REGIME_REDUCE_AFTER_LOSSES,

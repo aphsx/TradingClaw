@@ -32,7 +32,7 @@ import itertools
 import json
 import os
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 
@@ -313,7 +313,6 @@ class WalkForwardOptimizer:
 
             for i in range(1, len(closes)):
                 c = closes[i]
-                c_prev = closes[i - 1]
                 atr = atrs[i] if atrs[i] > 0 else c * 0.01
                 adx = adxs[i]
                 regime = int(regimes[i])
@@ -375,7 +374,7 @@ class WalkForwardOptimizer:
 
             return self._compute_stats(equity_curve, trades, capital)
 
-        except Exception as e:
+        except Exception:
             return self._empty_stats()
 
     def _compute_stats(

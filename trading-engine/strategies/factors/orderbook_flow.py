@@ -38,10 +38,9 @@ Integration ใน signal_engine.py (v5 patch):
 from __future__ import annotations
 
 import numpy as np
-import math
 from collections import deque
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict
 
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -122,12 +121,6 @@ class OrderbookFlowFactor:
         # Imbalance: positive = bid-heavy (buy pressure)
         imbalance = (total_bid_vol - total_ask_vol) / total_vol
 
-        # Weighted mid-price (volume-weighted)
-        wm_bid = (sum(p * s for p, s in zip(bid_prices, bid_sizes))
-                  / (total_bid_vol + 1e-10)) if bid_prices else best_bid
-        wm_ask = (sum(p * s for p, s in zip(ask_prices, ask_sizes))
-                  / (total_ask_vol + 1e-10)) if ask_prices else best_ask
-
         # Spread
         spread_abs = best_ask - best_bid
         mid = (best_bid + best_ask) / 2 if best_bid and best_ask else current_price
@@ -160,7 +153,6 @@ class OrderbookFlowFactor:
         if len(prices) < 2 or sum(sizes) == 0:
             return 0.0
 
-        total = sum(sizes)
         # Volume in first 5 levels vs last 5 levels
         n = min(5, len(sizes))
         near_vol  = sum(sizes[:n])

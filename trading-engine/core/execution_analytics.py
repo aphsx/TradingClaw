@@ -10,10 +10,8 @@ Usage:
     analytics.record(symbol, expected_price, actual_fill, side, quantity)
     slippage = analytics.get_effective_slippage(symbol)
 """
-import math
 from collections import deque
 from datetime import datetime, timezone
-from typing import Optional
 
 
 class ExecutionAnalytics:
@@ -118,7 +116,6 @@ class ExecutionAnalytics:
             slippages = [r['slippage_pct'] for r in recs]
             abs_slips = [abs(s) for s in slippages]
             pos_slips  = [s for s in slippages if s > 0]   # adverse
-            neg_slips  = [s for s in slippages if s <= 0]  # favorable
 
             report[sym] = {
                 "fills":             len(recs),
@@ -239,7 +236,6 @@ class ExecutionAnalytics:
         report = self.get_report()
         overall_quality = 1.0
         if self._ema_slippage:
-            avg_slip = sum(self._ema_slippage.values()) / len(self._ema_slippage)
             overall_quality = self.get_sizing_penalty()
 
         pause, pause_reason = self.should_pause_trading()

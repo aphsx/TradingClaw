@@ -7,7 +7,7 @@
   Scaled Entry/Exit | Portfolio Heat | Drawdown-Adaptive
 ═══════════════════════════════════════════════════════════
 """
-import json, time, sys, os, traceback, threading
+import time, sys, os, traceback, threading
 import numpy as np
 from datetime import datetime
 
@@ -67,7 +67,7 @@ def _with_retry(fn, *args, retries=3, **kwargs):
             result = fn(*args, **kwargs)
             if result.get('_http_status', 200) == 200:
                 return result
-        except Exception as e:
+        except Exception:
             if attempt < retries - 1:
                 time.sleep(1 * (attempt + 1))
             else:
@@ -212,7 +212,7 @@ def run_live():
 
     # ── Set leverage and margin type ──
     if USE_FUTURES:
-        print(f"\n[CONFIG]  Configuring futures...")
+        print("\n[CONFIG]  Configuring futures...")
         for sym in SYMBOLS:
             try:
                 bnb.set_leverage(sym, LEVERAGE)
@@ -222,7 +222,7 @@ def run_live():
             try:
                 bnb.set_margin_type(sym, MARGIN_TYPE)
                 print(f"[OK] {sym}: {MARGIN_TYPE}")
-            except Exception as e:
+            except Exception:
                 print(f"[WARN] {sym}: margin_type (may already be set)")
 
     # ── Reconcile positions ──
@@ -555,6 +555,7 @@ def run_live():
         try:
             now = datetime.utcnow()
             loop_count += 1
+            perf_guard.tick()  # advance bar counter for cooldown tracking
             print(f"\n{'─'*55}")
             print(f"[TIME] {now.strftime('%Y-%m-%d %H:%M:%S')} UTC  [#{loop_count}]")
 
@@ -637,12 +638,11 @@ def run_live():
                 for sym in SYMBOLS:
                     try:
                         ob = bnb.exchange.fetch_order_book(sym, limit=20)
-                        sym_df_latest = None
-                        for _sdf_sym, _sdf in (sym_dfs.items() if 'sym_dfs' in dir() else {}.items()):
-                            if _sdf_sym == sym and len(_sdf) > 0:
-                                sym_df_latest = float(_sdf['close'].iloc[-1])
-                                break
-                        ob_flow.update(sym, ob, current_price=sym_df_latest or 0.0)
+                        # Get latest close price from multi_data (already fetched above)
+                        _sym_df = multi_data.get(sym)
+                        sym_df_latest = (float(_sym_df['close'].iloc[-1])
+                                         if _sym_df is not None and len(_sym_df) > 0 else 0.0)
+                        ob_flow.update(sym, ob, current_price=sym_df_latest)
                     except Exception:
                         pass
 
@@ -835,6 +835,25 @@ def run_live():
                             print(f"   [FAST] Regime transitioning (HMM conf={hmm_conf:.0%}) "
                                   f"— reducing size to {transition_size_mult:.0%}")
 
+                        # ── Strategy Performance Guard ──
+                        perf_ok, perf_reason = perf_guard.can_trade(
+                            symbol=current_symbol,
+                            timeframe=TIMEFRAME,
+                            strategy=sig.strategy,
+                            regime=regime_id,
+                        )
+                        if not perf_ok:
+                            print(f"   [BLOCK] PerfGuard: {perf_reason}")
+                            continue
+                        perf_mult = perf_guard.get_size_multiplier(
+                            symbol=current_symbol,
+                            timeframe=TIMEFRAME,
+                            strategy=sig.strategy,
+                            regime=regime_id,
+                        )
+                        if perf_mult < 1.0:
+                            print(f"   [PERF] Weak strategy perf: size×{perf_mult:.2f}")
+
                         # ── ML Filter ──
                         sig_dict = _signal_to_dict(sig, oi_score=_oi_score_last)
                         ml_result = ml_filter.predict(sig_dict, df)
@@ -900,7 +919,7 @@ def run_live():
                             ob_score = ob_flow.score(current_symbol, sig.direction)
                             spread_q = ob_flow.get_spread_quality(current_symbol)
                             if spread_q == "extreme":
-                                print(f"   [WARN] OB spread extreme → reducing size")
+                                print("   [WARN] OB spread extreme → reducing size")
                                 exec_slip_mult *= 0.7
                             if ob_score != 0:
                                 print(f"   [OB] Flow score: {ob_score:+.3f} | Spread: {spread_q}")
@@ -911,7 +930,7 @@ def run_live():
                         dd_mult  = risk_mgr.get_drawdown_size_multiplier()
                         vol_mult = getattr(sig, 'vol_size_mult', 1.0)  # From VolatilityFactor
                         qty *= (dd_mult * vol_mult * transition_size_mult *
-                                regime_size_mult * event_size_mult * exec_slip_mult)
+                                regime_size_mult * event_size_mult * exec_slip_mult * perf_mult)
                         qty = round(qty, 6)
                         tier = risk_mgr.get_tier_info()
                         print(f"   [BALANCE] Tier: {tier['tier']} | Risk: {tier['risk_pct']} "
@@ -1113,7 +1132,6 @@ def run_live():
 def run_backtest():
     from backtest.engine import BacktestEngine
     from data.fetcher import get_data
-    import data.database as db
 
     print("=" * 60)
     print("  BACKTEST MODE")

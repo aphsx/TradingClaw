@@ -339,8 +339,6 @@ class RegimeDetector:
         e21_slope  = float(row.get('ema_21_slope', 0) or 0)
         mom10      = float(row.get('momentum_10', 0) or 0)
         rsi        = float(row.get('rsi_14', 50) or 50)
-        bb_width   = float(row.get('bb_width', 5) or 5)
-        obv_slope  = float(row.get('obv_slope', 0) or 0)
         high       = float(row.get('high', 0) or 0)
         low        = float(row.get('low', 0) or 0)
 

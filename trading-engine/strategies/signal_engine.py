@@ -35,10 +35,8 @@ Exit Management:
 from __future__ import annotations
 
 import pandas as pd
-import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict
-from datetime import datetime
 
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -446,7 +444,7 @@ class SignalEngine:
             mtf_score = weighted_score / weights_used if weights_used > 0 else 0.0
             return mtf_score, aligned
 
-        except Exception as e:
+        except Exception:
             # Fail gracefully if MTF data incomplete
             return 0.0, 0
 
@@ -782,7 +780,6 @@ class SignalEngine:
         is_climax = False
         if len(df) >= 2:
             curr_vol_ratio = vol_ratio
-            prev_vol_ratio = float(df['volume'].iloc[-2]) / vol_ma if vol_ma > 0 else 1.0
             curr_open = float(df['open'].iloc[-1])
             curr_close = float(last['close'])
             prev_close = float(df['close'].iloc[-2])
@@ -913,7 +910,6 @@ class SignalEngine:
         - Validates that momentum buyers/sellers have run out
         """
         last = df.iloc[-1]
-        last2 = df.iloc[-2] if len(df) >= 2 else last
 
         cols_needed = [
             'bb_pct', 'rsi_14', 'adx', 'volume', 'volume_ma_20',

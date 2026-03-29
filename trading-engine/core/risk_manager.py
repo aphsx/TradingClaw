@@ -17,7 +17,7 @@ Key Features:
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 from collections import deque
 from datetime import datetime, timezone
 import sys, os
@@ -26,7 +26,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
 from config import (
     LEVERAGE, MAX_MARGIN_RATIO, EMERGENCY_MARGIN_RATIO, LIQUIDATION_SAFETY_PCT,
-    MAX_PORTFOLIO_HEAT, DRAWDOWN_SCALE_LEVELS, DRAWDOWN_SIZE_FACTORS,
+    MAX_PORTFOLIO_HEAT,
     CAPITAL_TIERS, CVAR_CONFIDENCE, MAX_CVAR_PCT, ANTI_MARTINGALE,
     WIN_STREAK_BONUS, LOSS_STREAK_PENALTY, SESSION_FILTER_ENABLED,
     DEAD_ZONE_HOURS, ASIAN_SESSION, EUROPE_SESSION, US_SESSION
@@ -62,9 +62,8 @@ class FeeFilter:
 
     def __init__(self, maker_fee=None, taker_fee=None,
                  slippage=SLIPPAGE, multiplier=FEE_MULTIPLIER):
-        mf = maker_fee if maker_fee is not None else MAKER_FEE
         tf = taker_fee if taker_fee is not None else TAKER_FEE
-        self.total_fee = (tf * 2) + slippage  # Entry + Exit + Slippage
+        self.total_fee = (tf * 2) + slippage  # Entry + Exit + Slippage (maker_fee unused: taker-only calc)
         self.multiplier = multiplier
 
     def filter_signals(self, signals: list) -> tuple:
@@ -841,7 +840,6 @@ class RiskManager:
         entry = float(position.get('entry_fill_price') or position.get('entry_price', 0))
         current_sl = float(position.get('stop_loss', 0))
         direction = position.get('direction', 'LONG')
-        qty = float(position.get('quantity', 0))
 
         if direction == 'LONG':
             profit_pct = (current_price - entry) / entry
