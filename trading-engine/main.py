@@ -275,20 +275,37 @@ def run_live():
                         try:
                             partial = None if TAKE_PROFIT_MODE == "single" else pos_mgr.check_partial_tp(pos, price)
                             if partial and TRADING_MODE != "paper":
-                                tp_qty = float(pos.get('quantity', 0)) * partial['fraction']
+                                orig_qty = float(pos.get('quantity', 0))
+                                tp_qty = round(orig_qty * partial['fraction'], 6)
+                                remaining_qty = round(orig_qty * (1 - partial['fraction']), 6)
                                 close_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
                                 close_resp = bnb.place_market_order(
-                                    pos['symbol'], close_side, round(tp_qty, 6),
+                                    pos['symbol'], close_side, tp_qty,
                                     reduce_only=True)
                                 if close_resp.get('orderId'):
                                     tp_level = partial['tp_level']
                                     pos[f'tp{tp_level}_hit'] = True
+                                    # Update remaining quantity so subsequent SL/TP orders
+                                    # use the correct size (not the original full quantity).
+                                    pos['quantity'] = remaining_qty
                                     if tp_level == 1:
-                                        # Move SL to breakeven after TP1
+                                        # Move SL to breakeven after TP1, then replace the
+                                        # SL order on the exchange for the reduced quantity.
                                         new_sl = pos_mgr.move_to_breakeven(pos)
                                         pos['stop_loss'] = new_sl
+                                        if pos.get('sl_order_id'):
+                                            try:
+                                                bnb.cancel_order(pos['symbol'], int(pos['sl_order_id']))
+                                            except Exception:
+                                                pass
+                                            sl_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
+                                            new_sl_resp = bnb.place_stop_loss_order(
+                                                pos['symbol'], sl_side, remaining_qty, new_sl)
+                                            if new_sl_resp.get('orderId'):
+                                                pos['sl_order_id'] = new_sl_resp['orderId']
                                     print(f"[OK] {partial['reason']} partial close #{pos.get('id')} "
-                                          f"({partial['fraction']*100:.0f}%)")
+                                          f"({partial['fraction']*100:.0f}%) "
+                                          f"remaining qty={remaining_qty}")
                                     mon.publish_position_open(pos['id'], pos)
                         except Exception as e:
                             print(f"[WARN] Partial TP: {e}")
