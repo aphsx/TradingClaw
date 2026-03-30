@@ -2,12 +2,12 @@
 """
 ═══════════════════════════════════════════════════════════
   TRADINGCLAW v5
-  Binance USDM Futures — Testnet / Live
+  Universal Crypto Futures
   Multi-Factor Signal Engine | HMM Regime | ML Ensemble
   Scaled Entry/Exit | Portfolio Heat | Drawdown-Adaptive
 ═══════════════════════════════════════════════════════════
 """
-import json, time, sys, os, traceback, threading
+import time, sys, os, traceback, threading
 import numpy as np
 from datetime import datetime
 
@@ -67,7 +67,7 @@ def _with_retry(fn, *args, retries=3, **kwargs):
             result = fn(*args, **kwargs)
             if result.get('_http_status', 200) == 200:
                 return result
-        except Exception as e:
+        except Exception:
             if attempt < retries - 1:
                 time.sleep(1 * (attempt + 1))
             else:
@@ -121,7 +121,10 @@ def run_live():
     from core.position_manager import PositionManager
     from core.execution_analytics import ExecutionAnalytics  # Issue #10
     from core.regime_monitor import RegimeMonitor
+    from core.performance_guard import StrategyPerformanceGuard
+    from core.event_risk import EventRiskManager                        # v6: Event-Driven Risk
     from strategies.signal_engine import SignalEngine
+    from strategies.factors.orderbook_flow import OrderbookFlowFactor   # v6: Real Orderbook
 
     print("=" * 60)
     print(f"  TRADINGCLAW v5 — LIVE  |  Symbols: {SYMBOLS}")
@@ -153,15 +156,26 @@ def run_live():
         raise RuntimeError("Live mode requires real Binance balance; aborting startup")
 
     # ── Core components ──
+    print("\n[FEES] Fetching exact exchange trading fees...")
+    real_fees = bnb.get_trading_fees(SYMBOLS[0] if isinstance(SYMBOLS, list) and SYMBOLS else SYMBOL)
+    print(f"   Taker: {real_fees['taker']*100:.3f}% | Maker: {real_fees['maker']*100:.3f}%")
+
     detector    = RegimeDetector()
-    risk_mgr    = RiskManager(initial_capital=live_balance)
+    risk_mgr    = RiskManager(
+        initial_capital=live_balance,
+        taker_fee=real_fees['taker'],
+        maker_fee=real_fees['maker'],
+    )
     ml_filter   = MLSignalFilter(min_samples=ML_MIN_SAMPLES, threshold=ML_THRESHOLD)
     corr_mgr    = CorrelationManager(max_correlated=MAX_CORRELATED_POSITIONS,
                                      correlation_threshold=0.7)
     pos_mgr     = PositionManager()
-    sig_engine  = SignalEngine()
+    sig_engine  = SignalEngine(taker_fee=real_fees['taker'], maker_fee=real_fees['maker'])
     exec_analytics = ExecutionAnalytics(window=50)  # Issue #10
     regime_mon  = RegimeMonitor()                   # Per-regime circuit breakers
+    perf_guard  = StrategyPerformanceGuard()        # Per strategy+regime after-fee guard
+    event_risk  = EventRiskManager()               # v6: Event-driven risk gate
+    ob_flow     = OrderbookFlowFactor()            # v6: Live orderbook microstructure
 
     # Shared dict for monitor thread to read current regime per symbol (no DB round-trip)
     _current_regimes: dict = {}  # symbol → {'regime': int, 'confidence': float}
@@ -198,7 +212,7 @@ def run_live():
 
     # ── Set leverage and margin type ──
     if USE_FUTURES:
-        print(f"\n[CONFIG]  Configuring futures...")
+        print("\n[CONFIG]  Configuring futures...")
         for sym in SYMBOLS:
             try:
                 bnb.set_leverage(sym, LEVERAGE)
@@ -208,7 +222,7 @@ def run_live():
             try:
                 bnb.set_margin_type(sym, MARGIN_TYPE)
                 print(f"[OK] {sym}: {MARGIN_TYPE}")
-            except Exception as e:
+            except Exception:
                 print(f"[WARN] {sym}: margin_type (may already be set)")
 
     # ── Reconcile positions ──
@@ -259,7 +273,7 @@ def run_live():
                     for pos in open_positions:
                         # ── Partial TP check ──
                         try:
-                            partial = pos_mgr.check_partial_tp(pos, price)
+                            partial = None if TAKE_PROFIT_MODE == "single" else pos_mgr.check_partial_tp(pos, price)
                             if partial and TRADING_MODE != "paper":
                                 tp_qty = float(pos.get('quantity', 0)) * partial['fraction']
                                 close_side = 'SELL' if pos['direction'] == 'LONG' else 'BUY'
@@ -364,7 +378,7 @@ def run_live():
                                     if flip_order.get('orderId'):
                                         pnl = float(pos.get('unrealized_pnl', 0))
                                         r_mult = regime_mon.estimate_r_multiple(pos, price)
-                                        regime_mon.record_outcome(entry_reg_id, r_mult)
+                                        regime_mon.record_outcome(entry_reg_id, r_mult, pos_id=pos.get('id'))
                                         mon.publish_position_close(pos['id'], {
                                             'exit_price': price, 'reason': 'Regime Flip',
                                             'pnl': pnl, 'r_multiple': r_mult,
@@ -409,7 +423,7 @@ def run_live():
                                         if entry_regime >= 0:
                                             # Estimate exit price from unrealized PnL or last price
                                             r = regime_mon.estimate_r_multiple(closed_pos, price)
-                                            regime_mon.record_outcome(entry_regime, r)
+                                            regime_mon.record_outcome(entry_regime, r, pos_id=closed_id)
                                 except Exception:
                                     pass
                     except Exception as e:
@@ -541,6 +555,7 @@ def run_live():
         try:
             now = datetime.utcnow()
             loop_count += 1
+            perf_guard.tick()  # advance bar counter for cooldown tracking
             print(f"\n{'─'*55}")
             print(f"[TIME] {now.strftime('%Y-%m-%d %H:%M:%S')} UTC  [#{loop_count}]")
 
@@ -561,6 +576,10 @@ def run_live():
                 for sym, sym_df in multi_data.items():
                     if not sym_df.empty and 'close' in sym_df.columns:
                         corr_mgr.update_prices(sym, sym_df['close'])
+                        # v6: Update EventRisk price for anomaly detection
+                        closes = sym_df['close'].tail(20).tolist()
+                        if closes:
+                            event_risk.update_price(sym, closes[-1], closes[:-1])
             except Exception as e:
                 print(f"[WARN] Multi-symbol fetch: {e}")
 
@@ -581,13 +600,15 @@ def run_live():
             except Exception as e:
                 print(f"[WARN] Pending outcome check: {e}")
 
-            # ── Fetch funding rates for VolumeFlowFactor ──
+            # ── Fetch funding rates for VolumeFlowFactor + EventRisk ──
             if USE_FUTURES:
                 for sym in SYMBOLS:
                     try:
                         mark = bnb.get_mark_price(sym)
                         rate = float(mark.get("lastFundingRate", 0))
+                        next_funding_ts = mark.get("nextFundingTime")
                         sig_engine.volume_flow.update_funding(sym, rate)
+                        event_risk.update_funding(sym, rate, next_funding_ts)  # v6
                     except Exception:
                         pass
 
@@ -596,8 +617,12 @@ def run_live():
                 for sym in SYMBOLS:
                     try:
                         oi_data = bnb.get_open_interest(sym)
-                        if oi_data.get('openInterest', 0) > 0:
-                            sig_engine.open_interest.update_oi(sym, oi_data['openInterest'])
+                        curr_oi = oi_data.get('openInterest', 0)
+                        if curr_oi > 0:
+                            oi_hist = sig_engine.open_interest._oi_cache.get(sym, [])
+                            prev_oi = oi_hist[-1] if oi_hist else 0
+                            sig_engine.open_interest.update_oi(sym, curr_oi)
+                            event_risk.update_oi(sym, curr_oi, prev_oi)  # v6
                     except Exception:
                         pass
                     try:
@@ -605,6 +630,19 @@ def run_live():
                         if ls_data.get('longRatio') is not None:
                             sig_engine.open_interest.update_long_short_ratio(
                                 sym, ls_data['longRatio'])
+                    except Exception:
+                        pass
+
+            # ── v6: Fetch orderbook snapshots for microstructure ──
+            if ORDERFLOW_ENABLED:
+                for sym in SYMBOLS:
+                    try:
+                        ob = bnb.exchange.fetch_order_book(sym, limit=20)
+                        # Get latest close price from multi_data (already fetched above)
+                        _sym_df = multi_data.get(sym)
+                        sym_df_latest = (float(_sym_df['close'].iloc[-1])
+                                         if _sym_df is not None and len(_sym_df) > 0 else 0.0)
+                        ob_flow.update(sym, ob, current_price=sym_df_latest)
                     except Exception:
                         pass
 
@@ -797,6 +835,25 @@ def run_live():
                             print(f"   [FAST] Regime transitioning (HMM conf={hmm_conf:.0%}) "
                                   f"— reducing size to {transition_size_mult:.0%}")
 
+                        # ── Strategy Performance Guard ──
+                        perf_ok, perf_reason = perf_guard.can_trade(
+                            symbol=current_symbol,
+                            timeframe=TIMEFRAME,
+                            strategy=sig.strategy,
+                            regime=regime_id,
+                        )
+                        if not perf_ok:
+                            print(f"   [BLOCK] PerfGuard: {perf_reason}")
+                            continue
+                        perf_mult = perf_guard.get_size_multiplier(
+                            symbol=current_symbol,
+                            timeframe=TIMEFRAME,
+                            strategy=sig.strategy,
+                            regime=regime_id,
+                        )
+                        if perf_mult < 1.0:
+                            print(f"   [PERF] Weak strategy perf: size×{perf_mult:.2f}")
+
                         # ── ML Filter ──
                         sig_dict = _signal_to_dict(sig, oi_score=_oi_score_last)
                         ml_result = ml_filter.predict(sig_dict, df)
@@ -816,31 +873,76 @@ def run_live():
                             print(f"   [BLOCK] {heat_reason}")
                             continue
 
-                        # ── Correlation check ──
-                        corr_result = corr_mgr.can_open_position(current_symbol, sig.direction, open_pos)
+                        # ── v6: Event-Driven Risk Gate ──
+                        event_decision = event_risk.should_skip_entry(
+                            current_symbol, sig.direction
+                        )
+                        if event_decision.skip:
+                            print(f"   [BLOCK] EventRisk: {event_decision.reason}")
+                            continue
+                        event_size_mult = event_decision.size_mult
+                        if event_decision.active_events:
+                            print(f"   [EVENT] {', '.join(event_decision.active_events)} "
+                                  f"→ size×{event_size_mult:.2f}")
+
+                        # ── v6: Execution Quality Gate ──
+                        exec_pause, exec_pause_reason = exec_analytics.should_pause_trading(
+                            current_symbol
+                        )
+                        if exec_pause:
+                            print(f"   [BLOCK] ExecQuality: {exec_pause_reason}")
+                            continue
+                        exec_slip_mult  = exec_analytics.get_sizing_penalty(current_symbol)
+                        exec_fee_mult   = exec_analytics.get_adjusted_fee_multiplier(
+                            base_multiplier=FEE_MULTIPLIER, symbol=current_symbol
+                        )
+                        if exec_slip_mult < 1.0:
+                            print(f"   [EXEC] Slippage penalty: size×{exec_slip_mult:.2f} "
+                                  f"fee_mult={exec_fee_mult:.2f}")
+
+                        # ── Correlation check (v2: regime-aware) ──
+                        corr_mgr.update_regime(
+                            _current_regimes.get(current_symbol, {}).get("regime", -1)
+                        )
+                        corr_result = corr_mgr.can_open_position_v2(
+                            current_symbol, sig.direction, open_pos
+                        )
                         if not corr_result['allowed']:
                             print(f"   [BLOCK] Correlation: {corr_result['reason']}")
                             continue
                         if corr_result['correlated_with']:
                             print(f"   [INFO] Correlated with: {[c['symbol'] for c in corr_result['correlated_with']]}")
 
+                        # ── v6: Orderbook flow confirmation ──
+                        ob_score = 0.0
+                        if ORDERFLOW_ENABLED and ob_flow.has_data(current_symbol):
+                            ob_score = ob_flow.score(current_symbol, sig.direction)
+                            spread_q = ob_flow.get_spread_quality(current_symbol)
+                            if spread_q == "extreme":
+                                print("   [WARN] OB spread extreme → reducing size")
+                                exec_slip_mult *= 0.7
+                            if ob_score != 0:
+                                print(f"   [OB] Flow score: {ob_score:+.3f} | Spread: {spread_q}")
+
                         # ── Position size ──
-                        # Kelly (tier-aware risk%) × drawdown × volatility × transition × regime health
+                        # Kelly (tier-aware risk%) × drawdown × volatility × transition × regime × event × exec
                         qty = risk_mgr.calculate_position_size(sig)
                         dd_mult  = risk_mgr.get_drawdown_size_multiplier()
                         vol_mult = getattr(sig, 'vol_size_mult', 1.0)  # From VolatilityFactor
-                        qty *= dd_mult * vol_mult * transition_size_mult * regime_size_mult
+                        qty *= (dd_mult * vol_mult * transition_size_mult *
+                                regime_size_mult * event_size_mult * exec_slip_mult * perf_mult)
                         qty = round(qty, 6)
                         tier = risk_mgr.get_tier_info()
                         print(f"   [BALANCE] Tier: {tier['tier']} | Risk: {tier['risk_pct']} "
                               f"(${tier['risk_amount_usd']}) | DD: {dd_mult:.2f}x | "
                               f"Vol: {vol_mult:.2f}x | Trans: {transition_size_mult:.2f}x | "
-                              f"Regime: {regime_size_mult:.2f}x | Qty: {qty}")
+                              f"Regime: {regime_size_mult:.2f}x | Event: {event_size_mult:.2f}x | "
+                              f"Exec: {exec_slip_mult:.2f}x | Qty: {qty}")
                         if qty <= 0:
                             print("   [BLOCK] Quantity zero after adjustments")
                             continue
 
-                        # ── Funding rate check ──
+                        # ── Funding rate check (kept for backward compat; EventRisk also checks) ──
                         if USE_FUTURES:
                             try:
                                 mark = bnb.get_mark_price(current_symbol)
@@ -913,14 +1015,16 @@ def run_live():
                                 print(f"   [WARN] SL failed: {e}")
 
                             try:
-                                tp_qty = qty * PARTIAL_TP_FRACTIONS[0]  # First 33% at TP1
+                                tp_qty = qty if TAKE_PROFIT_MODE == "single" else qty * PARTIAL_TP_FRACTIONS[0]
                                 tp_resp = _with_retry(bnb.place_take_profit_order,
                                                       current_symbol, exit_side,
                                                       round(tp_qty, 6), sig.take_profit)
                                 if _verify_order_placed(tp_resp, "TP"):
                                     tp_oid = tp_resp.get("orderId")
-                                    print(f"   [TARGET] TP1 #{tp_oid} @ ${sig.take_profit:,.2f} "
-                                          f"({PARTIAL_TP_FRACTIONS[0]*100:.0f}%)")
+                                    tp_label = "TP" if TAKE_PROFIT_MODE == "single" else "TP1"
+                                    tp_pct = 100.0 if TAKE_PROFIT_MODE == "single" else PARTIAL_TP_FRACTIONS[0] * 100
+                                    print(f"   [TARGET] {tp_label} #{tp_oid} @ ${sig.take_profit:,.2f} "
+                                          f"({tp_pct:.0f}%)")
                             except Exception as e:
                                 print(f"   [WARN] TP failed: {e}")
 
@@ -1012,6 +1116,28 @@ def run_live():
             unrealized = mon.update_price(price)
             mon.update_equity(risk_mgr.capital + unrealized, risk_mgr.initial_capital, unrealized, len(open_pos))
 
+            # ── Publish v6 module status to Redis (for dashboard) ──────────────
+            try:
+                import redis as _redis, json as _json
+                _r = _redis.Redis(host=os.getenv('REDIS_HOST', 'localhost'),
+                                  port=int(os.getenv('REDIS_PORT', 6379)), decode_responses=True)
+                # EventRisk snapshot
+                _r.set('v6:event_risk', _json.dumps(
+                    event_risk.get_risk_dashboard(SYMBOLS)), ex=120)
+                # ExecutionAnalytics snapshot
+                _r.set('v6:exec_analytics', _json.dumps(
+                    exec_analytics.get_dashboard_metrics()), ex=120)
+                # Correlation heatmap
+                _r.set('v6:correlation', _json.dumps(
+                    corr_mgr.get_correlation_heatmap()), ex=120)
+                # OrderbookFlow spread quality per symbol
+                ob_quality = {sym: ob_flow.get_spread_quality(sym) for sym in SYMBOLS}
+                _r.set('v6:orderbook', _json.dumps(ob_quality), ex=120)
+                # StrategyPerformanceGuard summary
+                _r.set('v6:perf_guard', _json.dumps(perf_guard.get_report()), ex=120)
+            except Exception:
+                pass  # non-critical — dashboard degrades gracefully
+
         except Exception as e:
             print(f"[ERROR] Loop error: {e}")
             traceback.print_exc()
@@ -1028,7 +1154,6 @@ def run_live():
 def run_backtest():
     from backtest.engine import BacktestEngine
     from data.fetcher import get_data
-    import data.database as db
 
     print("=" * 60)
     print("  BACKTEST MODE")

@@ -25,7 +25,6 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from collections import deque
-from typing import Optional
 from config import (
     REGIME_MIN_CONFIDENCE,
     REGIME_REDUCE_AFTER_LOSSES,
@@ -205,7 +204,7 @@ class RegimeMonitor:
 
     # ── Outcome recording ─────────────────────────────────────
 
-    def record_outcome(self, regime: int, r_multiple: float):
+    def record_outcome(self, regime: int, r_multiple: float, pos_id=None):
         """
         Record a closed trade's outcome.
         Call after each position close.
@@ -213,7 +212,8 @@ class RegimeMonitor:
         stats = self._stats.get(regime)
         if stats:
             stats.add_result(r_multiple, self._bar_counter)
-            print(f"[REGIME-MON] Record {stats.name}: R={r_multiple:+.2f} "
+            id_str = f" [ID:{pos_id}]" if pos_id is not None else ""
+            print(f"[REGIME-MON] Record{id_str} {stats.name}: R={r_multiple:+.2f} "
                   f"| consec_loss={stats.consecutive_losses} "
                   f"| avg_R={stats.avg_r:+.2f}")
 

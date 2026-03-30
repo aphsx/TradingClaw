@@ -37,7 +37,7 @@ from urllib.parse import urlparse
 
 import ccxt
 
-from config import API_KEY, SECRET_KEY, USE_FUTURES, SYMBOL, BINANCE_FUTURES_BASE_URL
+from config import API_KEY, SECRET_KEY, PASSPHRASE, USE_FUTURES, SYMBOL, EXCHANGE_NAME, EXCHANGE_RAW
 
 log = logging.getLogger(__name__)
 
@@ -45,48 +45,52 @@ log = logging.getLogger(__name__)
 
 def _build_exchange() -> ccxt.Exchange:
     options: dict = {
-        'defaultType': 'future' if USE_FUTURES else 'spot',
-        'adjustForTimeDifference': True,   # auto-sync server clock
+        'defaultType': 'swap' if USE_FUTURES else 'spot',
+        'adjustForTimeDifference': True,
     }
 
-    exchange = ccxt.binance({
+    # Retrieve exchange class dynamically
+    exchange_class = getattr(ccxt, EXCHANGE_NAME)
+    
+    # Base params
+    params = {
         'apiKey': API_KEY,
         'secret': SECRET_KEY,
         'options': options,
         'enableRateLimit': True,
-    })
+    }
+    
+    # Specific API params per exchange
+    if PASSPHRASE and EXCHANGE_NAME in ['okx', 'kucoin']:
+        params['password'] = PASSPHRASE
 
-    if USE_FUTURES:
-        _apply_custom_futures_urls(exchange, BINANCE_FUTURES_BASE_URL)
+    exchange = exchange_class(params)
+
+    # ─── Special handling for Bybit Demo/Testnet ──────────────
+    if EXCHANGE_NAME == 'bybit':
+        if '_demo' in EXCHANGE_RAW:
+            # Bybit's "Demo Trading" (live app integration)
+            exchange.options['demo'] = True
+            
+            # Override all endpoints to use api-demo.bybit.com
+            if isinstance(exchange.urls['api'], dict):
+                for key in exchange.urls['api']:
+                    exchange.urls['api'][key] = 'https://api-demo.bybit.com'
+            else:
+                exchange.urls['api'] = 'https://api-demo.bybit.com'
+                
+            if not exchange.headers: exchange.headers = {}
+            exchange.headers['X-DEMO-TRADING'] = '1'
+            log.info("Bybit mode: DEMO TRADING (api-demo)")
+        elif '_testnet' in EXCHANGE_RAW:
+            # Traditional Bybit Testnet (testnet.bybit.com)
+            exchange.set_sandbox_mode(True)
+            log.info("Bybit mode: TESTNET")
+        else:
+            log.info("Bybit mode: LIVE")
 
     return exchange
 
-
-def _apply_custom_futures_urls(exchange: ccxt.Exchange, base_url: str) -> None:
-    """Rewrite all CCXT futures endpoints to a custom base URL (e.g. demo trading)."""
-    try:
-        target_host = urlparse(base_url).netloc.lower()
-        if not target_host:
-            return
-    except Exception:
-        return
-
-    api_urls = exchange.urls.get('api')
-    if not isinstance(api_urls, dict):
-        return
-
-    def _rewrite(obj):
-        if isinstance(obj, str):
-            if 'fapi.binance.com' in obj:
-                return obj.replace('https://fapi.binance.com', base_url.rstrip('/'))
-            return obj
-        if isinstance(obj, dict):
-            return {k: _rewrite(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_rewrite(v) for v in obj]
-        return obj
-
-    exchange.urls['api'] = _rewrite(api_urls)
 
 
 # Singleton (lazy init so import doesn't blow up without network)
@@ -372,25 +376,65 @@ def get_balance() -> dict:
     """
     ex = get_exchange()
     try:
+        if EXCHANGE_NAME == 'bybit' and '_demo' in EXCHANGE_RAW:
+            # Special bypass for Bybit Demo Trading using the proven V5 endpoint
+            try:
+                bal_raw = ex.privateGetV5AccountWalletBalance({'accountType': 'UNIFIED'})
+                result = bal_raw.get('result', {})
+                list_data = result.get('list', [])
+                if not list_data:
+                    raise ValueError("No account data in Bybit response")
+                
+                acc = list_data[0]
+                coins = acc.get('coin', [])
+                
+                total_wb = _safe_float(acc.get('totalWalletBalance'))
+                available = _safe_float(acc.get('totalAvailableBalance'))
+                total_equity = _safe_float(acc.get('totalEquity'))
+                unrealised = _safe_float(acc.get('totalPerpUPL'))
+                
+                return {
+                    'usdt_free':        available,
+                    'usdt_locked':      total_wb - available,
+                    'usdt_total':       total_wb,
+                    'margin_balance':   total_equity,
+                    'available_balance': available,
+                    'unrealized_pnl':   unrealised,
+                    'margin_ratio':     0.0,
+                    'balances':         {c.get('coin'): {
+                                            'total': _safe_float(c.get('walletBalance')),
+                                            'free': _safe_float(c.get('availableToWithdraw')) or _safe_float(c.get('walletBalance')),
+                                            'used': 0.0
+                                         } for c in coins},
+                    'account_type':     'FUTURES',
+                }
+            except Exception as ebb:
+                log.warning(f"Bybit Demo balance fallback failed: {ebb}")
+        
         bal = ex.fetch_balance()
         usdt = bal.get('USDT', {})
-        info  = bal.get('info', {})
 
         if USE_FUTURES:
-            # For futures, totalMarginBalance and available come from account info
-            total_mb  = _safe_float(info.get('totalMarginBalance') or usdt.get('total'))
-            available = _safe_float(info.get('availableBalance')   or usdt.get('free'))
-            unrealised = _safe_float(info.get('totalUnrealizedProfit'))
-            maint_margin = _safe_float(info.get('totalMaintMargin'))
-            margin_ratio = maint_margin / total_mb if total_mb > 0 else 0.0
+            total_mb  = _safe_float(usdt.get('total'))
+            available = _safe_float(usdt.get('free'))
+            unrealised = 0.0
+            
+            # Optionally extract unrealised PnL if available in info (exchange specific)
+            info = bal.get('info', {})
+            if isinstance(info, list) and len(info) > 0: info = info[0] # some exchanges return a list
+            unrealised_raw = info.get('totalUnrealizedProfit') or info.get('unrealizedPnl') or info.get('upl')
+            if unrealised_raw:
+                unrealised = _safe_float(unrealised_raw)
+
+            # Some exchanges define free as actual available margin
             return {
                 'usdt_free':        available,
                 'usdt_locked':      _safe_float(usdt.get('used')),
-                'usdt_total':       _safe_float(usdt.get('total')),
-                'margin_balance':   total_mb,
+                'usdt_total':       total_mb,
+                'margin_balance':   total_mb + unrealised,
                 'available_balance': available,
                 'unrealized_pnl':   unrealised,
-                'margin_ratio':     margin_ratio,
+                'margin_ratio':     0.0,
                 'balances':         {k: v for k, v in bal.items()
                                      if isinstance(v, dict) and _safe_float(v.get('total')) > 0},
                 'account_type':     'FUTURES',
@@ -459,6 +503,22 @@ def get_account_positions() -> list[dict]:
         log.error(f"get_account_positions error: {e}")
         return []
 
+
+def get_trading_fees(symbol: str = SYMBOL) -> dict:
+    """Fetch exact Maker/Taker fees natively supported by the broker via CCXT."""
+    # We use a clean public instance for metadata to avoid API Key auth issues
+    try:
+        ex_class = getattr(ccxt, EXCHANGE_NAME)
+        ex = ex_class({'enableRateLimit': True})
+        sym = _ccxt_symbol(symbol)
+        ex.load_markets()
+        market = ex.markets.get(sym, {})
+        taker = market.get('taker', 0.0006) # Update default to 0.06% which is common
+        maker = market.get('maker', 0.0002) # Update default to 0.02%
+        return {'taker': taker, 'maker': maker}
+    except Exception as e:
+        log.error(f"get_trading_fees error: {e}")
+        return {'taker': 0.0006, 'maker': 0.0002}
 
 def cancel_order(symbol: str, order_id) -> dict:
     ex = get_exchange()
@@ -565,22 +625,18 @@ def get_usdt_balance() -> float:
 
 
 def get_mark_price(symbol: str = SYMBOL) -> dict:
-    """
-    Return mark price dict with markPrice, lastFundingRate, nextFundingTime.
-    Delegates to raw binance_client (uses /fapi/v1/premiumIndex) since CCXT
-    doesn't expose funding rate in a standard way.
-    Falls back to a float-only dict if binance_client fails.
-    """
+    """Return mark price dict with markPrice from CCXT."""
+    ex = get_exchange()
+    sym = _ccxt_symbol(symbol)
     try:
-        import data.binance_client as _raw
-        result = _raw.get_mark_price(symbol)
-        if result:
-            return result
+        ticker = ex.fetch_ticker(sym)
+        # OKX provides markPrice in info
+        info = ticker.get('info', {})
+        mark_price = _safe_float(info.get('markPx') or info.get('markPrice') or ticker.get('last'))
+        return {'markPrice': str(mark_price), 'lastFundingRate': '0', 'nextFundingTime': 0}
     except Exception:
-        pass
-    # Fallback: price only
-    price = get_price(symbol)
-    return {'markPrice': str(price), 'lastFundingRate': '0', 'nextFundingTime': 0}
+        price = get_price(symbol)
+        return {'markPrice': str(price), 'lastFundingRate': '0', 'nextFundingTime': 0}
 
 
 def test_connection() -> dict:
@@ -620,8 +676,7 @@ def set_margin_type(symbol: str, margin_type: str) -> dict:
     try:
         return ex.set_margin_mode(ccxt_margin, sym)
     except ccxt.BaseError as e:
-        # -4046 = already that margin type — safe to ignore
-        if '-4046' in str(e) or 'No need to change' in str(e):
+        if '-4046' in str(e) or 'No need to change' in str(e) or '58001' in str(e):
             return {'status': 'already_set', 'margin_type': margin_type}
         log.warning(f"set_margin_type {symbol} {margin_type}: {e}")
         return {'error': str(e)}
@@ -649,10 +704,7 @@ def get_futures_account() -> dict:
 # ─── Open Orders & Trade History ─────────────────────────────────────────────
 
 def get_all_open_orders(symbol: str = None) -> list:
-    """
-    Fetch all open orders (across all symbols or for a specific symbol).
-    Returns list of CCXT order dicts.
-    """
+    """Fetch all open orders."""
     ex = get_exchange()
     sym = _ccxt_symbol(symbol) if symbol else None
     try:
@@ -667,11 +719,7 @@ def get_all_open_orders(symbol: str = None) -> list:
 
 def get_position_history(symbol: str = None, start_time: int = None,
                          end_time: int = None, limit: int = 100) -> list:
-    """
-    Fetch recent trade history (filled orders).
-    Mirrors binance_client.get_position_history — returns Binance-compat trade dicts.
-    start_time / end_time in milliseconds.
-    """
+    """Fetch recent trade history (filled orders)."""
     ex = get_exchange()
     sym = _ccxt_symbol(symbol) if symbol else _ccxt_symbol(SYMBOL)
     try:
@@ -692,7 +740,7 @@ def get_position_history(symbol: str = None, start_time: int = None,
                 'commission':      str(_safe_float((t.get('fee') or {}).get('cost'))),
                 'commissionAsset': (t.get('fee') or {}).get('currency', 'USDT'),
                 'time':            ts,
-                'realizedPnl':     str(_safe_float(t.get('info', {}).get('realizedPnl'))),
+                'realizedPnl':     str(_safe_float(t.get('info', {}).get('realizedPnl') or t.get('info', {}).get('pnl'))),
                 'raw':             t,
             })
         return result
@@ -704,11 +752,7 @@ def get_position_history(symbol: str = None, start_time: int = None,
 # ─── Funding Rate ────────────────────────────────────────────────────────────
 
 def get_funding_rate(symbol: str = SYMBOL, limit: int = 1) -> list:
-    """
-    Fetch funding rate history via CCXT fetch_funding_rate_history.
-    Returns list of dicts with Binance-compatible keys:
-      fundingTime (ms), fundingRate (str), symbol (str)
-    """
+    """Fetch funding rate history via CCXT."""
     ex = get_exchange()
     sym = _ccxt_symbol(symbol)
     try:
@@ -723,28 +767,25 @@ def get_funding_rate(symbol: str = SYMBOL, limit: int = 1) -> list:
         return result
     except ccxt.BaseError as e:
         log.error(f"get_funding_rate error: {e}")
-        # Fallback to raw binance_client
-        try:
-            import data.binance_client as _raw
-            return _raw.get_funding_rate(symbol, limit)
-        except Exception:
-            return []
+        return []
 
 
-# ─── OI / Long-Short Ratio — no CCXT support, delegate to binance_client ─────
+# ─── OI / Long-Short Ratio ───────────────────────────────────────────────────
 
 def get_open_interest(symbol: str = SYMBOL) -> dict:
-    """Thin wrapper so ccxt_client is fully drop-in for callers that use bnb directly."""
+    ex = get_exchange()
+    sym = _ccxt_symbol(symbol)
     try:
-        import data.binance_client as _raw
-        return _raw.get_open_interest(symbol)
+        oi = ex.fetch_open_interest(sym)
+        return {
+            'symbol': symbol,
+            'openInterest': str(oi.get('openInterestValue') or oi.get('openInterestAmount')),
+        }
     except Exception:
         return {}
 
 
 def get_long_short_ratio(symbol: str = SYMBOL, period: str = '5m') -> dict:
-    try:
-        import data.binance_client as _raw
-        return _raw.get_long_short_ratio(symbol, period)
-    except Exception:
-        return {}
+    # CCXT doesn't standardize long short ratios yet, so we drop it
+    # Factors using this should gracefully handle missing data.
+    return []

@@ -67,6 +67,11 @@ function fmtTime(ts: string | number | undefined): string {
   } catch { return String(ts); }
 }
 
+function fmtUsd(value: any): string {
+  const num = Number(value || 0);
+  return `$${num.toFixed(2)}`;
+}
+
 export default function Dashboard({ data }: { data: any }) {
   const [tab, setTab] = useState<'live' | 'positions' | 'futures' | 'backtest'>('live');
   const [liveData, setLiveData] = useState<any>(null);
@@ -80,6 +85,8 @@ export default function Dashboard({ data }: { data: any }) {
   const [orderQty, setOrderQty] = useState('0.001');
   const [orderLoading, setOrderLoading] = useState<'BUY' | 'SELL' | null>(null);
   const [orderResult, setOrderResult] = useState<string | null>(null);
+  const [activeExchange, setActiveExchange] = useState<string | null>(null);
+  const [systemInfo, setSystemInfo] = useState<{ mode: string, symbols: string[], leverage: number } | null>(null);
 
   const fetchLive = useCallback(async () => {
     try {
@@ -106,6 +113,20 @@ export default function Dashboard({ data }: { data: any }) {
       }
     } catch (e: any) {
       setBalanceError(e.message);
+    }
+
+    try {
+      const healthRes = await fetch('/api/health').then(r => r.json());
+      if (healthRes.exchange) {
+        setActiveExchange(healthRes.exchange);
+        setSystemInfo({
+          mode: healthRes.mode,
+          symbols: healthRes.symbols,
+          leverage: healthRes.leverage
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to fetch health/exchange', e);
     }
   }, []);
 
@@ -215,9 +236,9 @@ export default function Dashboard({ data }: { data: any }) {
     } catch (e: any) { alert('Error: ' + e.message); }
     finally { setActionLoading(null); }
   };
-  // ── Sync all Binance positions to bot ──────────────────────────────────────
-  const syncBinance = async () => {
-    if (!window.confirm('Import all unmanaged Binance positions to bot?\nBot will set default SL/TP for each position.')) return;
+  // ── Sync all Exchange positions to bot ──────────────────────────────────────
+  const syncExchange = async () => {
+    if (!window.confirm('Import all unmanaged Exchange positions to bot?\nBot will set default SL/TP for each position.')) return;
     setActionLoading('sync');
     try {
       const res = await fetch('/api/sync-binance');
@@ -282,21 +303,41 @@ export default function Dashboard({ data }: { data: any }) {
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '—';
   const totalPnl = trades.reduce((s: number, t: any) => s + Number(t.pnl), 0);
   const totalFees = trades.reduce((s: number, t: any) => s + Number(t.total_fees || 0), 0);
+  const btRun = data?.btRun || null;
+  const btTrades = data?.btTrades || [];
+  const btResults = btRun?.results_json || {};
+  const btStrategyBreakdown = btResults?.strategy_breakdown || {};
+  const btBucketPerformance = btResults?.bucket_performance || [];
+  const btRegimePerformance = btResults?.regime_performance || {};
+  const btValidation = btResults?.validation || btRun?.validation_json || {};
+  const btExecutionRealism = btResults?.execution_realism || {};
+  const btExitReasons = data?.btExitReasons || btResults?.exit_reason_breakdown || [];
+  const btGross = btTrades.reduce((sum: number, trade: any) => sum + Number(trade.gross_pnl ?? (Number(trade.pnl || 0) + Number(trade.total_fees || 0))), 0);
+  const btFees = btTrades.reduce((sum: number, trade: any) => sum + Number(trade.total_fees || 0), 0);
+  const btNet = btTrades.reduce((sum: number, trade: any) => sum + Number(trade.pnl || 0), 0);
 
   const monitor = liveData?.positions?.monitor || {};
   const regime = monitor.regime || {};
   const openPositions: any[] = liveData?.positions?.open_positions || data?.openPositions || [];
   const engineStatus = monitor.status?.status || 'unknown';
 
-  // All actual Binance futures positions (tagged with bot_managed)
-  const binancePositions: any[] = liveData?.positions?.binance_positions || [];
+  // All actual Exchange futures positions (tagged with bot_managed)
+  const exchangePositions: any[] = liveData?.positions?.binance_positions || [];
   // Positions opened manually (not yet managed by the bot)
   const botKeys = new Set(openPositions.map((p: any) => `${p.symbol}-${p.direction}`));
-  const unmanaged = binancePositions.filter((p: any) => !p.bot_managed && !botKeys.has(`${p.symbol}-${p.direction}`));
+  const unmanaged = exchangePositions.filter((p: any) => !p.bot_managed && !botKeys.has(`${p.symbol}-${p.direction}`));
 
   // Redis margin + funding data
   const marginData = monitor.margin || {};
   const fundingData = monitor.funding || {};
+
+  // v6 module data (published every loop iteration, expire 120s)
+  const v6 = liveData?.positions?.v6 || {};
+  const v6EventRisk: Record<string, any>   = v6.event_risk    || {};
+  const v6Exec: Record<string, any>        = v6.exec_analytics || {};
+  const v6Correlation: Record<string, any> = v6.correlation   || {};
+  const v6Orderbook: Record<string, any>   = v6.orderbook     || {};
+  const v6PerfGuard: Record<string, any>   = v6.perf_guard    || {};
 
   // Balance from Binance API
   const usdtFree = balanceData?.usdt_free ?? null;
@@ -336,8 +377,36 @@ export default function Dashboard({ data }: { data: any }) {
       {/* ── Header ── */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Futures Trading System</h1>
-          <p className="text-sm text-gray-500">Binance USDM Futures · Testnet · Real-time</p>
+          <div className="flex items-center gap-2 mb-0.5">
+            <h1 className="text-2xl font-bold">Futures Trading System</h1>
+            {activeExchange && (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#1a1a24] border border-[#1e1e2e] rounded shadow-sm">
+                <span className="text-[10px] uppercase font-semibold text-gray-500 tracking-wider">Broker:</span>
+                <span className={`px-1.5 py-0.5 text-[11px] font-bold rounded uppercase tracking-tight
+                  ${activeExchange === 'BINANCE' ? 'bg-[#F3BA2F]/10 text-[#F3BA2F]' : 
+                    activeExchange === 'OKX' ? 'bg-[#ffffff]/10 text-white' : 
+                    activeExchange === 'BYBIT' ? 'bg-[#f7a600]/10 text-[#f7a600]' : 'bg-blue-500/20 text-blue-400'}`}>
+                  {activeExchange}
+                </span>
+                {systemInfo && (
+                  <>
+                    <div className="w-[1px] h-3 bg-[#1e1e2e] mx-0.5" />
+                    <span className={`text-[10px] font-bold uppercase ${systemInfo.mode === 'LIVE' ? 'text-red-400' : 'text-green-400'}`}>
+                      {systemInfo.mode}
+                    </span>
+                    <div className="w-[1px] h-3 bg-[#1e1e2e] mx-0.5" />
+                    <span className="text-[10px] text-gray-400">{systemInfo.leverage}x</span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          <p className="text-sm text-gray-500">
+            {systemInfo && systemInfo.symbols.length > 0
+              ? `Trading: ${systemInfo.symbols.join(', ')}`
+              : 'Universal Crypto Futures · Paper Trading (Live Data) · Real-time'
+            }
+          </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap justify-end">
 
@@ -418,15 +487,15 @@ export default function Dashboard({ data }: { data: any }) {
 
           
           <button 
-            onClick={syncBinance} 
+            onClick={syncExchange} 
             disabled={actionLoading === 'sync'}
             className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${actionLoading === 'sync' ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title="Sync Binance Positions"
+            title="Sync Exchange Positions"
           >
             <Download size={16} />
           </button>
 
-<button onClick={refresh} className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${refreshing ? 'animate-spin' : ''}`}>
+          <button onClick={refresh} className={`p-2 rounded-lg bg-[#12121a] border border-[#1e1e2e] hover:bg-[#1a1a24] ${refreshing ? 'animate-spin' : ''}`}>
             <RefreshCw size={16} />
           </button>
         </div>
@@ -477,7 +546,7 @@ export default function Dashboard({ data }: { data: any }) {
         {[
           { key: 'live', label: `Live trades (${totalTrades})` },
           { key: 'positions', label: `Open (${openPositions.length})` },
-          { key: 'futures', label: '[FAST] Futures info' },
+          { key: 'futures', label: 'Futures info' },
           { key: 'backtest', label: 'Backtest' },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key as any)}
@@ -495,7 +564,7 @@ export default function Dashboard({ data }: { data: any }) {
               <Radio size={48} className="mx-auto mb-4 text-gray-600" />
               <h2 className="text-lg font-semibold mb-2">No live trades yet</h2>
               <p className="text-gray-500 text-sm max-w-md mx-auto">
-                Engine is {engineStatus === 'running' ? 'running — waiting for a signal' : 'not running'}. Trades appear here once the bot opens real Binance positions.
+                Engine is {engineStatus === 'running' ? 'running — waiting for a signal' : 'not running'}. Trades appear here once the bot opens real Exchange positions.
               </p>
             </Card>
           ) : (
@@ -505,7 +574,7 @@ export default function Dashboard({ data }: { data: any }) {
                   color={totalPnl >= 0 ? 'text-green-400' : 'text-red-400'} />
                 <Metric label="Win Rate" value={`${winRate}%`} sub={`${wins}W / ${totalTrades - wins}L`} />
                 <Metric label="Total Fees" value={`$${totalFees.toFixed(2)}`} color="text-amber-400"
-                  sub="From Binance fills" />
+                  sub="From Exchange fills" />
                 <Metric label="Closed Trades" value={totalTrades} />
               </div>
 
@@ -534,6 +603,7 @@ export default function Dashboard({ data }: { data: any }) {
                   <table className="w-full text-sm whitespace-nowrap">
                     <thead>
                       <tr className="text-gray-500 text-xs uppercase tracking-wider">
+                        <th className="text-left pb-3 pr-3">Pos ID</th>
                         <th className="text-left pb-3 pr-3">Time</th>
                         <th className="text-left pb-3 pr-3">Dir</th>
                         <th className="text-left pb-3 pr-3">Strategy</th>
@@ -554,6 +624,7 @@ export default function Dashboard({ data }: { data: any }) {
                         const feeAsset = t.entry_commission_asset || t.exit_commission_asset || 'USDT';
                         return (
                         <tr key={t.id} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
+                          <td className="py-2 pr-3 text-gray-500 font-mono text-[10px]">#{t.id}</td>
                           <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(t.entry_time)}</td>
                           <td className="py-2 pr-3">
                             <Badge color={t.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{t.direction}</Badge>
@@ -592,6 +663,11 @@ export default function Dashboard({ data }: { data: any }) {
                             )}
                             {t.exit_order_id && (
                               <div title="Exit Order ID">↓ {String(t.exit_order_id).slice(-8)}</div>
+                            )}
+                            {(t.entry_client_oid || t.exit_client_oid) && (
+                              <div title="Order Group">
+                                grp {String(t.entry_client_oid || t.exit_client_oid).slice(-10)}
+                              </div>
                             )}
                           </td>
                         </tr>
@@ -638,6 +714,7 @@ export default function Dashboard({ data }: { data: any }) {
               <table className="w-full text-sm whitespace-nowrap">
                 <thead>
                   <tr className="text-gray-500 text-xs uppercase tracking-wider">
+                    <th className="text-left pb-3 pr-4">ID</th>
                     <th className="text-left pb-3 pr-4">Symbol / Dir</th>
                     <th className="text-left pb-3 pr-4">Strategy</th>
                     <th className="text-right pb-3 pr-4">Entry</th>
@@ -660,6 +737,7 @@ export default function Dashboard({ data }: { data: any }) {
                     const scoreColor = score === null ? '#666' : score >= 0.6 ? '#22c55e' : score >= 0.4 ? '#86efac' : score <= -0.6 ? '#ef4444' : score <= -0.4 ? '#f87171' : '#9ca3af';
                     return (
                       <tr key={i} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
+                        <td className="py-3 pr-4 text-gray-500 font-mono text-xs">#{p.id || '—'}</td>
                         <td className="py-3 pr-4">
                           <div className="flex items-center gap-2">
                             <Badge color={p.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{p.direction}</Badge>
@@ -713,12 +791,12 @@ export default function Dashboard({ data }: { data: any }) {
           )}
         </Card>
 
-        {/* ── Unmanaged (manual) Binance positions ── */}
+        {/* ── Unmanaged (manual) Exchange positions ── */}
         {unmanaged.length > 0 && (
           <Card>
             <div className="flex items-center gap-2 mb-4">
               <Bot size={15} className="text-amber-400" />
-              <span className="text-sm font-semibold">Position บน Binance ที่ bot ยังไม่จัดการ</span>
+              <span className="text-sm font-semibold">Position บน Exchange ที่ bot ยังไม่จัดการ</span>
               <span className="text-xs text-amber-400/70 ml-1">({unmanaged.length})</span>
             </div>
             <div className="overflow-x-auto">
@@ -885,10 +963,10 @@ export default function Dashboard({ data }: { data: any }) {
                   const upnl = Number(p.unrealized_pnl || 0);
                   const isLong = p.direction === 'LONG';
 
-                  // Estimated liquidation for isolated 5x:
+                  // Estimated liquidation price for isolated margin:
                   // Long: liq ≈ entry * (1 - 1/leverage + maint_margin_rate)
                   // Short: liq ≈ entry * (1 + 1/leverage - maint_margin_rate)
-                  const leverage = 5;
+                  const leverage = systemInfo?.leverage || 5;
                   const mmRate = 0.004; // 0.4% maint margin for most contracts
                   const liqPrice = isLong
                     ? entry * (1 - 1 / leverage + mmRate)
@@ -944,12 +1022,12 @@ export default function Dashboard({ data }: { data: any }) {
                           <div className="font-mono text-red-400">${sl.toLocaleString()} <span className="text-gray-600">({slDistance.toFixed(1)}%)</span></div>
                         </div>
                         <div>
-                          <div className="text-gray-500 mb-0.5">TP1 (33%)</div>
+                          <div className="text-gray-500 mb-0.5">Take Profit</div>
                           <div className="font-mono text-green-400">${tp.toLocaleString()}</div>
                         </div>
-                        {tp2Val && (
+                        {tp2Val && tp2Val !== tp && (
                           <div>
-                            <div className="text-gray-500 mb-0.5">TP2 (33%)</div>
+                            <div className="text-gray-500 mb-0.5">Alt TP</div>
                             <div className="font-mono text-green-300">${tp2Val.toLocaleString()}</div>
                           </div>
                         )}
@@ -968,46 +1046,291 @@ export default function Dashboard({ data }: { data: any }) {
               </div>
             </Card>
           )}
+
+          {/* ── v6 System Intelligence Panel ── */}
+          {(Object.keys(v6EventRisk).length > 0 || Object.keys(v6Exec).length > 0) && (
+            <Card className="mt-6">
+              <div className="flex items-center gap-2 mb-4">
+                <Zap size={14} className="text-purple-400" />
+                <span className="text-sm font-semibold">v6 System Intelligence</span>
+                <span className="text-[10px] text-gray-600 ml-1">Live module snapshots</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+
+                {/* Event Risk */}
+                <div className="bg-[#0e0e18] rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Event Risk</div>
+                  {Object.keys(v6EventRisk).length === 0 ? (
+                    <div className="text-gray-600 text-xs">No data</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {Object.entries(v6EventRisk).slice(0, 4).map(([sym, info]: [string, any]) => {
+                        const blocked = info?.active_events?.length > 0;
+                        return (
+                          <div key={sym} className="flex items-center justify-between">
+                            <span className="text-xs text-gray-400">{sym.replace('-USDT-SWAP', '')}</span>
+                            <div className="flex items-center gap-1">
+                              {blocked
+                                ? <span className="text-[10px] text-amber-400">{info.active_events[0]}</span>
+                                : <span className="text-[10px] text-green-400">clear</span>}
+                              <span className="text-[10px] text-gray-600">×{(info.size_mult ?? 1).toFixed(1)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Execution Analytics */}
+                <div className="bg-[#0e0e18] rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Execution Quality</div>
+                  {Object.keys(v6Exec).length === 0 ? (
+                    <div className="text-gray-600 text-xs">No data</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {Object.entries(v6Exec).slice(0, 4).map(([sym, info]: [string, any]) => {
+                        const slipBps = ((info?.ema_slippage ?? 0) * 10000).toFixed(1);
+                        const paused = info?.circuit_breaker_active;
+                        return (
+                          <div key={sym} className="flex items-center justify-between">
+                            <span className="text-xs text-gray-400">{sym.replace('-USDT-SWAP', '')}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-[10px] text-gray-300">{slipBps}bps</span>
+                              {paused && <span className="text-[10px] text-red-400">PAUSED</span>}
+                              <span className="text-[10px] text-gray-600">q={((info?.fill_quality ?? 1) * 100).toFixed(0)}%</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Orderbook Spread Quality */}
+                <div className="bg-[#0e0e18] rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Orderbook Spread</div>
+                  {Object.keys(v6Orderbook).length === 0 ? (
+                    <div className="text-gray-600 text-xs">No data</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {Object.entries(v6Orderbook).map(([sym, quality]: [string, any]) => {
+                        const color = quality === 'tight' ? '#22c55e' : quality === 'normal' ? '#9ca3af' : quality === 'wide' ? '#f59e0b' : '#ef4444';
+                        return (
+                          <div key={sym} className="flex items-center justify-between">
+                            <span className="text-xs text-gray-400">{sym.replace('-USDT-SWAP', '')}</span>
+                            <span className="text-[10px] font-semibold" style={{ color }}>{quality}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Correlation regime */}
+                <div className="bg-[#0e0e18] rounded-lg p-3">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">Correlation (EWM)</div>
+                  {Object.keys(v6Correlation).length === 0 ? (
+                    <div className="text-gray-600 text-xs">No data</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {Object.entries(v6Correlation).slice(0, 6).map(([pair, val]: [string, any]) => {
+                        const r = Number(val);
+                        const color = Math.abs(r) > 0.75 ? '#ef4444' : Math.abs(r) > 0.5 ? '#f59e0b' : '#22c55e';
+                        return (
+                          <div key={pair} className="flex items-center justify-between">
+                            <span className="text-[10px] text-gray-500">{pair}</span>
+                            <span className="font-mono text-[10px]" style={{ color }}>{r.toFixed(2)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 
       {/* ═══ BACKTEST TAB ═══ */}
       {tab === 'backtest' && (
         <Card>
-          <div className="text-sm font-semibold mb-4">Backtest history (simulated)</div>
-          {data?.btTrades?.length > 0 ? (
-            <div className="overflow-x-auto">
+          <div className="flex items-start justify-between gap-4 flex-wrap mb-4">
+            <div>
+              <div className="text-sm font-semibold">Latest backtest run</div>
+              <div className="text-xs text-gray-500 mt-1">
+                {btRun ? 'Only the newest BACKTEST run is shown. Older runs are auto-cleared before each rerun.' : 'Run with TRADING_MODE=backtest to generate the first run.'}
+              </div>
+            </div>
+            {btRun && (
+              <div className="text-xs text-gray-400">
+                <div>Run #{btRun.id} {btRun.run_name ? `• ${btRun.run_name}` : ''}</div>
+                <div>{btRun.symbol} • {btRun.timeframe} • {btRun.status || 'COMPLETED'}</div>
+              </div>
+            )}
+          </div>
+          {btRun ? (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <Metric label="Gross PnL" value={fmtUsd(btGross)} color={btGross >= 0 ? 'text-green-400' : 'text-red-400'} />
+                <Metric label="Fees" value={fmtUsd(btFees)} color="text-amber-400" />
+                <Metric label="Net PnL" value={fmtUsd(btNet)} color={btNet >= 0 ? 'text-green-400' : 'text-red-400'} />
+                <Metric label="Closed Trades" value={btTrades.length} sub={btRun.win_rate ? `Win rate ${btRun.win_rate}%` : undefined} />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs mb-6">
+                <div className="bg-[#161622] border border-[#1e1e2e] rounded-lg p-4">
+                  <div className="text-gray-500 mb-2 uppercase tracking-wider text-[10px]">Run Snapshot</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>Created</div><div className="text-right text-gray-300">{fmtTime(btRun.created_at)}</div>
+                    <div>Period</div><div className="text-right text-gray-300">{btResults?.data?.test_period || '—'}</div>
+                    <div>Final capital</div><div className="text-right text-gray-300">{fmtUsd(btRun.final_capital)}</div>
+                    <div>Max drawdown</div><div className="text-right text-gray-300">{btRun.max_drawdown ?? '—'}%</div>
+                  </div>
+                </div>
+                <div className="bg-[#161622] border border-[#1e1e2e] rounded-lg p-4">
+                  <div className="text-gray-500 mb-2 uppercase tracking-wider text-[10px]">Validation & Realism</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>In-sample bars</div><div className="text-right text-gray-300">{btValidation?.in_sample_bars ?? '—'}</div>
+                    <div>Out-of-sample bars</div><div className="text-right text-gray-300">{btValidation?.out_of_sample_bars ?? '—'}</div>
+                    <div>Walk-forward</div><div className="text-right text-gray-300">{btValidation?.walk_forward_enabled ? 'enabled' : '—'}</div>
+                    <div>Regime buckets</div><div className="text-right text-gray-300">{Object.keys(btRegimePerformance || {}).length}</div>
+                    <div>Intrabar path</div><div className="text-right text-gray-300">{btExecutionRealism?.uses_intrabar_path ? 'on' : 'off'}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+                <div className="overflow-x-auto">
+                  <div className="text-xs uppercase tracking-wider text-gray-500 mb-3">By Strategy</div>
+                  <table className="w-full text-sm whitespace-nowrap">
+                    <thead>
+                      <tr className="text-gray-500 text-[10px] uppercase tracking-wider">
+                        <th className="text-left pb-2 pr-3">Strategy</th>
+                        <th className="text-right pb-2 pr-3">Trades</th>
+                        <th className="text-right pb-2 pr-3">Gross</th>
+                        <th className="text-right pb-2 pr-3">Fees</th>
+                        <th className="text-right pb-2">Net</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(btStrategyBreakdown).map(([name, stats]: [string, any]) => (
+                        <tr key={name} className="border-t border-[#1e1e2e]">
+                          <td className="py-2 pr-3 text-gray-300">{name}</td>
+                          <td className="py-2 pr-3 text-right text-gray-400">{stats?.trades ?? 0}</td>
+                          <td className="py-2 pr-3 text-right">{fmtUsd(stats?.gross_pnl)}</td>
+                          <td className="py-2 pr-3 text-right text-amber-400/80">{fmtUsd(stats?.fees)}</td>
+                          <td className={`py-2 text-right ${Number(stats?.pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtUsd(stats?.pnl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <div className="text-xs uppercase tracking-wider text-gray-500 mb-3">By Exit Reason</div>
+                  <table className="w-full text-sm whitespace-nowrap">
+                    <thead>
+                      <tr className="text-gray-500 text-[10px] uppercase tracking-wider">
+                        <th className="text-left pb-2 pr-3">Reason</th>
+                        <th className="text-right pb-2 pr-3">Trades</th>
+                        <th className="text-right pb-2 pr-3">Gross</th>
+                        <th className="text-right pb-2 pr-3">Fees</th>
+                        <th className="text-right pb-2">Net</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {btExitReasons.map((row: any) => (
+                        <tr key={row.reason || 'unknown'} className="border-t border-[#1e1e2e]">
+                          <td className="py-2 pr-3 text-gray-300">{row.reason || '—'}</td>
+                          <td className="py-2 pr-3 text-right text-gray-400">{row.trades}</td>
+                          <td className="py-2 pr-3 text-right">{fmtUsd(row.gross_pnl)}</td>
+                          <td className="py-2 pr-3 text-right text-amber-400/80">{fmtUsd(row.fees)}</td>
+                          <td className={`py-2 text-right ${Number(row.net_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtUsd(row.net_pnl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto mb-6">
+                <div className="text-xs uppercase tracking-wider text-gray-500 mb-3">By Symbol / TF / Strategy / Regime</div>
+                <table className="w-full text-sm whitespace-nowrap">
+                  <thead>
+                    <tr className="text-gray-500 text-[10px] uppercase tracking-wider">
+                      <th className="text-left pb-2 pr-3">Bucket</th>
+                      <th className="text-right pb-2 pr-3">Trades</th>
+                      <th className="text-right pb-2 pr-3">Fees</th>
+                      <th className="text-right pb-2">Net</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {btBucketPerformance.map((row: any) => (
+                      <tr key={`${row.symbol}-${row.timeframe}-${row.strategy}-${row.regime}-${row.exit_profile}`} className="border-t border-[#1e1e2e]">
+                        <td className="py-2 pr-3 text-gray-300 text-xs">{row.symbol} / {row.timeframe} / {row.strategy} / {row.regime}</td>
+                        <td className="py-2 pr-3 text-right text-gray-400">{row.trades}</td>
+                        <td className="py-2 pr-3 text-right text-amber-400/80">{fmtUsd(row.fees)}</td>
+                        <td className={`py-2 text-right ${Number(row.net_pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtUsd(row.net_pnl)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="text-sm font-semibold mb-4">Backtest history (latest run only)</div>
+              <div className="overflow-x-auto">
               <table className="w-full text-sm whitespace-nowrap">
                 <thead>
                   <tr className="text-gray-500 text-xs uppercase tracking-wider">
                     <th className="text-left pb-3 pr-3">Time</th>
                     <th className="text-left pb-3 pr-3">Dir</th>
                     <th className="text-left pb-3 pr-3">Strategy</th>
+                    <th className="text-left pb-3 pr-3">Regime</th>
+                    <th className="text-left pb-3 pr-3">Exit Profile</th>
                     <th className="text-right pb-3 pr-3">Entry</th>
                     <th className="text-right pb-3 pr-3">Exit</th>
-                    <th className="text-right pb-3 pr-3">PnL</th>
+                    <th className="text-right pb-3 pr-3" title="PnL before fees">Gross</th>
+                    <th className="text-right pb-3 pr-3" title="Entry fee + exit fee">Fees</th>
+                    <th className="text-right pb-3 pr-3" title="PnL after fees">Net</th>
+                    <th className="text-left pb-3 pr-3">Order IDs</th>
                     <th className="text-left pb-3">Reason</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.btTrades.map((t: any) => (
+                  {btTrades.map((t: any) => (
                     <tr key={t.id} className="border-t border-[#1e1e2e] hover:bg-[#1a1a24]">
                       <td className="py-2 pr-3 text-gray-400 text-xs">{fmtTime(t.entry_time)}</td>
                       <td className="py-2 pr-3">
                         <Badge color={t.direction === 'LONG' ? '#22c55e' : '#ef4444'}>{t.direction}</Badge>
                       </td>
                       <td className="py-2 pr-3 text-gray-300 text-xs">{t.strategy}</td>
+                      <td className="py-2 pr-3 text-gray-400 text-xs">{t.regime_name || t.regime}</td>
+                      <td className="py-2 pr-3 text-gray-400 text-xs">{t.exit_profile || '—'}</td>
                       <td className="py-2 pr-3 text-right">${Number(t.entry_price).toLocaleString()}</td>
                       <td className="py-2 pr-3 text-right">${Number(t.exit_price).toLocaleString()}</td>
-                      <td className={`py-2 pr-3 text-right ${Number(t.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        ${Number(t.pnl).toFixed(2)}
+                      <td className={`py-2 pr-3 text-right ${Number(t.gross_pnl ?? (Number(t.pnl) + Number(t.total_fees || 0))) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {fmtUsd(t.gross_pnl ?? (Number(t.pnl) + Number(t.total_fees || 0)))}
                       </td>
-                      <td className="py-2 text-xs text-gray-400">{t.exit_reason}</td>
+                      <td className="py-2 pr-3 text-right text-amber-400/80">
+                        {fmtUsd(t.total_fees)}
+                      </td>
+                      <td className={`py-2 pr-3 text-right font-medium ${Number(t.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {fmtUsd(t.pnl)}
+                      </td>
+                      <td className="py-2 pr-3 text-[10px] text-gray-500 font-mono">
+                        {t.entry_order_id ? <div title="Entry Order ID">↑ {String(t.entry_order_id).slice(-8)}</div> : <div>↑ —</div>}
+                        {t.exit_order_id ? <div title="Exit Order ID">↓ {String(t.exit_order_id).slice(-8)}</div> : <div>↓ —</div>}
+                        {t.entry_client_oid ? <div title="Order Group">{String(t.entry_client_oid).slice(-12)}</div> : null}
+                      </td>
+                      <td className="py-2 text-xs text-gray-400" title={t.exit_reason_detail || t.exit_reason}>{t.exit_reason}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            </>
           ) : (
             <div className="text-center py-12 text-gray-500">
               <p>No backtest runs yet</p>
@@ -1018,7 +1341,7 @@ export default function Dashboard({ data }: { data: any }) {
       )}
 
       <div className="mt-8 text-center text-xs text-gray-600">
-        v5 · Binance USDM Futures · HMM Regime · Multi-Factor Signals · Partial TP · Portfolio Heat
+        v6 · Multi-Exchange Futures · Regime-Aware · Event Risk · Orderbook Flow · Walk-Forward Optimized
       </div>
     </div>
   );

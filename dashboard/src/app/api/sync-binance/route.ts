@@ -1,15 +1,12 @@
 import { NextResponse } from 'next/server';
+import { getEngineHttpUrl } from '@/lib/engine-url';
 
 export const dynamic = 'force-dynamic';
 
-const ENGINE_HTTP_URL =
-  process.env.TRADING_ENGINE_HTTP_URL ||
-  process.env.NEXT_PUBLIC_ENGINE_HTTP_URL ||
-  'http://trading-engine:8081';
-
 export async function GET() {
   try {
-    const res = await fetch(`${ENGINE_HTTP_URL}/sync-binance`, {
+    const engineUrl = getEngineHttpUrl();
+    const res = await fetch(`${engineUrl}/sync-binance`, {
       signal: AbortSignal.timeout(8000),
     });
 

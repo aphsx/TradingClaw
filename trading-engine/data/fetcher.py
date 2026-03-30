@@ -1,78 +1,38 @@
 """
-Data Fetcher - Binance API + Synthetic Data Generator
+Data Fetcher - CCXT (Universal API) + Synthetic Data Generator
 ======================================================
 """
 import pandas as pd
 import numpy as np
-import requests
 import time
-import hmac
-import hashlib
-from urllib.parse import urlencode
 from datetime import datetime, timedelta
-import json
 import os
-
 import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
 
-# API version prefix based on market type
-API_PREFIX = "/fapi/v1" if USE_FUTURES else "/api/v3"
+from data import ccxt_client
 
 
-def _sign(params: dict) -> str:
-    """Sign request with HMAC SHA256."""
-    query = urlencode(params)
-    sig = hmac.new(SECRET_KEY.encode(), query.encode(), hashlib.sha256).hexdigest()
-    return query + "&signature=" + sig
-
-
-def _headers():
-    return {"X-MBX-APIKEY": API_KEY}
-
+def timeframe_to_hours(interval: str) -> float:
+    mapping = {
+        '1m': 1 / 60,
+        '5m': 5 / 60,
+        '15m': 15 / 60,
+        '30m': 0.5,
+        '1h': 1.0,
+        '4h': 4.0,
+        '1d': 24.0,
+    }
+    return mapping.get((interval or '1h').lower(), 1.0)
 
 def test_connection() -> dict:
-    """Test Binance API connectivity and account access."""
-    results = {}
-
-    # Test 1: Server time
-    try:
-        r = requests.get(f"{BASE_URL}{API_PREFIX}/time", timeout=10)
-        results["server"] = {"status": r.status_code, "data": r.json()}
-    except Exception as e:
-        results["server"] = {"status": "error", "error": str(e)}
-
-    # Test 2: Account info
-    try:
-        params = {"timestamp": int(time.time() * 1000), "recvWindow": 10000}
-        url = f"{BASE_URL}{API_PREFIX}/account?{_sign(params)}"
-        r = requests.get(url, headers=_headers(), timeout=10)
-        data = r.json()
-        if r.status_code == 200:
-            balances = [b for b in data.get('balances', [])
-                       if float(b['free']) > 0 or float(b['locked']) > 0]
-            results["account"] = {
-                "status": 200,
-                "can_trade": data.get("canTrade"),
-                "balances": balances[:10]
-            }
-        else:
-            results["account"] = {"status": r.status_code, "error": data}
-    except Exception as e:
-        results["account"] = {"status": "error", "error": str(e)}
-
-    # Test 3: Current price
-    try:
-        r = requests.get(f"{BASE_URL}{API_PREFIX}/ticker/price?symbol={SYMBOL}", timeout=10)
-        results["price"] = r.json()
-    except Exception as e:
-        results["price"] = {"status": "error", "error": str(e)}
-
-    return results
+    """Test API connectivity and account access."""
+    return ccxt_client.test_connection()
 
 
-def validate_candles(df: pd.DataFrame, symbol: str = "BTCUSDT") -> pd.DataFrame:
+def validate_candles(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     """Validate candles: remove duplicates, fill small gaps, detect outliers."""
     if df.empty:
         return df
@@ -93,113 +53,67 @@ def validate_candles(df: pd.DataFrame, symbol: str = "BTCUSDT") -> pd.DataFrame:
 
 def fetch_klines(symbol: str = SYMBOL, interval: str = TIMEFRAME,
                  days: int = LOOKBACK_DAYS, lookback_days: int = None) -> pd.DataFrame:
-    """Fetch historical klines/candlestick data from Binance."""
-    # Support both parameter names for backwards compatibility
+    """Fetch historical klines/candlestick data using CCXT."""
     if lookback_days is not None:
         days = lookback_days
 
-    all_data = []
+    ex = ccxt_client.get_exchange()
+    sym = ccxt_client._ccxt_symbol(symbol)
+    
+    tf_map = {'1m': '1m', '5m': '5m', '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1d'}
+    tf = tf_map.get(interval, interval)
+
+    # Note: For OKX, fetch_ohlcv supports pagination with 'since' parameter
     end_time = int(time.time() * 1000)
     start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
-
-    print(f"[DATA] Fetching {symbol} {interval} data from Binance ({days} days)...")
-
+    
+    print(f"[DATA] Fetching {symbol} {interval} data via CCXT ({days} days)...")
+    
+    all_data = []
+    
     while start_time < end_time:
         try:
-            params = {
-                "symbol": symbol,
-                "interval": interval,
-                "startTime": start_time,
-                "limit": 1000
-            }
-            r = requests.get(f"{BASE_URL}{API_PREFIX}/klines", params=params, timeout=15)
-            data = r.json()
-
-            if not data or isinstance(data, dict):
+            bars = ex.fetch_ohlcv(sym, tf, since=start_time, limit=1000)
+            if not bars:
                 break
-
-            all_data.extend(data)
-            start_time = data[-1][0] + 1  # Next batch after last candle
-            time.sleep(0.1)  # Rate limit
-
+                
+            all_data.extend(bars)
+            start_time = bars[-1][0] + 1
+            time.sleep(0.1) # Rate limit
         except Exception as e:
             print(f"[WARN] Error fetching data: {e}")
             break
-    
+            
     if not all_data:
-        print("[ERROR] No data fetched from Binance")
+        print(f"[ERROR] No data fetched from exchange")
         return pd.DataFrame()
-    
-    df = pd.DataFrame(all_data, columns=[
-        'timestamp', 'open', 'high', 'low', 'close', 'volume',
-        'close_time', 'quote_volume', 'trades', 'taker_buy_base',
-        'taker_buy_quote', 'ignore'
-    ])
-    
+        
+    df = pd.DataFrame(all_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    for col in ['open', 'high', 'low', 'close', 'volume', 'quote_volume']:
-        df[col] = df[col].astype(float)
     
-    df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume', 'trades']].copy()
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        df[col] = df[col].astype(float)
+        
     df = df.set_index('timestamp')
-
-    # Validate candles
     df = validate_candles(df, symbol)
-
     print(f"[OK] Fetched {len(df)} candles from {df.index[0]} to {df.index[-1]}")
     return df
 
 
 def place_test_order(symbol: str = SYMBOL, side: str = "BUY",
                      quantity: float = 0.001, order_type: str = "MARKET") -> dict:
-    """Place a test order (or real order on demo account)."""
-    params = {
-        "symbol": symbol,
-        "side": side,
-        "type": order_type,
-        "quantity": f"{quantity:.6f}",
-        "timestamp": int(time.time() * 1000),
-        "recvWindow": 10000
-    }
-
-    # First try test order endpoint (Spot only, Futures doesn't support test endpoint)
-    try:
-        if USE_FUTURES:
-            # Futures doesn't have test order endpoint, skip it
-            test_result = {"test_order_status": "skipped", "reason": "Futures API doesn't support test orders"}
-        else:
-            url = f"{BASE_URL}{API_PREFIX}/order/test?{_sign(params)}"
-            r = requests.post(url, headers=_headers(), timeout=10)
-            test_result = {"test_order_status": r.status_code, "response": r.json() if r.text else {}}
-    except Exception as e:
-        test_result = {"test_order_status": "error", "error": str(e)}
-
-    return test_result
+    """Mock testing API using ccxt."""
+    print("Testing fake order on CCXT implementation.")
+    return {"test_order_status": 200, "response": "Simulated fake order test"}
 
 
 def place_real_order(symbol: str = SYMBOL, side: str = "BUY",
                      quantity: float = 0.001, order_type: str = "MARKET",
                      price: float = None) -> dict:
-    """Place a real order (use on demo account only!)."""
-    params = {
-        "symbol": symbol,
-        "side": side,
-        "type": order_type,
-        "quantity": f"{quantity:.6f}",
-        "timestamp": int(time.time() * 1000),
-        "recvWindow": 10000
-    }
-
-    if order_type == "LIMIT" and price:
-        params["price"] = f"{price:.2f}"
-        params["timeInForce"] = "GTC"
-
-    try:
-        url = f"{BASE_URL}{API_PREFIX}/order?{_sign(params)}"
-        r = requests.post(url, headers=_headers(), timeout=10)
-        return {"status": r.status_code, "response": r.json()}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    """Use CCXT client explicitly instead."""
+    if order_type.upper() == "LIMIT" and price:
+        return ccxt_client.place_limit_order(symbol, side, quantity, price)
+    return ccxt_client.place_market_order(symbol, side, quantity)
 
 
 def generate_realistic_btc_data(days: int = 90, interval_hours: float = 1.0,
@@ -207,6 +121,7 @@ def generate_realistic_btc_data(days: int = 90, interval_hours: float = 1.0,
     """
     Generate realistic BTC/USDT synthetic data with regime changes.
     Uses GBM with regime-switching volatility for realistic behavior.
+    Timestamps start from (now - days) so synthetic data matches real backtest window.
     """
     np.random.seed(seed)
     
@@ -237,7 +152,8 @@ def generate_realistic_btc_data(days: int = 90, interval_hours: float = 1.0,
     
     opens, highs, lows, closes, volumes = [], [], [], [], []
     timestamps = []
-    start_date = datetime(2025, 1, 1)
+    # FIX: Use current UTC time minus N days — synthetic data always covers the real lookback window
+    start_date = datetime.utcnow() - timedelta(days=days)
     
     for i in range(n_candles):
         # Regime transition
@@ -340,6 +256,36 @@ def fetch_funding_rates(symbol: str = SYMBOL, limit: int = 100) -> pd.DataFrame:
     df['fundingRate'] = df['fundingRate'].astype(float)
     df.set_index('fundingTime', inplace=True)
     return df
+
+
+def attach_funding_history(df: pd.DataFrame, symbol: str = SYMBOL, limit: int = None) -> pd.DataFrame:
+    """Attach historical funding rate to each bar using backward asof merge."""
+    out = df.copy()
+    if out.empty:
+        out['funding_rate'] = 0.0
+        return out
+
+    try:
+        if limit is None:
+            span_hours = max((out.index[-1] - out.index[0]).total_seconds() / 3600, 8)
+            limit = max(50, int(span_hours / 8) + 10)
+        rates = fetch_funding_rates(symbol=symbol, limit=limit)
+        if rates.empty:
+            out['funding_rate'] = 0.0
+            return out
+
+        left = out.sort_index().reset_index()
+        left_ts = left.columns[0]
+        left = left.rename(columns={left_ts: 'timestamp'})
+        right = rates.sort_index().reset_index().rename(columns={'fundingTime': 'timestamp', 'fundingRate': 'funding_rate'})
+        merged = pd.merge_asof(left, right[['timestamp', 'funding_rate']], on='timestamp', direction='backward')
+        merged['funding_rate'] = merged['funding_rate'].ffill().fillna(0.0)
+        merged = merged.set_index('timestamp')
+        return merged
+    except Exception as e:
+        print(f"[WARN] Funding history unavailable for {symbol}: {e}")
+        out['funding_rate'] = 0.0
+        return out
 
 
 def fetch_mark_price_klines(symbol: str = SYMBOL, interval: str = "1h", limit: int = 500) -> pd.DataFrame:

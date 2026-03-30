@@ -13,8 +13,6 @@
 #  DB_HOST / REDIS_HOST ถูก override เป็น "db" / "redis" ใน docker network
 # ═══════════════════════════════════════════════════════════════════════
 
-version: "3.8"
-
 services:
 
   # ── MySQL ────────────────────────────────────────────────────────────
@@ -88,10 +86,14 @@ services:
       - DB_PASSWORD=${MYSQL_PASSWORD:-trader_pass_2026}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
+      - EXCHANGE=${EXCHANGE:-okx}
+      - OKX_API_KEY=${OKX_API_KEY}
+      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
+      - BYBIT_API_KEY=${BYBIT_API_KEY}
+      - BYBIT_SECRET_KEY=${BYBIT_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
       - USE_FUTURES=${USE_FUTURES:-true}
-      - BINANCE_FUTURES_BASE_URL=${BINANCE_FUTURES_BASE_URL:-https://demo-fapi.binance.com}
       - TRADING_MODE=${TRADING_MODE:-live}
       - SYMBOL=${SYMBOL:-BTCUSDT}
       - TIMEFRAME=${TIMEFRAME:-1h}
@@ -132,10 +134,13 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - TRADING_ENGINE_HTTP_URL=http://trading-engine:8081
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
+      - EXCHANGE=${EXCHANGE:-okx}
+      - OKX_API_KEY=${OKX_API_KEY}
+      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
+      - BYBIT_API_KEY=${BYBIT_API_KEY}
+      - BYBIT_SECRET_KEY=${BYBIT_SECRET_KEY}
       - USE_FUTURES=${USE_FUTURES:-true}
-      - BINANCE_FUTURES_BASE_URL=${BINANCE_FUTURES_BASE_URL:-https://demo-fapi.binance.com}
       - NEXT_PUBLIC_SOCKET_URL=http://localhost:8080
 
   # ── Backtest (one-time job, ไม่รันอัตโนมัติ) ────────────────────────
@@ -160,10 +165,13 @@ services:
       - DB_PASSWORD=${MYSQL_PASSWORD:-trader_pass_2026}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - BINANCE_API_KEY=${BINANCE_API_KEY}
-      - BINANCE_SECRET_KEY=${BINANCE_SECRET_KEY}
+      - EXCHANGE=${EXCHANGE:-okx}
+      - OKX_API_KEY=${OKX_API_KEY}
+      - OKX_SECRET_KEY=${OKX_SECRET_KEY}
+      - OKX_PASSPHRASE=${OKX_PASSPHRASE}
+      - BYBIT_API_KEY=${BYBIT_API_KEY}
+      - BYBIT_SECRET_KEY=${BYBIT_SECRET_KEY}
       - USE_FUTURES=${USE_FUTURES:-true}
-      - BINANCE_FUTURES_BASE_URL=${BINANCE_FUTURES_BASE_URL:-https://demo-fapi.binance.com}
       - TRADING_MODE=backtest
       - SYMBOL=${SYMBOL:-BTCUSDT}
       - TIMEFRAME=${TIMEFRAME:-1h}

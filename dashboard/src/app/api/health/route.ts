@@ -6,15 +6,13 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const engineUrl = getEngineHttpUrl();
-    const res = await fetch(`${engineUrl}/balance`, {
+    const res = await fetch(`${engineUrl}/health`, {
       cache: 'no-store',
     });
+    if (!res.ok) throw new Error('Health probe failed');
     const data = await res.json();
     return NextResponse.json(data);
   } catch (e: any) {
-    return NextResponse.json(
-      { error: 'Failed to fetch balance from trading engine', reason: 'network_or_runtime_error', detail: e.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }

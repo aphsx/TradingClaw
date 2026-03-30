@@ -61,7 +61,23 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             if self.path == '/health':
-                self._json(200, {'status': 'ok'})
+                from config import EXCHANGE_NAME, EXCHANGE_RAW, TRADING_MODE, SYMBOLS, LEVERAGE
+                
+                display_mode = TRADING_MODE.upper()
+                if TRADING_MODE.lower() == 'live' and '_demo' in EXCHANGE_RAW.lower():
+                    display_mode = 'DEMO'
+                    
+                self._json(200, {
+                    'status': 'ok',
+                    'exchange': EXCHANGE_NAME.upper(),
+                    'mode': display_mode,
+                    'symbols': SYMBOLS,
+                    'leverage': LEVERAGE
+                })
+
+            elif self.path == '/balance':
+                bal = bnb.get_balance()
+                self._json(200, bal)
 
             elif self.path == '/manual-positions':
                 bot_positions = get_open_positions_from_redis()
@@ -161,6 +177,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
 
+                self._json(200, {'success': True, 'order': order})
+
+            # ── /test-order ──────────────────────────────────────────────────
+            elif self.path == '/test-order':
+                symbol   = body.get('symbol', 'BTCUSDT')
+                side     = body.get('side', 'BUY')
+                quantity = float(body.get('quantity', 0.001))
+                
+                order = bnb.place_market_order(symbol, side, quantity)
+                if order.get('status') == 'FAILED':
+                    return self._json(400, {'error': order.get('error', 'Trade failed')})
                 self._json(200, {'success': True, 'order': order})
 
             # ── /adopt-position ──────────────────────────────────────────────

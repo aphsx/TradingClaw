@@ -12,13 +12,15 @@ export async function GET(req: Request) {
 
     const rows = await query(
       `SELECT id, source, symbol, direction, strategy, regime, status,
+              timeframe, regime_name, market_profile, exit_profile,
               entry_price, entry_time, quantity,
               entry_order_id, entry_client_oid, entry_fill_price, entry_fill_qty,
               entry_commission, entry_commission_asset, entry_status,
               exit_price, exit_time, exit_reason,
               exit_order_id, exit_client_oid, exit_fill_price, exit_fill_qty,
               exit_commission, exit_commission_asset, exit_status,
-              pnl, pnl_pct, total_fees, stop_loss, take_profit, risk_reward,
+              gross_pnl, pnl, pnl_pct, total_fees, entry_fee, exit_fee, funding_fee,
+              exit_reason_detail, stop_loss, take_profit, risk_reward,
               created_at
        FROM positions
        WHERE source = ? AND status = 'CLOSED'
