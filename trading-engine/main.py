@@ -1005,14 +1005,28 @@ def run_live():
                         sl_oid, tp_oid = None, None
                         exit_side = "SELL" if sig.direction == "LONG" else "BUY"
                         if TRADING_MODE != "paper":
+                            # --- SL is mandatory: if it fails, panic-close the entry immediately ---
+                            sl_placed = False
                             try:
                                 sl_resp = _with_retry(bnb.place_stop_loss_order,
                                                       current_symbol, exit_side, qty, sig.stop_loss)
                                 if _verify_order_placed(sl_resp, "SL"):
                                     sl_oid = sl_resp.get("orderId")
+                                    sl_placed = True
                                     print(f"   [SL] SL #{sl_oid} @ ${sig.stop_loss:,.2f}")
+                                else:
+                                    raise RuntimeError(f"SL order verification failed: {sl_resp}")
                             except Exception as e:
-                                print(f"   [WARN] SL failed: {e}")
+                                print(f"   [CRITICAL] SL placement failed: {e} — panic closing entry to avoid unprotected position")
+                                try:
+                                    panic_side = "SELL" if sig.direction == "LONG" else "BUY"
+                                    bnb.place_market_order(current_symbol, panic_side, qty, reduce_only=True)
+                                    print(f"   [CRITICAL] Panic close executed successfully")
+                                except Exception as panic_e:
+                                    print(f"   [CRITICAL] Panic close also failed: {panic_e} — MANUAL INTERVENTION REQUIRED")
+                                db.log("CRITICAL", "order", "SL placement failed — entry panic closed",
+                                       {"symbol": current_symbol, "qty": qty, "error": str(e)})
+                                continue  # skip position registration — treat as if no trade happened
 
                             try:
                                 tp_qty = qty if TAKE_PROFIT_MODE == "single" else qty * PARTIAL_TP_FRACTIONS[0]
@@ -1026,7 +1040,10 @@ def run_live():
                                     print(f"   [TARGET] {tp_label} #{tp_oid} @ ${sig.take_profit:,.2f} "
                                           f"({tp_pct:.0f}%)")
                             except Exception as e:
-                                print(f"   [WARN] TP failed: {e}")
+                                # TP failure is non-critical (SL is already in place); log and continue
+                                print(f"   [WARN] TP placement failed: {e} — position protected by SL only")
+                                db.log("WARN", "order", "TP placement failed — SL protection active",
+                                       {"symbol": current_symbol, "error": str(e)})
 
                         with _position_lock:
                             pos_id = db.open_position_live(
