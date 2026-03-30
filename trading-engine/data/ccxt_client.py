@@ -208,7 +208,10 @@ def place_market_order(symbol: str, side: str, quantity: float,
     """
     ex = get_exchange()
     sym = _ccxt_symbol(symbol)
-    params: dict = {'newOrderRespType': 'FULL'}
+    # newClientOrderId makes retries idempotent: Binance rejects a second
+    # request with the same ID instead of creating a duplicate order.
+    client_oid = uuid.uuid4().hex[:32]
+    params: dict = {'newOrderRespType': 'FULL', 'newClientOrderId': client_oid}
     if reduce_only and USE_FUTURES:
         params['reduceOnly'] = True
 
@@ -243,11 +246,14 @@ def place_stop_loss_order(symbol: str, side: str, quantity: float,
                           stop_price: float) -> dict:
     ex = get_exchange()
     sym = _ccxt_symbol(symbol)
+    client_oid = uuid.uuid4().hex[:32]
     if USE_FUTURES:
-        params = {'stopPrice': stop_price, 'closePosition': False, 'newOrderRespType': 'FULL'}
+        params = {'stopPrice': stop_price, 'closePosition': False,
+                  'newOrderRespType': 'FULL', 'newClientOrderId': client_oid}
         order_type = 'STOP_MARKET'
     else:
-        params = {'stopPrice': stop_price, 'timeInForce': 'GTC', 'newOrderRespType': 'FULL'}
+        params = {'stopPrice': stop_price, 'timeInForce': 'GTC',
+                  'newOrderRespType': 'FULL', 'newClientOrderId': client_oid}
         order_type = 'stop_loss_limit'
         # Limit price slightly worse than stop
         stop_price_limit = stop_price * (0.999 if side.upper() == 'SELL' else 1.001)
@@ -272,8 +278,10 @@ def place_take_profit_order(symbol: str, side: str, quantity: float,
                             stop_price: float) -> dict:
     ex = get_exchange()
     sym = _ccxt_symbol(symbol)
+    client_oid = uuid.uuid4().hex[:32]
     if USE_FUTURES:
-        params = {'stopPrice': stop_price, 'closePosition': False, 'newOrderRespType': 'FULL'}
+        params = {'stopPrice': stop_price, 'closePosition': False,
+                  'newOrderRespType': 'FULL', 'newClientOrderId': client_oid}
         try:
             order = ex.create_order(sym, 'take_profit_market', side.lower(), quantity, params=params)
             return parse_order_response(order)
@@ -281,7 +289,8 @@ def place_take_profit_order(symbol: str, side: str, quantity: float,
             log.error(f"place_take_profit_order (futures) error: {e}")
             return {'error': str(e), 'fill_price': 0, 'status': 'FAILED', 'raw': {}}
     else:
-        params = {'stopPrice': stop_price, 'timeInForce': 'GTC', 'newOrderRespType': 'FULL'}
+        params = {'stopPrice': stop_price, 'timeInForce': 'GTC',
+                  'newOrderRespType': 'FULL', 'newClientOrderId': client_oid}
         stop_price_limit = stop_price * (1.001 if side.upper() == 'SELL' else 0.999)
         try:
             order = ex.create_order(sym, 'take_profit_limit', side.lower(), quantity,
