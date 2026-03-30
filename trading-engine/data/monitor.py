@@ -337,8 +337,16 @@ def cleanup_ghost_positions() -> list:
     """
     Remove Redis positions whose symbol/direction no longer exists on Binance.
     Only checks LIVE and MANUAL_ADOPTED positions.
+
+    Grace period: positions opened within the last GHOST_GRACE_SECONDS are
+    skipped entirely — Binance's positionRisk endpoint sometimes lags a few
+    seconds behind a fresh order, and we must not delete a brand-new position
+    just because the exchange hasn't reflected it yet.
+
     Returns list of removed position IDs.
     """
+    GHOST_GRACE_SECONDS = 300  # 5 minutes — conservative buffer for exchange lag
+
     removed = []
     try:
         bot_positions = get_open_positions_from_redis()
@@ -348,9 +356,25 @@ def cleanup_ghost_positions() -> list:
         binance_live = bnb.get_account_positions()   # actual open on Binance (via ccxt_client)
         live_keys = {(p["symbol"], p["direction"]) for p in binance_live}
 
+        now = datetime.utcnow()
+
         for pos in bot_positions:
             if pos.get("source") not in ("LIVE", "MANUAL", "MANUAL_ADOPTED"):
                 continue
+
+            # Grace period: never delete a position that was opened recently.
+            # This prevents a race where the position exists in Redis but hasn't
+            # propagated to Binance's positionRisk yet.
+            entry_time_str = pos.get("entry_time")
+            if entry_time_str:
+                try:
+                    entry_dt = datetime.fromisoformat(str(entry_time_str).replace("Z", ""))
+                    age_seconds = (now - entry_dt).total_seconds()
+                    if age_seconds < GHOST_GRACE_SECONDS:
+                        continue  # too new — skip
+                except Exception:
+                    pass  # unparseable timestamp → proceed with check
+
             key = (pos.get("symbol"), pos.get("direction"))
             if key not in live_keys:
                 pid = pos.get("id")
