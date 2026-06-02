@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Kline = [
   number,
@@ -81,6 +81,18 @@ type LoadState = {
   loading: boolean;
 };
 
+type DashboardSocketMessage =
+  | {
+      type: "dashboard";
+      payload: DashboardData;
+    }
+  | {
+      type: "error";
+      payload: {
+        error: string;
+      };
+    };
+
 const formatUsd = (value: string | number | undefined, maximumFractionDigits = 2) => {
   const number = Number(value ?? 0);
   return new Intl.NumberFormat("en-US", {
@@ -148,6 +160,8 @@ function DetailTile({ label, value, tone = "neutral" }: { label: string; value: 
 
 export function App() {
   const [state, setState] = useState<LoadState>({ data: null, error: null, loading: true });
+  const [socketStatus, setSocketStatus] = useState<"connecting" | "live" | "reconnecting" | "offline">("connecting");
+  const socketRef = useRef<WebSocket | null>(null);
 
   async function loadDashboard() {
     setState((current) => ({ ...current, loading: true, error: null }));
@@ -171,9 +185,60 @@ export function App() {
   }
 
   useEffect(() => {
-    loadDashboard();
-    const timer = window.setInterval(loadDashboard, 10_000);
-    return () => window.clearInterval(timer);
+    let reconnectTimer: number | undefined;
+    let stopped = false;
+
+    function connect() {
+      setSocketStatus(socketRef.current ? "reconnecting" : "connecting");
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${window.location.host}/api/binance/bnb-dashboard/socket`);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        setSocketStatus("live");
+      };
+
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data) as DashboardSocketMessage;
+
+        if (message.type === "dashboard") {
+          setState({ data: message.payload, error: null, loading: false });
+          return;
+        }
+
+        setState((current) => ({
+          data: current.data,
+          error: message.payload.error,
+          loading: false
+        }));
+      };
+
+      socket.onerror = () => {
+        setSocketStatus("offline");
+      };
+
+      socket.onclose = () => {
+        if (socketRef.current === socket) {
+          socketRef.current = null;
+        }
+
+        if (!stopped) {
+          setSocketStatus("reconnecting");
+          reconnectTimer = window.setTimeout(connect, 2000);
+        }
+      };
+    }
+
+    connect();
+
+    return () => {
+      stopped = true;
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+      }
+      socketRef.current?.close();
+      socketRef.current = null;
+    };
   }, []);
 
   const data = state.data;
@@ -188,6 +253,17 @@ export function App() {
   const totalNotional = activePositions.reduce((sum, position) => sum + Math.abs(Number(position.notional ?? 0)), 0);
   const updatedAt = data ? new Date(data.updatedAt).toLocaleTimeString() : "Connecting";
 
+  function refreshDashboard() {
+    setState((current) => ({ ...current, loading: true, error: null }));
+
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send("refresh");
+      return;
+    }
+
+    loadDashboard();
+  }
+
   return (
     <main className="min-h-screen bg-black bg-[radial-gradient(circle_at_10%_0%,rgba(14,165,233,0.18),transparent_26rem),radial-gradient(circle_at_90%_4%,rgba(168,85,247,0.14),transparent_24rem)] text-neutral-100">
       <div className="border-b-2 border-neutral-800 bg-neutral-950 px-4 py-3">
@@ -198,7 +274,7 @@ export function App() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-neutral-700 px-3 py-2 text-xs font-black uppercase tracking-widest text-neutral-400">
-              {state.error ? "Feed issue" : `Last sync ${updatedAt}`}
+              {state.error ? "Feed issue" : `Socket ${socketStatus} / ${updatedAt}`}
             </span>
             <span className="rounded-full border border-neutral-700 px-3 py-2 text-xs font-black uppercase tracking-widest text-neutral-400">
               {data?.private.configured ? "Private API loaded" : "Public only"}
@@ -206,7 +282,7 @@ export function App() {
             <button
               className="rounded-full border-2 border-neutral-800 bg-sky-400 px-4 py-2 text-xs font-black uppercase tracking-widest text-neutral-950 disabled:cursor-wait disabled:opacity-60"
               type="button"
-              onClick={loadDashboard}
+              onClick={refreshDashboard}
               disabled={state.loading}
             >
               {state.loading ? "Syncing" : "Refresh"}

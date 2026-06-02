@@ -3,8 +3,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, loadEnv, type Plugin } from "vite";
+import { WebSocket, WebSocketServer } from "ws";
 
 const SYMBOL = "BNBUSDT";
+const DASHBOARD_SOCKET_PATH = "/api/binance/bnb-dashboard/socket";
 
 type Env = Record<string, string>;
 
@@ -12,6 +14,10 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(body));
+}
+
+function socketMessage(type: string, payload: unknown) {
+  return JSON.stringify({ type, payload });
 }
 
 async function fetchJson<T>(url: URL, init?: RequestInit): Promise<T> {
@@ -116,6 +122,78 @@ function binanceApiPlugin(env: Env): Plugin {
   return {
     name: "tradingclaw-binance-readonly-api",
     configureServer(server) {
+      const socketIntervalMs = Math.max(Number(env.DASHBOARD_SOCKET_INTERVAL_MS || 5000), 1000);
+      const wss = new WebSocketServer({ noServer: true });
+      const clients = new Set<WebSocket>();
+
+      async function sendDashboard(ws: WebSocket) {
+        try {
+          ws.send(socketMessage("dashboard", await getDashboardData(env)));
+        } catch (error) {
+          ws.send(
+            socketMessage("error", {
+              error: error instanceof Error ? error.message : "Unable to load Binance data"
+            })
+          );
+        }
+      }
+
+      async function broadcastDashboard() {
+        if (!clients.size) {
+          return;
+        }
+
+        try {
+          const payload = socketMessage("dashboard", await getDashboardData(env));
+          for (const client of clients) {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(payload);
+            }
+          }
+        } catch (error) {
+          const payload = socketMessage("error", {
+            error: error instanceof Error ? error.message : "Unable to load Binance data"
+          });
+          for (const client of clients) {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(payload);
+            }
+          }
+        }
+      }
+
+      wss.on("connection", (ws) => {
+        clients.add(ws);
+        sendDashboard(ws);
+
+        ws.on("message", (message) => {
+          if (message.toString() === "refresh") {
+            sendDashboard(ws);
+          }
+        });
+
+        ws.on("close", () => {
+          clients.delete(ws);
+        });
+      });
+
+      server.httpServer?.on("upgrade", (req, socket, head) => {
+        const url = req.url ? new URL(req.url, "http://localhost") : null;
+        if (url?.pathname !== DASHBOARD_SOCKET_PATH) {
+          return;
+        }
+
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit("connection", ws, req);
+        });
+      });
+
+      const timer = setInterval(broadcastDashboard, socketIntervalMs);
+      server.httpServer?.on("close", () => {
+        clearInterval(timer);
+        wss.close();
+      });
+
       server.middlewares.use("/api/binance/bnb-dashboard", async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== "GET") {
           sendJson(res, 405, { error: "Method not allowed" });
