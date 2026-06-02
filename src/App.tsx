@@ -100,6 +100,9 @@ const formatPercent = (value: string | number | undefined, fractionDigits = 2) =
   return `${number >= 0 ? "+" : ""}${number.toFixed(fractionDigits)}%`;
 };
 
+const panel = "border-2 border-neutral-950 bg-white";
+const label = "text-[0.68rem] font-black uppercase tracking-[0.18em] text-neutral-500";
+
 function Sparkline({ klines }: { klines: Kline[] }) {
   const points = useMemo(() => {
     const closes = klines.map((kline) => Number(kline[4])).filter(Number.isFinite);
@@ -118,46 +121,56 @@ function Sparkline({ klines }: { klines: Kline[] }) {
 
   return (
     <svg
-      className="min-h-[320px] w-full rounded-[2rem] border border-white/10 bg-[linear-gradient(rgba(148,163,184,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.08)_1px,transparent_1px),radial-gradient(circle_at_50%_28%,rgba(59,130,246,0.2),transparent_26rem),linear-gradient(180deg,rgba(15,23,42,0.86),rgba(2,6,23,0.92))] bg-[length:42px_42px,42px_42px,auto,auto] shadow-inner shadow-black/30 lg:h-[540px]"
+      className="h-[330px] w-full border-2 border-neutral-950 bg-[linear-gradient(rgba(10,10,10,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(10,10,10,0.08)_1px,transparent_1px),linear-gradient(180deg,#ffffff,#f3f4f6)] bg-[length:34px_34px,34px_34px,auto] md:h-[460px]"
       viewBox="0 0 100 100"
       preserveAspectRatio="none"
       aria-label="BNB price chart"
     >
       <defs>
         <linearGradient id="chartGlow" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="#38bdf8" />
-          <stop offset="48%" stopColor="#818cf8" />
-          <stop offset="100%" stopColor="#c084fc" />
+          <stop offset="0%" stopColor="#111111" />
+          <stop offset="46%" stopColor="#2563eb" />
+          <stop offset="100%" stopColor="#a855f7" />
         </linearGradient>
       </defs>
-      <polyline points={points} fill="none" stroke="url(#chartGlow)" strokeLinecap="round" strokeWidth="3" />
+      <polyline points={points} fill="none" stroke="url(#chartGlow)" strokeLinecap="round" strokeWidth="2.6" />
     </svg>
   );
 }
 
-function MetricCard({
-  label,
-  value,
-  subValue,
-  tone = "neutral"
-}: {
-  label: string;
-  value: string;
-  subValue?: string;
-  tone?: "positive" | "negative" | "neutral";
-}) {
-  const toneStyles = {
-    positive: "border-emerald-300/20 bg-emerald-400/[0.07]",
-    negative: "border-rose-300/20 bg-rose-400/[0.07]",
-    neutral: "border-white/10 bg-white/[0.045]"
-  };
+function StatCard({ label: title, value, meta, accent = "bg-neutral-950 text-white" }: { label: string; value: string; meta?: string; accent?: string }) {
+  return (
+    <article className={`${panel} min-h-40 p-5 transition hover:-translate-y-1 hover:shadow-[8px_8px_0_#111]`}>
+      <div className="flex items-start justify-between gap-3">
+        <span className={label}>{title}</span>
+        <span className={`rounded-full px-2 py-1 text-[0.62rem] font-black uppercase tracking-widest ${accent}`}>Live</span>
+      </div>
+      <strong className="mt-8 block text-3xl font-black leading-none tracking-[-0.07em] text-neutral-950 sm:text-4xl">{value}</strong>
+      {meta ? <small className="mt-3 block text-sm font-bold text-neutral-500">{meta}</small> : null}
+    </article>
+  );
+}
+
+function CatalogCard({ name, description, tag, tone = "neutral" }: { name: string; description: string; tag: string; tone?: "positive" | "negative" | "neutral" }) {
+  const toneClass = tone === "positive" ? "bg-emerald-300" : tone === "negative" ? "bg-rose-300" : "bg-blue-300";
 
   return (
-    <section className={`rounded-3xl border p-4 shadow-2xl shadow-black/10 ${toneStyles[tone]}`}>
-      <span className="text-[0.68rem] font-black uppercase tracking-[0.18em] text-slate-500">{label}</span>
-      <strong className="mt-3 block text-2xl font-black tracking-[-0.06em] text-slate-100">{value}</strong>
-      {subValue ? <small className="mt-1 block text-sm font-semibold text-slate-500">{subValue}</small> : null}
-    </section>
+    <article className={`${panel} group flex min-h-52 flex-col justify-between p-5 transition hover:-translate-y-1 hover:shadow-[10px_10px_0_#111]`}>
+      <div>
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <span className={`size-9 border-2 border-neutral-950 ${toneClass}`} />
+          <span className="rounded-full border-2 border-neutral-950 px-2.5 py-1 text-[0.62rem] font-black uppercase tracking-widest text-neutral-950">
+            {tag}
+          </span>
+        </div>
+        <h3 className="text-2xl font-black tracking-[-0.06em] text-neutral-950">{name}</h3>
+        <p className="mt-3 text-sm font-semibold leading-6 text-neutral-600">{description}</p>
+      </div>
+      <div className="mt-6 flex items-center justify-between border-t border-neutral-950 pt-4 text-xs font-black uppercase tracking-[0.16em] text-neutral-500">
+        <span>Analysis</span>
+        <span>——</span>
+      </div>
+    </article>
   );
 }
 
@@ -203,294 +216,225 @@ export function App() {
   const nextFunding = data?.market.premiumIndex.nextFundingTime
     ? new Date(data.market.premiumIndex.nextFundingTime).toLocaleTimeString()
     : "-";
-
-  const priceTone = priceChange >= 0 ? "text-emerald-300" : "text-rose-300";
-  const pnlTone = pnl >= 0 ? "text-emerald-300" : "text-rose-300";
   const positionSide = hasPosition ? (positionAmount > 0 ? "Long" : "Short") : "Flat";
+  const updatedAt = data ? new Date(data.updatedAt).toLocaleTimeString() : "Connecting";
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#050816] text-slate-100">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_12%_5%,rgba(14,165,233,0.22),transparent_28rem),radial-gradient(circle_at_88%_8%,rgba(168,85,247,0.18),transparent_26rem),linear-gradient(135deg,#050816_0%,#0b1020_48%,#030712_100%)]" />
-      <div className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(148,163,184,0.045)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.045)_1px,transparent_1px)] bg-[length:86px_86px] opacity-80 [mask-image:linear-gradient(to_bottom,black,transparent_85%)]" />
+    <main className="min-h-screen bg-[#f4f1ea] text-neutral-950">
+      <div className="border-b border-neutral-950 bg-neutral-950 px-4 py-2 text-white">
+        <div className="mx-auto flex max-w-[1540px] flex-wrap items-center justify-between gap-3 text-xs font-black uppercase tracking-[0.18em]">
+          <span>Sponsor getmarket.md and monitor BNB live</span>
+          <span>{state.error ? "Feed issue" : `Live read-only / ${updatedAt}`}</span>
+        </div>
+      </div>
 
-      <div className="relative mx-auto flex min-h-screen max-w-[1800px] gap-4 p-3 sm:p-4">
-        <aside className="hidden w-[76px] shrink-0 flex-col items-center gap-4 rounded-[2rem] border border-white/10 bg-white/[0.045] p-3 shadow-2xl shadow-black/30 backdrop-blur-2xl xl:flex">
-          <div className="grid size-12 place-items-center rounded-2xl bg-gradient-to-br from-sky-400 via-indigo-400 to-fuchsia-400 text-sm font-black text-white shadow-lg shadow-sky-950/40">
-            TC
+      <section className="mx-auto max-w-[1540px] px-4 py-5 sm:px-6 lg:px-8">
+        <nav className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-950 pb-5">
+          <div className="text-2xl font-black tracking-[-0.08em]">getmarket.md</div>
+          <div className="flex flex-wrap gap-2">
+            {['Market', 'Position', 'Risk', 'Collateral'].map((item) => (
+              <span className="rounded-full border-2 border-neutral-950 bg-white px-4 py-2 text-xs font-black uppercase tracking-widest" key={item}>
+                {item}
+              </span>
+            ))}
           </div>
-          {["MKT", "POS", "RISK", "API"].map((item, index) => (
-            <div
-              className={`grid size-12 place-items-center rounded-2xl border text-[0.62rem] font-black ${
-                index === 0
-                  ? "border-sky-300/30 bg-sky-300/15 text-sky-200"
-                  : "border-white/8 bg-white/[0.035] text-slate-500"
-              }`}
-              key={item}
-            >
-              {item}
-            </div>
-          ))}
-          <div className="mt-auto h-24 w-1 rounded-full bg-gradient-to-b from-sky-300 via-indigo-300 to-fuchsia-300" />
-        </aside>
+        </nav>
 
-        <section className="min-w-0 flex-1 space-y-4">
-          <header className="grid gap-3 rounded-[2rem] border border-white/10 bg-white/[0.055] p-3 shadow-2xl shadow-black/25 backdrop-blur-2xl lg:grid-cols-[1fr_auto] lg:items-center">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.22em] text-sky-300">TradingClaw Command Center</p>
-              <h1 className="mt-2 text-3xl font-black tracking-[-0.06em] text-white sm:text-4xl">BNB Perpetual Intelligence</h1>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3">
-                <span className={`size-2.5 rounded-full ${state.error ? "bg-rose-400" : "bg-emerald-400"}`} />
-                <div>
-                  <strong className="block text-sm font-black text-slate-100">{state.error ? "Feed Issue" : "Live Read-Only"}</strong>
-                  <small className="text-xs font-semibold text-slate-500">
-                    {data ? new Date(data.updatedAt).toLocaleTimeString() : "Connecting..."}
-                  </small>
-                </div>
-              </div>
+        {state.error ? <div className="mb-5 border-2 border-neutral-950 bg-rose-200 p-4 font-bold">Binance API: {state.error}</div> : null}
+        {data && !data.private.configured ? (
+          <div className="mb-5 border-2 border-neutral-950 bg-blue-100 p-4 text-sm font-bold">
+            Public market data is live. Add <code>BINANCE_API_KEY</code> and <code>BINANCE_API_SECRET</code> in <code>.env.local</code> to view your read-only account state.
+          </div>
+        ) : null}
+
+        <header className="grid gap-5 lg:grid-cols-[1.35fr_0.65fr]">
+          <article className="border-2 border-neutral-950 bg-white p-5 sm:p-8">
+            <p className="mb-6 inline-flex border-2 border-neutral-950 bg-blue-300 px-3 py-1 text-xs font-black uppercase tracking-[0.18em]">
+              Production-grade BNBUSDT analysis
+            </p>
+            <h1 className="max-w-5xl text-6xl font-black leading-[0.84] tracking-[-0.095em] text-neutral-950 sm:text-7xl lg:text-8xl">
+              {data?.symbol ?? "BNBUSDT"} perpetual design index
+            </h1>
+            <p className="mt-6 max-w-2xl text-lg font-semibold leading-8 text-neutral-600">
+              Analyzed market patterns, position state, and account signals as a crisp DESIGN.md-inspired catalog. Built for fast scanning, not terminal clutter.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
               <button
-                className="rounded-2xl border border-sky-300/30 bg-gradient-to-br from-sky-400 to-indigo-500 px-5 py-3 text-sm font-black text-white shadow-lg shadow-sky-950/30 transition hover:-translate-y-0.5 hover:border-sky-200/50 disabled:cursor-wait disabled:opacity-50"
+                className="border-2 border-neutral-950 bg-neutral-950 px-5 py-3 text-sm font-black uppercase tracking-widest text-white shadow-[6px_6px_0_#93c5fd] transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none disabled:cursor-wait disabled:opacity-60"
                 type="button"
                 onClick={loadDashboard}
                 disabled={state.loading}
               >
-                {state.loading ? "Syncing" : "Refresh"}
+                {state.loading ? "Syncing" : "Refresh data"}
               </button>
+              <span className="border-2 border-neutral-950 bg-white px-5 py-3 text-sm font-black uppercase tracking-widest">
+                Built on Binance Futures
+              </span>
             </div>
-          </header>
+          </article>
 
-          {state.error ? (
-            <div className="rounded-3xl border border-rose-300/20 bg-rose-500/10 p-4 text-sm font-semibold text-rose-100">
-              Binance API: {state.error}
+          <aside className="grid border-2 border-neutral-950 bg-neutral-950 text-white">
+            <div className="border-b border-white/20 p-5">
+              <span className="text-xs font-black uppercase tracking-[0.18em] text-neutral-400">Last Price</span>
+              <strong className="mt-5 block text-6xl font-black leading-none tracking-[-0.09em]">{formatUsd(data?.market.ticker.lastPrice, 3)}</strong>
+              <small className={priceChange >= 0 ? "mt-4 block text-xl font-black text-emerald-300" : "mt-4 block text-xl font-black text-rose-300"}>
+                {formatPercent(data?.market.ticker.priceChangePercent)} 24h
+              </small>
             </div>
-          ) : null}
-          {data && !data.private.configured ? (
-            <div className="rounded-3xl border border-sky-300/15 bg-sky-400/10 p-4 text-sm font-semibold text-slate-300">
-              Public market data is live. Add <code className="text-sky-200">BINANCE_API_KEY</code> and{" "}
-              <code className="text-sky-200">BINANCE_API_SECRET</code> in <code className="text-sky-200">.env.local</code> to view
-              your read-only account state.
-            </div>
-          ) : null}
-
-          <section className="grid gap-4 2xl:grid-cols-[360px_minmax(0,1fr)_420px]">
-            <div className="space-y-4">
-              <article className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.055] shadow-2xl shadow-black/25 backdrop-blur-2xl">
-                <div className="border-b border-white/10 p-5">
-                  <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-500">Instrument</p>
-                  <h2 className="mt-3 text-5xl font-black tracking-[-0.08em] text-white">{data?.symbol ?? "BNBUSDT"}</h2>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {["Binance Futures", "USD-M", "10s sync"].map((item) => (
-                      <span className="rounded-full border border-white/10 bg-slate-950/40 px-3 py-1 text-xs font-bold text-slate-400" key={item}>
-                        {item}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="p-5">
-                  <span className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Last Price</span>
-                  <strong className={`mt-3 block text-5xl font-black tracking-[-0.08em] sm:text-6xl ${priceTone}`}>
-                    {formatUsd(data?.market.ticker.lastPrice, 3)}
-                  </strong>
-                  <small className={`mt-2 block text-lg font-black ${priceTone}`}>
-                    {formatPercent(data?.market.ticker.priceChangePercent)} 24h
-                  </small>
-                </div>
-              </article>
-
-              <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-1">
-                <MetricCard label="24h High" value={formatUsd(data?.market.ticker.highPrice)} tone="positive" />
-                <MetricCard label="24h Low" value={formatUsd(data?.market.ticker.lowPrice)} tone="negative" />
-                <MetricCard label="Mark Price" value={formatUsd(data?.market.premiumIndex.markPrice, 3)} />
-                <MetricCard label="Index Price" value={formatUsd(data?.market.premiumIndex.indexPrice, 3)} />
+            <div className="grid grid-cols-2 divide-x divide-white/20">
+              <div className="p-5">
+                <span className="text-xs font-black uppercase tracking-widest text-neutral-400">Funding</span>
+                <strong className="mt-3 block text-2xl font-black tracking-[-0.06em]">
+                  {formatPercent(Number(data?.market.premiumIndex.lastFundingRate ?? 0) * 100, 4)}
+                </strong>
+                <small className="mt-1 block text-neutral-500">Next {nextFunding}</small>
+              </div>
+              <div className="p-5">
+                <span className="text-xs font-black uppercase tracking-widest text-neutral-400">Open Interest</span>
+                <strong className="mt-3 block text-2xl font-black tracking-[-0.06em]">
+                  {formatNumber(data?.market.openInterest.openInterest, 2)}
+                </strong>
+                <small className="mt-1 block text-neutral-500">BNB contracts</small>
               </div>
             </div>
+          </aside>
+        </header>
 
-            <article className="rounded-[2rem] border border-white/10 bg-white/[0.055] p-4 shadow-2xl shadow-black/25 backdrop-blur-2xl">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.22em] text-sky-300">Market Flow</p>
-                  <h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-white">Momentum Surface</h2>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {["1m", "5m", "15m", "1h"].map((item) => (
-                    <span
-                      className={`rounded-full border px-3 py-1.5 text-xs font-black ${
-                        item === "5m"
-                          ? "border-sky-300/30 bg-sky-300/15 text-sky-100"
-                          : "border-white/10 bg-slate-950/30 text-slate-500"
-                      }`}
-                      key={item}
-                    >
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              {data ? (
-                <Sparkline klines={data.market.klines} />
-              ) : (
-                <div className="grid min-h-[320px] place-items-center rounded-[2rem] border border-white/10 bg-slate-950/40 text-slate-500 lg:h-[540px]">
-                  Loading chart...
-                </div>
-              )}
-              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <MetricCard label="Open Interest" value={`${formatNumber(data?.market.openInterest.openInterest, 2)} BNB`} />
-                <MetricCard label="Quote Volume" value={formatUsd(data?.market.ticker.quoteVolume, 0)} />
-                <MetricCard label="BNB Volume" value={formatNumber(data?.market.ticker.volume, 2)} />
-                <MetricCard
-                  label="Funding"
-                  value={formatPercent(Number(data?.market.premiumIndex.lastFundingRate ?? 0) * 100, 4)}
-                  subValue={`Next ${nextFunding}`}
-                />
-              </div>
-            </article>
-
-            <div className="space-y-4">
-              <article className="rounded-[2rem] border border-white/10 bg-white/[0.055] p-5 shadow-2xl shadow-black/25 backdrop-blur-2xl">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-500">Position</p>
-                    <h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-white">Exposure</h2>
-                  </div>
-                  <span
-                    className={`rounded-full border px-3 py-1.5 text-xs font-black ${
-                      positionSide === "Short"
-                        ? "border-rose-300/25 bg-rose-400/10 text-rose-200"
-                        : "border-emerald-300/25 bg-emerald-400/10 text-emerald-200"
-                    }`}
-                  >
-                    {positionSide}
-                  </span>
-                </div>
-                <div className="mt-5 rounded-3xl border border-sky-300/15 bg-gradient-to-br from-sky-400/10 via-indigo-400/10 to-fuchsia-400/10 p-5">
-                  <span className="text-xs font-black uppercase tracking-[0.18em] text-slate-500">Size</span>
-                  <strong className="mt-3 block text-4xl font-black tracking-[-0.07em] text-white">
-                    {hasPosition ? `${formatNumber(Math.abs(positionAmount), 4)} BNB` : "--"}
-                  </strong>
-                  <small className={`mt-2 block text-base font-black ${pnlTone}`}>UPnL {formatUsd(pnl, 2)}</small>
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <MetricCard label="Entry" value={formatUsd(position?.entryPrice, 3)} />
-                  <MetricCard label="Mark" value={formatUsd(position?.markPrice ?? data?.market.premiumIndex.markPrice, 3)} />
-                  <MetricCard label="Liq" value={hasPosition ? formatUsd(position?.liquidationPrice, 3) : "--"} tone="negative" />
-                  <MetricCard label="Leverage" value={position?.leverage ? `${position.leverage}x` : "--"} />
-                </div>
-              </article>
-
-              <article className="rounded-[2rem] border border-white/10 bg-white/[0.055] p-5 shadow-2xl shadow-black/25 backdrop-blur-2xl">
-                <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-500">Account Risk</p>
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <MetricCard label="Wallet" value={formatUsd(data?.private.account?.totalWalletBalance)} />
-                  <MetricCard label="Margin" value={formatUsd(data?.private.account?.totalMarginBalance)} />
-                  <MetricCard label="Available" value={formatUsd(data?.private.account?.availableBalance)} tone="positive" />
-                  <MetricCard label="Maint" value={formatUsd(data?.private.account?.totalMaintMargin)} tone="negative" />
-                </div>
-              </article>
-            </div>
-          </section>
-
-          <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
-            <article className="rounded-[2rem] border border-white/10 bg-white/[0.055] p-4 shadow-2xl shadow-black/25 backdrop-blur-2xl">
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-500">Portfolio</p>
-                  <h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-white">Open Positions</h2>
-                </div>
-                <span className="rounded-full border border-sky-300/20 bg-sky-300/10 px-3 py-1.5 text-xs font-black text-sky-100">
-                  {activePositions.length} active
-                </span>
-              </div>
-              {activePositions.length ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[780px] border-collapse">
-                    <thead>
-                      <tr className="border-y border-white/10 bg-slate-950/35 text-[0.68rem] uppercase tracking-[0.14em] text-slate-500">
-                        <th className="px-3 py-3 text-left">Symbol</th>
-                        <th className="px-3 py-3 text-right">Side</th>
-                        <th className="px-3 py-3 text-right">Size</th>
-                        <th className="px-3 py-3 text-right">Entry</th>
-                        <th className="px-3 py-3 text-right">Mark</th>
-                        <th className="px-3 py-3 text-right">PnL</th>
-                        <th className="px-3 py-3 text-right">Lev</th>
-                        <th className="px-3 py-3 text-right">Liq</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activePositions.map((item) => {
-                        const size = Number(item.positionAmt);
-                        const itemPnl = Number(item.unRealizedProfit);
-
-                        return (
-                          <tr className="border-b border-white/10 text-sm font-bold text-slate-200" key={item.symbol}>
-                            <td className="px-3 py-3 text-left">{item.symbol}</td>
-                            <td className={`px-3 py-3 text-right ${size >= 0 ? "text-emerald-300" : "text-rose-300"}`}>
-                              {size >= 0 ? "Long" : "Short"}
-                            </td>
-                            <td className="px-3 py-3 text-right">{formatNumber(Math.abs(size), 4)}</td>
-                            <td className="px-3 py-3 text-right">{formatUsd(item.entryPrice, 4)}</td>
-                            <td className="px-3 py-3 text-right">{formatUsd(item.markPrice, 4)}</td>
-                            <td className={`px-3 py-3 text-right ${itemPnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>
-                              {formatUsd(itemPnl)}
-                            </td>
-                            <td className="px-3 py-3 text-right">{item.leverage}x</td>
-                            <td className="px-3 py-3 text-right">{formatUsd(item.liquidationPrice, 4)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="grid min-h-44 place-items-center rounded-3xl border border-dashed border-white/15 bg-slate-950/30 p-6 text-center text-sm font-semibold text-slate-500">
-                  No open futures positions from the read-only account response.
-                </div>
-              )}
-            </article>
-
-            <article className="rounded-[2rem] border border-white/10 bg-white/[0.055] p-4 shadow-2xl shadow-black/25 backdrop-blur-2xl">
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-500">Collateral</p>
-                  <h2 className="mt-2 text-2xl font-black tracking-[-0.05em] text-white">Balances</h2>
-                </div>
-                <span className="rounded-full border border-sky-300/20 bg-sky-300/10 px-3 py-1.5 text-xs font-black text-sky-100">
-                  {accountAssets.length} assets
-                </span>
-              </div>
-              {accountAssets.length ? (
-                <div className="space-y-3">
-                  {accountAssets.map((asset) => (
-                    <div className="rounded-3xl border border-white/10 bg-slate-950/30 p-4" key={asset.asset}>
-                      <div className="flex items-center justify-between gap-3">
-                        <strong className="text-lg font-black text-sky-100">{asset.asset}</strong>
-                        <span
-                          className={
-                            Number(asset.unrealizedProfit) >= 0
-                              ? "text-sm font-black text-emerald-300"
-                              : "text-sm font-black text-rose-300"
-                          }
-                        >
-                          PnL {formatNumber(asset.unrealizedProfit, 6)}
-                        </span>
-                      </div>
-                      <div className="mt-3 grid gap-2 text-sm font-semibold text-slate-400 sm:grid-cols-3">
-                        <span>Wallet {formatNumber(asset.walletBalance, 6)}</span>
-                        <span>Margin {formatNumber(asset.marginBalance, 6)}</span>
-                        <span>Available {formatNumber(asset.availableBalance, 6)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="grid min-h-44 place-items-center rounded-3xl border border-dashed border-white/15 bg-slate-950/30 p-6 text-center text-sm font-semibold text-slate-500">
-                  No non-zero assets found, or private API keys are not loaded yet.
-                </div>
-              )}
-            </article>
-          </section>
+        <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Mark" value={formatUsd(data?.market.premiumIndex.markPrice, 3)} />
+          <StatCard label="Index" value={formatUsd(data?.market.premiumIndex.indexPrice, 3)} />
+          <StatCard label="24h High" value={formatUsd(data?.market.ticker.highPrice)} accent="bg-emerald-300 text-neutral-950" />
+          <StatCard label="24h Low" value={formatUsd(data?.market.ticker.lowPrice)} accent="bg-rose-300 text-neutral-950" />
         </section>
-      </div>
+
+        <section className="mt-8 grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <article className="border-2 border-neutral-950 bg-white p-5">
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <p className={label}>Featured Design</p>
+                <h2 className="mt-2 text-4xl font-black tracking-[-0.075em]">BNB Market Card</h2>
+              </div>
+              <div className="flex gap-2">
+                {['1m', '5m', '15m', '1h'].map((item) => (
+                  <span className={item === '5m' ? 'border-2 border-neutral-950 bg-neutral-950 px-3 py-1 text-xs font-black text-white' : 'border-2 border-neutral-950 bg-white px-3 py-1 text-xs font-black'} key={item}>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {data ? <Sparkline klines={data.market.klines} /> : <div className="grid h-[330px] place-items-center border-2 border-neutral-950 bg-neutral-100 font-black text-neutral-500 md:h-[460px]">Loading chart...</div>}
+          </article>
+
+          <div className="grid gap-4">
+            <CatalogCard
+              name="Exposure"
+              tag={positionSide}
+              tone={positionSide === 'Short' ? 'negative' : 'positive'}
+              description={`Size ${hasPosition ? `${formatNumber(Math.abs(positionAmount), 4)} BNB` : '--'} / UPnL ${formatUsd(pnl, 2)} / leverage ${position?.leverage ? `${position.leverage}x` : '--'}.`}
+            />
+            <CatalogCard
+              name="Risk balance"
+              tag="Risk"
+              description={`Wallet ${formatUsd(data?.private.account?.totalWalletBalance)} / Margin ${formatUsd(data?.private.account?.totalMarginBalance)} / Available ${formatUsd(data?.private.account?.availableBalance)}.`}
+            />
+          </div>
+        </section>
+
+        <section className="mt-8">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-950 pb-4">
+            <div>
+              <p className={label}>Find Designs</p>
+              <h2 className="mt-1 text-4xl font-black tracking-[-0.075em]">Design Systems Analysis</h2>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {['All', `${activePositions.length} Active`, `${accountAssets.length} Assets`, 'Bookmarked'].map((item) => (
+                <span className="border-2 border-neutral-950 bg-white px-3 py-2 text-xs font-black uppercase tracking-widest" key={item}>{item}</span>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <CatalogCard name="Open Interest" tag="Market" description={`${formatNumber(data?.market.openInterest.openInterest, 2)} BNB in active futures interest with ${formatUsd(data?.market.ticker.quoteVolume, 0)} quote volume.`} />
+            <CatalogCard name="Session Range" tag="Range" description={`High ${formatUsd(data?.market.ticker.highPrice)} / Low ${formatUsd(data?.market.ticker.lowPrice)} / BNB volume ${formatNumber(data?.market.ticker.volume, 2)}.`} />
+            <CatalogCard name="Position Guard" tag="Private" tone={pnl >= 0 ? 'positive' : 'negative'} description={`Entry ${formatUsd(position?.entryPrice, 3)} / Mark ${formatUsd(position?.markPrice ?? data?.market.premiumIndex.markPrice, 3)} / Liq ${hasPosition ? formatUsd(position?.liquidationPrice, 3) : '--'}.`} />
+          </div>
+        </section>
+
+        <section className="mt-8 grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
+          <article className={`${panel} p-5`}>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-3xl font-black tracking-[-0.07em]">Position Entries</h2>
+              <span className="border-2 border-neutral-950 bg-blue-300 px-3 py-1 text-xs font-black uppercase tracking-widest">{activePositions.length} active</span>
+            </div>
+            {activePositions.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[780px] border-collapse text-sm font-bold">
+                  <thead>
+                    <tr className="border-y border-neutral-950 bg-neutral-950 text-white">
+                      {['Symbol', 'Side', 'Size', 'Entry', 'Mark', 'PnL', 'Lev', 'Liq'].map((heading, index) => (
+                        <th className={`px-3 py-3 ${index === 0 ? 'text-left' : 'text-right'}`} key={heading}>{heading}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activePositions.map((item) => {
+                      const size = Number(item.positionAmt);
+                      const itemPnl = Number(item.unRealizedProfit);
+
+                      return (
+                        <tr className="border-b border-neutral-950" key={item.symbol}>
+                          <td className="px-3 py-3">{item.symbol}</td>
+                          <td className={size >= 0 ? 'px-3 py-3 text-right text-emerald-700' : 'px-3 py-3 text-right text-rose-700'}>{size >= 0 ? 'Long' : 'Short'}</td>
+                          <td className="px-3 py-3 text-right">{formatNumber(Math.abs(size), 4)}</td>
+                          <td className="px-3 py-3 text-right">{formatUsd(item.entryPrice, 4)}</td>
+                          <td className="px-3 py-3 text-right">{formatUsd(item.markPrice, 4)}</td>
+                          <td className={itemPnl >= 0 ? 'px-3 py-3 text-right text-emerald-700' : 'px-3 py-3 text-right text-rose-700'}>{formatUsd(itemPnl)}</td>
+                          <td className="px-3 py-3 text-right">{item.leverage}x</td>
+                          <td className="px-3 py-3 text-right">{formatUsd(item.liquidationPrice, 4)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-950 bg-neutral-100 p-6 text-center font-bold text-neutral-500">
+                No open futures positions from the read-only account response.
+              </div>
+            )}
+          </article>
+
+          <article className={`${panel} p-5`}>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="text-3xl font-black tracking-[-0.07em]">Collateral Cards</h2>
+              <span className="border-2 border-neutral-950 bg-blue-300 px-3 py-1 text-xs font-black uppercase tracking-widest">{accountAssets.length} assets</span>
+            </div>
+            {accountAssets.length ? (
+              <div className="grid gap-3">
+                {accountAssets.map((asset) => (
+                  <div className="border-2 border-neutral-950 bg-neutral-50 p-4" key={asset.asset}>
+                    <div className="flex items-center justify-between gap-3">
+                      <strong className="text-xl font-black tracking-[-0.05em]">{asset.asset}</strong>
+                      <span className={Number(asset.unrealizedProfit) >= 0 ? 'font-black text-emerald-700' : 'font-black text-rose-700'}>
+                        PnL {formatNumber(asset.unrealizedProfit, 6)}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-sm font-bold text-neutral-500">
+                      <span>Wallet {formatNumber(asset.walletBalance, 6)}</span>
+                      <span>Margin {formatNumber(asset.marginBalance, 6)}</span>
+                      <span>Available {formatNumber(asset.availableBalance, 6)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-950 bg-neutral-100 p-6 text-center font-bold text-neutral-500">
+                No non-zero assets found, or private API keys are not loaded yet.
+              </div>
+            )}
+          </article>
+        </section>
+      </section>
     </main>
   );
 }
