@@ -100,7 +100,7 @@ const formatPercent = (value: string | number | undefined, fractionDigits = 2) =
   return `${number >= 0 ? "+" : ""}${number.toFixed(fractionDigits)}%`;
 };
 
-const panel = "border-2 border-neutral-950 bg-white";
+const panel = "border-2 border-neutral-800 bg-black";
 const label = "text-[0.68rem] font-black uppercase tracking-[0.18em] text-neutral-500";
 
 function Sparkline({ klines }: { klines: Kline[] }) {
@@ -121,16 +121,16 @@ function Sparkline({ klines }: { klines: Kline[] }) {
 
   return (
     <svg
-      className="h-[330px] w-full border-2 border-neutral-950 bg-[linear-gradient(rgba(10,10,10,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(10,10,10,0.08)_1px,transparent_1px),linear-gradient(180deg,#ffffff,#f3f4f6)] bg-[length:34px_34px,34px_34px,auto] md:h-[460px]"
+      className="h-[330px] w-full border-2 border-neutral-800 bg-[linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(180deg,#050505,#111111)] bg-[length:34px_34px,34px_34px,auto] md:h-[460px]"
       viewBox="0 0 100 100"
       preserveAspectRatio="none"
       aria-label="BNB price chart"
     >
       <defs>
         <linearGradient id="chartGlow" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="#111111" />
-          <stop offset="46%" stopColor="#2563eb" />
-          <stop offset="100%" stopColor="#a855f7" />
+          <stop offset="0%" stopColor="#ffffff" />
+          <stop offset="46%" stopColor="#a3a3a3" />
+          <stop offset="100%" stopColor="#525252" />
         </linearGradient>
       </defs>
       <polyline points={points} fill="none" stroke="url(#chartGlow)" strokeLinecap="round" strokeWidth="2.6" />
@@ -138,35 +138,35 @@ function Sparkline({ klines }: { klines: Kline[] }) {
   );
 }
 
-function StatCard({ label: title, value, meta, accent = "bg-neutral-950 text-white" }: { label: string; value: string; meta?: string; accent?: string }) {
+function StatCard({ label: title, value, meta, accent = "bg-neutral-950 text-neutral-50" }: { label: string; value: string; meta?: string; accent?: string }) {
   return (
-    <article className={`${panel} min-h-40 p-5 transition hover:-translate-y-1 hover:shadow-[8px_8px_0_#111]`}>
+    <article className={`${panel} min-h-40 p-5 transition hover:-translate-y-1 hover:shadow-[8px_8px_0_#404040]`}>
       <div className="flex items-start justify-between gap-3">
         <span className={label}>{title}</span>
         <span className={`rounded-full px-2 py-1 text-[0.62rem] font-black uppercase tracking-widest ${accent}`}>Live</span>
       </div>
-      <strong className="mt-8 block text-3xl font-black leading-none tracking-[-0.07em] text-neutral-950 sm:text-4xl">{value}</strong>
+      <strong className="mt-8 block text-3xl font-black leading-none tracking-[-0.07em] text-neutral-50 sm:text-4xl">{value}</strong>
       {meta ? <small className="mt-3 block text-sm font-bold text-neutral-500">{meta}</small> : null}
     </article>
   );
 }
 
 function CatalogCard({ name, description, tag, tone = "neutral" }: { name: string; description: string; tag: string; tone?: "positive" | "negative" | "neutral" }) {
-  const toneClass = tone === "positive" ? "bg-emerald-300" : tone === "negative" ? "bg-rose-300" : "bg-blue-300";
+  const toneClass = tone === "positive" ? "bg-neutral-900" : tone === "negative" ? "bg-neutral-800" : "bg-neutral-900";
 
   return (
-    <article className={`${panel} group flex min-h-52 flex-col justify-between p-5 transition hover:-translate-y-1 hover:shadow-[10px_10px_0_#111]`}>
+    <article className={`${panel} group flex min-h-52 flex-col justify-between p-5 transition hover:-translate-y-1 hover:shadow-[10px_10px_0_#404040]`}>
       <div>
         <div className="mb-5 flex items-center justify-between gap-3">
-          <span className={`size-9 border-2 border-neutral-950 ${toneClass}`} />
-          <span className="rounded-full border-2 border-neutral-950 px-2.5 py-1 text-[0.62rem] font-black uppercase tracking-widest text-neutral-950">
+          <span className={`size-9 border-2 border-neutral-800 ${toneClass}`} />
+          <span className="rounded-full border-2 border-neutral-800 px-2.5 py-1 text-[0.62rem] font-black uppercase tracking-widest text-neutral-50">
             {tag}
           </span>
         </div>
-        <h3 className="text-2xl font-black tracking-[-0.06em] text-neutral-950">{name}</h3>
-        <p className="mt-3 text-sm font-semibold leading-6 text-neutral-600">{description}</p>
+        <h3 className="text-2xl font-black tracking-[-0.06em] text-neutral-50">{name}</h3>
+        <p className="mt-3 text-sm font-semibold leading-6 text-neutral-400">{description}</p>
       </div>
-      <div className="mt-6 flex items-center justify-between border-t border-neutral-950 pt-4 text-xs font-black uppercase tracking-[0.16em] text-neutral-500">
+      <div className="mt-6 flex items-center justify-between border-t border-neutral-800 pt-4 text-xs font-black uppercase tracking-[0.16em] text-neutral-500">
         <span>Analysis</span>
         <span>——</span>
       </div>
@@ -220,8 +220,8 @@ export function App() {
   const updatedAt = data ? new Date(data.updatedAt).toLocaleTimeString() : "Connecting";
 
   return (
-    <main className="min-h-screen bg-[#f4f1ea] text-neutral-950">
-      <div className="border-b border-neutral-950 bg-neutral-950 px-4 py-2 text-white">
+    <main className="min-h-screen bg-black text-neutral-50">
+      <div className="border-b border-neutral-800 bg-neutral-950 px-4 py-2 text-neutral-50">
         <div className="mx-auto flex max-w-[1540px] flex-wrap items-center justify-between gap-3 text-xs font-black uppercase tracking-[0.18em]">
           <span>Sponsor getmarket.md and monitor BNB live</span>
           <span>{state.error ? "Feed issue" : `Live read-only / ${updatedAt}`}</span>
@@ -229,55 +229,55 @@ export function App() {
       </div>
 
       <section className="mx-auto max-w-[1540px] px-4 py-5 sm:px-6 lg:px-8">
-        <nav className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-950 pb-5">
+        <nav className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 pb-5">
           <div className="text-2xl font-black tracking-[-0.08em]">getmarket.md</div>
           <div className="flex flex-wrap gap-2">
             {['Market', 'Position', 'Risk', 'Collateral'].map((item) => (
-              <span className="rounded-full border-2 border-neutral-950 bg-white px-4 py-2 text-xs font-black uppercase tracking-widest" key={item}>
+              <span className="rounded-full border-2 border-neutral-800 bg-black px-4 py-2 text-xs font-black uppercase tracking-widest" key={item}>
                 {item}
               </span>
             ))}
           </div>
         </nav>
 
-        {state.error ? <div className="mb-5 border-2 border-neutral-950 bg-rose-200 p-4 font-bold">Binance API: {state.error}</div> : null}
+        {state.error ? <div className="mb-5 border-2 border-neutral-800 bg-neutral-950 p-4 font-bold text-neutral-200">Binance API: {state.error}</div> : null}
         {data && !data.private.configured ? (
-          <div className="mb-5 border-2 border-neutral-950 bg-blue-100 p-4 text-sm font-bold">
+          <div className="mb-5 border-2 border-neutral-800 bg-neutral-900 p-4 text-sm font-bold">
             Public market data is live. Add <code>BINANCE_API_KEY</code> and <code>BINANCE_API_SECRET</code> in <code>.env.local</code> to view your read-only account state.
           </div>
         ) : null}
 
         <header className="grid gap-5 lg:grid-cols-[1.35fr_0.65fr]">
-          <article className="border-2 border-neutral-950 bg-white p-5 sm:p-8">
-            <p className="mb-6 inline-flex border-2 border-neutral-950 bg-blue-300 px-3 py-1 text-xs font-black uppercase tracking-[0.18em]">
+          <article className="border-2 border-neutral-800 bg-black p-5 sm:p-8">
+            <p className="mb-6 inline-flex border-2 border-neutral-800 bg-neutral-900 px-3 py-1 text-xs font-black uppercase tracking-[0.18em]">
               Production-grade BNBUSDT analysis
             </p>
-            <h1 className="max-w-5xl text-6xl font-black leading-[0.84] tracking-[-0.095em] text-neutral-950 sm:text-7xl lg:text-8xl">
+            <h1 className="max-w-5xl text-6xl font-black leading-[0.84] tracking-[-0.095em] text-neutral-50 sm:text-7xl lg:text-8xl">
               {data?.symbol ?? "BNBUSDT"} perpetual design index
             </h1>
-            <p className="mt-6 max-w-2xl text-lg font-semibold leading-8 text-neutral-600">
+            <p className="mt-6 max-w-2xl text-lg font-semibold leading-8 text-neutral-400">
               Analyzed market patterns, position state, and account signals as a crisp DESIGN.md-inspired catalog. Built for fast scanning, not terminal clutter.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <button
-                className="border-2 border-neutral-950 bg-neutral-950 px-5 py-3 text-sm font-black uppercase tracking-widest text-white shadow-[6px_6px_0_#93c5fd] transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none disabled:cursor-wait disabled:opacity-60"
+                className="border-2 border-neutral-800 bg-neutral-950 px-5 py-3 text-sm font-black uppercase tracking-widest text-neutral-50 shadow-[6px_6px_0_#525252] transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none disabled:cursor-wait disabled:opacity-60"
                 type="button"
                 onClick={loadDashboard}
                 disabled={state.loading}
               >
                 {state.loading ? "Syncing" : "Refresh data"}
               </button>
-              <span className="border-2 border-neutral-950 bg-white px-5 py-3 text-sm font-black uppercase tracking-widest">
+              <span className="border-2 border-neutral-800 bg-black px-5 py-3 text-sm font-black uppercase tracking-widest">
                 Built on Binance Futures
               </span>
             </div>
           </article>
 
-          <aside className="grid border-2 border-neutral-950 bg-neutral-950 text-white">
+          <aside className="grid border-2 border-neutral-800 bg-neutral-950 text-neutral-50">
             <div className="border-b border-white/20 p-5">
               <span className="text-xs font-black uppercase tracking-[0.18em] text-neutral-400">Last Price</span>
               <strong className="mt-5 block text-6xl font-black leading-none tracking-[-0.09em]">{formatUsd(data?.market.ticker.lastPrice, 3)}</strong>
-              <small className={priceChange >= 0 ? "mt-4 block text-xl font-black text-emerald-300" : "mt-4 block text-xl font-black text-rose-300"}>
+              <small className={priceChange >= 0 ? "mt-4 block text-xl font-black text-neutral-100" : "mt-4 block text-xl font-black text-neutral-300"}>
                 {formatPercent(data?.market.ticker.priceChangePercent)} 24h
               </small>
             </div>
@@ -303,12 +303,12 @@ export function App() {
         <section className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard label="Mark" value={formatUsd(data?.market.premiumIndex.markPrice, 3)} />
           <StatCard label="Index" value={formatUsd(data?.market.premiumIndex.indexPrice, 3)} />
-          <StatCard label="24h High" value={formatUsd(data?.market.ticker.highPrice)} accent="bg-emerald-300 text-neutral-950" />
-          <StatCard label="24h Low" value={formatUsd(data?.market.ticker.lowPrice)} accent="bg-rose-300 text-neutral-950" />
+          <StatCard label="24h High" value={formatUsd(data?.market.ticker.highPrice)} accent="bg-neutral-900 text-neutral-50" />
+          <StatCard label="24h Low" value={formatUsd(data?.market.ticker.lowPrice)} accent="bg-neutral-800 text-neutral-50" />
         </section>
 
         <section className="mt-8 grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <article className="border-2 border-neutral-950 bg-white p-5">
+          <article className="border-2 border-neutral-800 bg-black p-5">
             <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
               <div>
                 <p className={label}>Featured Design</p>
@@ -316,13 +316,13 @@ export function App() {
               </div>
               <div className="flex gap-2">
                 {['1m', '5m', '15m', '1h'].map((item) => (
-                  <span className={item === '5m' ? 'border-2 border-neutral-950 bg-neutral-950 px-3 py-1 text-xs font-black text-white' : 'border-2 border-neutral-950 bg-white px-3 py-1 text-xs font-black'} key={item}>
+                  <span className={item === '5m' ? 'border-2 border-neutral-800 bg-neutral-950 px-3 py-1 text-xs font-black text-neutral-50' : 'border-2 border-neutral-800 bg-black px-3 py-1 text-xs font-black'} key={item}>
                     {item}
                   </span>
                 ))}
               </div>
             </div>
-            {data ? <Sparkline klines={data.market.klines} /> : <div className="grid h-[330px] place-items-center border-2 border-neutral-950 bg-neutral-100 font-black text-neutral-500 md:h-[460px]">Loading chart...</div>}
+            {data ? <Sparkline klines={data.market.klines} /> : <div className="grid h-[330px] place-items-center border-2 border-neutral-800 bg-neutral-950 font-black text-neutral-500 md:h-[460px]">Loading chart...</div>}
           </article>
 
           <div className="grid gap-4">
@@ -341,14 +341,14 @@ export function App() {
         </section>
 
         <section className="mt-8">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-950 pb-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 pb-4">
             <div>
               <p className={label}>Find Designs</p>
               <h2 className="mt-1 text-4xl font-black tracking-[-0.075em]">Design Systems Analysis</h2>
             </div>
             <div className="flex flex-wrap gap-2">
               {['All', `${activePositions.length} Active`, `${accountAssets.length} Assets`, 'Bookmarked'].map((item) => (
-                <span className="border-2 border-neutral-950 bg-white px-3 py-2 text-xs font-black uppercase tracking-widest" key={item}>{item}</span>
+                <span className="border-2 border-neutral-800 bg-black px-3 py-2 text-xs font-black uppercase tracking-widest" key={item}>{item}</span>
               ))}
             </div>
           </div>
@@ -364,13 +364,13 @@ export function App() {
           <article className={`${panel} p-5`}>
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-3xl font-black tracking-[-0.07em]">Position Entries</h2>
-              <span className="border-2 border-neutral-950 bg-blue-300 px-3 py-1 text-xs font-black uppercase tracking-widest">{activePositions.length} active</span>
+              <span className="border-2 border-neutral-800 bg-neutral-900 px-3 py-1 text-xs font-black uppercase tracking-widest">{activePositions.length} active</span>
             </div>
             {activePositions.length ? (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[780px] border-collapse text-sm font-bold">
                   <thead>
-                    <tr className="border-y border-neutral-950 bg-neutral-950 text-white">
+                    <tr className="border-y border-neutral-800 bg-neutral-950 text-neutral-50">
                       {['Symbol', 'Side', 'Size', 'Entry', 'Mark', 'PnL', 'Lev', 'Liq'].map((heading, index) => (
                         <th className={`px-3 py-3 ${index === 0 ? 'text-left' : 'text-right'}`} key={heading}>{heading}</th>
                       ))}
@@ -382,13 +382,13 @@ export function App() {
                       const itemPnl = Number(item.unRealizedProfit);
 
                       return (
-                        <tr className="border-b border-neutral-950" key={item.symbol}>
+                        <tr className="border-b border-neutral-800" key={item.symbol}>
                           <td className="px-3 py-3">{item.symbol}</td>
-                          <td className={size >= 0 ? 'px-3 py-3 text-right text-emerald-700' : 'px-3 py-3 text-right text-rose-700'}>{size >= 0 ? 'Long' : 'Short'}</td>
+                          <td className={size >= 0 ? 'px-3 py-3 text-right text-neutral-100' : 'px-3 py-3 text-right text-neutral-300'}>{size >= 0 ? 'Long' : 'Short'}</td>
                           <td className="px-3 py-3 text-right">{formatNumber(Math.abs(size), 4)}</td>
                           <td className="px-3 py-3 text-right">{formatUsd(item.entryPrice, 4)}</td>
                           <td className="px-3 py-3 text-right">{formatUsd(item.markPrice, 4)}</td>
-                          <td className={itemPnl >= 0 ? 'px-3 py-3 text-right text-emerald-700' : 'px-3 py-3 text-right text-rose-700'}>{formatUsd(itemPnl)}</td>
+                          <td className={itemPnl >= 0 ? 'px-3 py-3 text-right text-neutral-100' : 'px-3 py-3 text-right text-neutral-300'}>{formatUsd(itemPnl)}</td>
                           <td className="px-3 py-3 text-right">{item.leverage}x</td>
                           <td className="px-3 py-3 text-right">{formatUsd(item.liquidationPrice, 4)}</td>
                         </tr>
@@ -398,7 +398,7 @@ export function App() {
                 </table>
               </div>
             ) : (
-              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-950 bg-neutral-100 p-6 text-center font-bold text-neutral-500">
+              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-800 bg-neutral-950 p-6 text-center font-bold text-neutral-500">
                 No open futures positions from the read-only account response.
               </div>
             )}
@@ -407,15 +407,15 @@ export function App() {
           <article className={`${panel} p-5`}>
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-3xl font-black tracking-[-0.07em]">Collateral Cards</h2>
-              <span className="border-2 border-neutral-950 bg-blue-300 px-3 py-1 text-xs font-black uppercase tracking-widest">{accountAssets.length} assets</span>
+              <span className="border-2 border-neutral-800 bg-neutral-900 px-3 py-1 text-xs font-black uppercase tracking-widest">{accountAssets.length} assets</span>
             </div>
             {accountAssets.length ? (
               <div className="grid gap-3">
                 {accountAssets.map((asset) => (
-                  <div className="border-2 border-neutral-950 bg-neutral-50 p-4" key={asset.asset}>
+                  <div className="border-2 border-neutral-800 bg-neutral-950 p-4" key={asset.asset}>
                     <div className="flex items-center justify-between gap-3">
                       <strong className="text-xl font-black tracking-[-0.05em]">{asset.asset}</strong>
-                      <span className={Number(asset.unrealizedProfit) >= 0 ? 'font-black text-emerald-700' : 'font-black text-rose-700'}>
+                      <span className={Number(asset.unrealizedProfit) >= 0 ? 'font-black text-neutral-100' : 'font-black text-neutral-300'}>
                         PnL {formatNumber(asset.unrealizedProfit, 6)}
                       </span>
                     </div>
@@ -428,7 +428,7 @@ export function App() {
                 ))}
               </div>
             ) : (
-              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-950 bg-neutral-100 p-6 text-center font-bold text-neutral-500">
+              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-800 bg-neutral-950 p-6 text-center font-bold text-neutral-500">
                 No non-zero assets found, or private API keys are not loaded yet.
               </div>
             )}
