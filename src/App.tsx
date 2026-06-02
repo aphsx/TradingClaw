@@ -193,19 +193,24 @@ export function App() {
     : "-";
 
   return (
-    <main className="dashboard-shell">
+    <main className="terminal-shell">
       <div className="background-grid" />
-      <header className="hero">
-        <div>
-          <p className="eyebrow">TradingClaw Read-Only Terminal</p>
-          <h1>BNB Futures Dashboard</h1>
-          <p className="hero-copy">Live Binance Futures data for monitoring BNBUSDT without any trade actions.</p>
-        </div>
-        <div className="status-panel">
-          <span className={state.error ? "status-dot error" : "status-dot"} />
+
+      <header className="terminal-topbar">
+        <div className="brand-lockup">
+          <span className="brand-mark">TC</span>
           <div>
-            <strong>{state.error ? "API Warning" : "Live Feed"}</strong>
-            <small>{data ? `Updated ${new Date(data.updatedAt).toLocaleTimeString()}` : "Connecting..."}</small>
+            <p>TradingClaw</p>
+            <strong>BNB Perpetual Monitor</strong>
+          </div>
+        </div>
+        <div className="session-controls">
+          <div className="feed-status">
+            <span className={state.error ? "status-dot error" : "status-dot"} />
+            <div>
+              <strong>{state.error ? "Feed Issue" : "Live Read-Only"}</strong>
+              <small>{data ? new Date(data.updatedAt).toLocaleTimeString() : "Connecting..."}</small>
+            </div>
           </div>
           <button type="button" onClick={loadDashboard} disabled={state.loading}>
             {state.loading ? "Syncing" : "Refresh"}
@@ -217,40 +222,42 @@ export function App() {
       {data && !data.private.configured ? (
         <div className="notice">
           Public market data is live. Add <code>BINANCE_API_KEY</code> and <code>BINANCE_API_SECRET</code> in{" "}
-          <code>.env.local</code> to view your read-only position.
+          <code>.env.local</code> to view your read-only account state.
         </div>
       ) : null}
 
-      <section className="market-grid">
-        <MetricCard
-          label="BNBUSDT Last Price"
-          value={formatUsd(data?.market.ticker.lastPrice, 3)}
-          subValue="Binance USD-M Futures"
-          tone={priceChange >= 0 ? "positive" : "negative"}
-        />
-        <MetricCard
-          label="24h Change"
-          value={formatPercent(data?.market.ticker.priceChangePercent)}
-          subValue={`${formatUsd(data?.market.ticker.highPrice)} high / ${formatUsd(data?.market.ticker.lowPrice)} low`}
-          tone={priceChange >= 0 ? "positive" : "negative"}
-        />
-        <MetricCard
-          label="Mark / Index"
-          value={formatUsd(data?.market.premiumIndex.markPrice, 3)}
-          subValue={`${formatUsd(data?.market.premiumIndex.indexPrice, 3)} index`}
-        />
-        <MetricCard
-          label="Open Interest"
-          value={`${formatNumber(data?.market.openInterest.openInterest, 2)} BNB`}
-          subValue={`${formatUsd(data?.market.ticker.quoteVolume, 0)} 24h quote volume`}
-        />
+      <section className="price-hero">
+        <div className="symbol-block">
+          <p className="eyebrow">USD-M Futures</p>
+          <h1>{data?.symbol ?? "BNBUSDT"}</h1>
+          <div className="symbol-meta">
+            <span>Binance Futures</span>
+            <span>5m refresh chart</span>
+            <span>No trade actions</span>
+          </div>
+        </div>
+        <div className="last-price-block">
+          <span>Last Price</span>
+          <strong className={priceChange >= 0 ? "positive-text" : "negative-text"}>
+            {formatUsd(data?.market.ticker.lastPrice, 3)}
+          </strong>
+          <small className={priceChange >= 0 ? "positive-text" : "negative-text"}>
+            {formatPercent(data?.market.ticker.priceChangePercent)} 24h
+          </small>
+        </div>
+        <div className="mini-market-grid">
+          <MetricCard label="Mark" value={formatUsd(data?.market.premiumIndex.markPrice, 3)} />
+          <MetricCard label="Index" value={formatUsd(data?.market.premiumIndex.indexPrice, 3)} />
+          <MetricCard label="24h High" value={formatUsd(data?.market.ticker.highPrice)} />
+          <MetricCard label="24h Low" value={formatUsd(data?.market.ticker.lowPrice)} />
+        </div>
       </section>
 
-      <section className="workspace-grid">
-        <article className="chart-panel">
+      <section className="cockpit-grid">
+        <article className="chart-board">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">5m Candles</p>
+              <p className="eyebrow">Market Tape</p>
               <h2>BNB Momentum</h2>
             </div>
             <div className="funding-pill">
@@ -259,66 +266,89 @@ export function App() {
             </div>
           </div>
           {data ? <Sparkline klines={data.market.klines} /> : <div className="chart-skeleton">Loading chart...</div>}
-        </article>
-
-        <article className="position-panel">
-          <div className="panel-heading">
+          <div className="chart-footer">
             <div>
-              <p className="eyebrow">Private Read-Only</p>
-              <h2>Current Position</h2>
-            </div>
-            <span className={`side-pill ${positionAmount >= 0 ? "long" : "short"}`}>
-              {hasPosition ? (positionAmount > 0 ? "Long" : "Short") : "No Position"}
-            </span>
-          </div>
-
-          <div className="position-size">
-            <span>Position Size</span>
-            <strong>{hasPosition ? `${formatNumber(Math.abs(positionAmount), 4)} BNB` : "--"}</strong>
-          </div>
-
-          <div className="position-details">
-            <div>
-              <span>Entry</span>
-              <strong>{formatUsd(position?.entryPrice, 3)}</strong>
+              <span>Open Interest</span>
+              <strong>{formatNumber(data?.market.openInterest.openInterest, 2)} BNB</strong>
             </div>
             <div>
-              <span>Mark</span>
-              <strong>{formatUsd(position?.markPrice ?? data?.market.premiumIndex.markPrice, 3)}</strong>
+              <span>24h Quote Volume</span>
+              <strong>{formatUsd(data?.market.ticker.quoteVolume, 0)}</strong>
             </div>
             <div>
-              <span>Unrealized PnL</span>
-              <strong className={pnl >= 0 ? "positive-text" : "negative-text"}>{formatUsd(pnl, 2)}</strong>
-            </div>
-            <div>
-              <span>Liquidation</span>
-              <strong>{hasPosition ? formatUsd(position?.liquidationPrice, 3) : "--"}</strong>
-            </div>
-            <div>
-              <span>Leverage</span>
-              <strong>{position?.leverage ? `${position.leverage}x` : "--"}</strong>
-            </div>
-            <div>
-              <span>Margin</span>
-              <strong>{position?.marginType ?? "--"}</strong>
+              <span>BNB Volume</span>
+              <strong>{formatNumber(data?.market.ticker.volume, 2)}</strong>
             </div>
           </div>
         </article>
+
+        <aside className="side-stack">
+          <article className="position-card">
+            <div className="panel-heading compact">
+              <div>
+                <p className="eyebrow">BNB Position</p>
+                <h2>Exposure</h2>
+              </div>
+              <span className={`side-pill ${positionAmount >= 0 ? "long" : "short"}`}>
+                {hasPosition ? (positionAmount > 0 ? "Long" : "Short") : "Flat"}
+              </span>
+            </div>
+
+            <div className="position-hero">
+              <span>Size</span>
+              <strong>{hasPosition ? `${formatNumber(Math.abs(positionAmount), 4)} BNB` : "--"}</strong>
+              <small className={pnl >= 0 ? "positive-text" : "negative-text"}>UPnL {formatUsd(pnl, 2)}</small>
+            </div>
+
+            <div className="position-stats">
+              <div>
+                <span>Entry</span>
+                <strong>{formatUsd(position?.entryPrice, 3)}</strong>
+              </div>
+              <div>
+                <span>Mark</span>
+                <strong>{formatUsd(position?.markPrice ?? data?.market.premiumIndex.markPrice, 3)}</strong>
+              </div>
+              <div>
+                <span>Liquidation</span>
+                <strong>{hasPosition ? formatUsd(position?.liquidationPrice, 3) : "--"}</strong>
+              </div>
+              <div>
+                <span>Leverage</span>
+                <strong>{position?.leverage ? `${position.leverage}x` : "--"}</strong>
+              </div>
+            </div>
+          </article>
+
+          <article className="risk-card">
+            <p className="eyebrow">Account Risk</p>
+            <div className="risk-list">
+              <div>
+                <span>Wallet</span>
+                <strong>{formatUsd(data?.private.account?.totalWalletBalance)}</strong>
+              </div>
+              <div>
+                <span>Margin</span>
+                <strong>{formatUsd(data?.private.account?.totalMarginBalance)}</strong>
+              </div>
+              <div>
+                <span>Available</span>
+                <strong>{formatUsd(data?.private.account?.availableBalance)}</strong>
+              </div>
+              <div>
+                <span>Maint</span>
+                <strong>{formatUsd(data?.private.account?.totalMaintMargin)}</strong>
+              </div>
+            </div>
+          </article>
+        </aside>
       </section>
 
-      <section className="account-strip">
-        <MetricCard label="Wallet Balance" value={formatUsd(data?.private.account?.totalWalletBalance)} />
-        <MetricCard label="Account PnL" value={formatUsd(data?.private.account?.totalUnrealizedProfit)} tone={pnl >= 0 ? "positive" : "negative"} />
-        <MetricCard label="Margin Balance" value={formatUsd(data?.private.account?.totalMarginBalance)} />
-        <MetricCard label="Maint Margin" value={formatUsd(data?.private.account?.totalMaintMargin)} />
-        <MetricCard label="Available Balance" value={formatUsd(data?.private.account?.availableBalance)} />
-      </section>
-
-      <section className="data-grid">
-        <article className="table-panel">
+      <section className="lower-grid">
+        <article className="table-panel positions-table">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">All Futures Positions</p>
+              <p className="eyebrow">Portfolio</p>
               <h2>Open Positions</h2>
             </div>
             <span className="count-pill">{activePositions.length} active</span>
@@ -364,10 +394,10 @@ export function App() {
           )}
         </article>
 
-        <article className="table-panel">
+        <article className="asset-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Account Assets</p>
+              <p className="eyebrow">Collateral</p>
               <h2>Balances</h2>
             </div>
             <span className="count-pill">{accountAssets.length} assets</span>
