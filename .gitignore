@@ -1,8 +1,7 @@
+node_modules
+dist
+tsconfig.tsbuildinfo
 .env
-data/
-.venv/
-venv/
-__pycache__/
-*.pyc
-.pytest_cache/
+.env.local
+.env.*.local
 .DS_Store
