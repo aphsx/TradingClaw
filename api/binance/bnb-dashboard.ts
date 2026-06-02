@@ -20,11 +20,16 @@ type PositionRisk = {
   unRealizedProfit?: string;
 };
 
+function envValue(env: Env, key: string, fallback = "") {
+  const rawValue = env[key] || fallback;
+  return rawValue.trim().replace(/^['"]|['"]$/g, "").replace(new RegExp(`^${key}=`), "").trim();
+}
+
 async function fetchJson<T>(url: URL, init?: RequestInit): Promise<T> {
   let response: Response;
 
   try {
-    response = await fetch(url, init);
+    response = await fetch(url.toString(), init);
   } catch (error) {
     const maybeCause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : null;
     const cause = maybeCause instanceof Error ? `: ${maybeCause.message}` : "";
@@ -46,7 +51,7 @@ async function fetchJson<T>(url: URL, init?: RequestInit): Promise<T> {
 }
 
 function getBaseUrl(env: Env) {
-  const rawBaseUrl = env.BINANCE_BASE_URL || "https://fapi.binance.com";
+  const rawBaseUrl = envValue(env, "BINANCE_BASE_URL", "https://fapi.binance.com");
 
   try {
     return new URL(rawBaseUrl);
@@ -99,9 +104,11 @@ async function getDashboardData(env: Env) {
     fetchJson(new URL(`/fapi/v1/klines?symbol=${SYMBOL}&interval=5m&limit=48`, baseUrl))
   ]);
 
-  const hasPrivateCredentials = Boolean(env.BINANCE_API_KEY && env.BINANCE_API_SECRET);
+  const apiKey = envValue(env, "BINANCE_API_KEY");
+  const apiSecret = envValue(env, "BINANCE_API_SECRET");
+  const hasPrivateCredentials = Boolean(apiKey && apiSecret);
   const privateData = hasPrivateCredentials
-    ? await getPrivateAccountData(baseUrl, env.BINANCE_API_KEY!, env.BINANCE_API_SECRET!)
+    ? await getPrivateAccountData(baseUrl, apiKey, apiSecret)
     : { configured: false, position: null, positions: [], activePositions: [], account: null };
 
   return {
