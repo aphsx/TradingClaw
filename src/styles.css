@@ -1,6 +1,6 @@
 :root {
-  color: #f5f5f5;
-  background: #0b0b0b;
+  color: #162033;
+  background: #f4f7fb;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
@@ -17,22 +17,28 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    radial-gradient(circle at 16% -10%, rgba(240, 185, 11, 0.12), transparent 34rem),
-    linear-gradient(180deg, #0b0b0b 0%, #111111 48%, #080808 100%);
+    radial-gradient(circle at 8% 4%, rgba(37, 99, 235, 0.14), transparent 27rem),
+    radial-gradient(circle at 88% 0%, rgba(124, 58, 237, 0.12), transparent 28rem),
+    linear-gradient(180deg, #f9fbff 0%, #eef4fb 58%, #f8fafc 100%);
 }
 
 button {
-  border: 1px solid rgba(240, 185, 11, 0.42);
-  border-radius: 10px;
+  border: 0;
+  border-radius: 999px;
   padding: 0.78rem 1.1rem;
-  color: #0b0b0b;
-  background: #f0b90b;
+  color: #ffffff;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
   font-weight: 900;
   cursor: pointer;
+  box-shadow: 0 12px 28px rgba(37, 99, 235, 0.24);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease;
 }
 
 button:hover:not(:disabled) {
-  background: #ffd35a;
+  box-shadow: 0 16px 34px rgba(37, 99, 235, 0.3);
+  transform: translateY(-1px);
 }
 
 button:disabled {
@@ -41,7 +47,7 @@ button:disabled {
 }
 
 code {
-  color: #f0b90b;
+  color: #2563eb;
 }
 
 .terminal-shell {
@@ -49,7 +55,7 @@ code {
   width: min(1540px, 100%);
   min-height: 100vh;
   margin: 0 auto;
-  padding: 1.15rem;
+  padding: 1.3rem;
   overflow: hidden;
 }
 
@@ -57,11 +63,11 @@ code {
   position: fixed;
   inset: 0;
   z-index: -1;
-  opacity: 0.08;
+  opacity: 0.42;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.16) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px);
-  background-size: 48px 48px;
+    linear-gradient(rgba(37, 99, 235, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.08) 1px, transparent 1px);
+  background-size: 64px 64px;
   mask-image: linear-gradient(to bottom, black, transparent 82%);
 }
 
@@ -75,9 +81,10 @@ code {
 .alert,
 .notice,
 .metric-card {
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  background: #141414;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 22px 70px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(18px);
 }
 
 .terminal-topbar {
@@ -85,9 +92,9 @@ code {
   justify-content: space-between;
   gap: 1rem;
   align-items: center;
-  margin-bottom: 0.9rem;
-  border-radius: 18px;
-  padding: 0.78rem;
+  margin-bottom: 1rem;
+  border-radius: 28px;
+  padding: 0.92rem;
 }
 
 .brand-lockup,
@@ -113,12 +120,13 @@ code {
 
 .brand-mark {
   display: grid;
-  width: 42px;
-  height: 42px;
+  width: 46px;
+  height: 46px;
   place-items: center;
-  border-radius: 12px;
-  color: #0b0b0b;
-  background: #f0b90b;
+  border-radius: 16px;
+  color: #ffffff;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
   font-weight: 950;
 }
 
@@ -138,7 +146,7 @@ code {
 .position-stats span,
 .risk-list span,
 .funding-pill span {
-  color: #8f8f8f;
+  color: #64748b;
 }
 
 .brand-lockup strong {
@@ -151,50 +159,53 @@ code {
 
 .feed-status {
   gap: 0.65rem;
-  border-radius: 12px;
+  border-radius: 999px;
   padding: 0.62rem 0.75rem;
-  background: #1b1b1b;
+  background: #f1f5f9;
 }
 
 .status-dot {
   width: 0.72rem;
   height: 0.72rem;
   border-radius: 999px;
-  background: #22c55e;
+  background: #10b981;
+  box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.12);
 }
 
 .status-dot.error {
   background: #ef4444;
+  box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.12);
 }
 
 .alert,
 .notice {
   margin-bottom: 0.9rem;
-  border-radius: 14px;
+  border-radius: 18px;
   padding: 0.9rem 1rem;
 }
 
 .alert {
-  color: #fecaca;
+  color: #b91c1c;
+  background: rgba(254, 242, 242, 0.84);
 }
 
 .notice {
-  color: #d4d4d4;
+  color: #475569;
 }
 
 .price-hero {
   display: grid;
-  grid-template-columns: 1fr 0.65fr 1.15fr;
-  gap: 0.9rem;
+  grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.72fr) minmax(0, 1.12fr);
+  gap: 1rem;
   align-items: stretch;
-  margin-bottom: 0.9rem;
-  border-radius: 22px;
-  padding: 0.9rem;
+  margin-bottom: 1rem;
+  border-radius: 32px;
+  padding: 1rem;
 }
 
 .eyebrow {
   margin: 0 0 0.45rem;
-  color: #f0b90b;
+  color: #2563eb;
   font-size: 0.72rem;
   font-weight: 900;
   letter-spacing: 0.14em;
@@ -218,10 +229,16 @@ h2 {
 
 .symbol-block,
 .last-price-block {
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 18px;
-  padding: 1rem;
-  background: #101010;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 26px;
+  padding: 1.1rem;
+  background: linear-gradient(145deg, #ffffff, #f8fbff);
+}
+
+.symbol-block {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
 
 .symbol-meta {
@@ -234,7 +251,8 @@ h2 {
 .symbol-meta span {
   border-radius: 999px;
   padding: 0.4rem 0.62rem;
-  background: #1d1d1d;
+  color: #475569;
+  background: #eef2ff;
 }
 
 .last-price-block span,
@@ -243,7 +261,7 @@ h2 {
 }
 
 .last-price-block span {
-  color: #8f8f8f;
+  color: #64748b;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -265,18 +283,26 @@ h2 {
 .mini-market-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.7rem;
+  gap: 0.8rem;
 }
 
 .metric-card {
-  min-height: 106px;
-  border-radius: 16px;
-  padding: 0.9rem;
+  min-height: 112px;
+  border-radius: 24px;
+  padding: 1rem;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.metric-card:hover {
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.11);
+  transform: translateY(-2px);
 }
 
 .metric-card span {
   display: block;
-  color: #8f8f8f;
+  color: #64748b;
   font-size: 0.72rem;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -294,8 +320,8 @@ h2 {
 .cockpit-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.48fr) minmax(390px, 0.72fr);
-  gap: 0.9rem;
-  margin-bottom: 0.9rem;
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
 .chart-board,
@@ -303,8 +329,8 @@ h2 {
 .risk-card,
 .table-panel,
 .asset-panel {
-  border-radius: 22px;
-  padding: 1rem;
+  border-radius: 30px;
+  padding: 1.05rem;
 }
 
 .chart-board {
@@ -313,7 +339,7 @@ h2 {
 
 .side-stack {
   display: grid;
-  gap: 0.9rem;
+  gap: 1rem;
 }
 
 .position-card {
@@ -336,11 +362,11 @@ h2 {
 .count-pill {
   display: inline-grid;
   gap: 0.12rem;
-  border: 1px solid rgba(240, 185, 11, 0.26);
+  border: 1px solid rgba(37, 99, 235, 0.18);
   border-radius: 999px;
   padding: 0.6rem 0.8rem;
-  color: #f0b90b;
-  background: rgba(240, 185, 11, 0.08);
+  color: #2563eb;
+  background: #eff6ff;
   font-size: 0.82rem;
   font-weight: 900;
   text-align: right;
@@ -348,34 +374,34 @@ h2 {
 
 .side-pill.long,
 .count-pill {
-  border-color: rgba(34, 197, 94, 0.26);
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(16, 185, 129, 0.22);
+  color: #059669;
+  background: #ecfdf5;
 }
 
 .side-pill.short {
-  border-color: rgba(239, 68, 68, 0.26);
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.22);
+  color: #dc2626;
+  background: #fef2f2;
 }
 
 .sparkline,
 .chart-skeleton {
   width: 100%;
   height: 390px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 26px;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(240, 185, 11, 0.06), rgba(20, 20, 20, 0.2));
-  background-size: 32px 32px, 32px 32px, auto;
+    linear-gradient(rgba(37, 99, 235, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.06) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(239, 246, 255, 0.92), rgba(255, 255, 255, 0.6));
+  background-size: 38px 38px, 38px 38px, auto;
 }
 
 .chart-skeleton {
   display: grid;
   place-items: center;
-  color: #8f8f8f;
+  color: #64748b;
 }
 
 .chart-footer {
@@ -388,9 +414,9 @@ h2 {
 .position-stats div,
 .risk-list div,
 .asset-row {
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 14px;
-  background: #101010;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 20px;
+  background: #ffffff;
 }
 
 .chart-footer div,
@@ -415,10 +441,12 @@ h2 {
 }
 
 .position-hero {
-  border: 1px solid rgba(240, 185, 11, 0.18);
-  border-radius: 18px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 26px;
   padding: 1rem;
-  background: linear-gradient(135deg, rgba(240, 185, 11, 0.1), rgba(255, 255, 255, 0.025));
+  background:
+    radial-gradient(circle at 90% 14%, rgba(124, 58, 237, 0.14), transparent 13rem),
+    linear-gradient(135deg, #eff6ff, #ffffff);
 }
 
 .position-hero span,
@@ -456,7 +484,7 @@ h2 {
 .lower-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(390px, 0.8fr);
-  gap: 0.9rem;
+  gap: 1rem;
 }
 
 .table-wrap {
@@ -471,7 +499,7 @@ table {
 
 th,
 td {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.82);
   padding: 0.84rem 0.74rem;
   text-align: right;
   white-space: nowrap;
@@ -483,8 +511,8 @@ td:first-child {
 }
 
 th {
-  color: #8f8f8f;
-  background: #101010;
+  color: #64748b;
+  background: #f8fafc;
   font-size: 0.72rem;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -492,7 +520,7 @@ th {
 }
 
 td {
-  color: #eeeeee;
+  color: #1e293b;
   font-weight: 750;
 }
 
@@ -510,29 +538,30 @@ td {
 }
 
 .asset-row strong {
-  color: #f0b90b;
+  color: #2563eb;
 }
 
 .asset-row span {
-  color: #b7b7b7;
+  color: #64748b;
   font-size: 0.84rem;
 }
 
 .positive-text {
-  color: #22c55e;
+  color: #059669;
 }
 
 .negative-text {
-  color: #ef4444;
+  color: #dc2626;
 }
 
 .empty-state {
   display: grid;
   min-height: 180px;
   place-items: center;
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  border-radius: 16px;
-  color: #8f8f8f;
+  border: 1px dashed rgba(100, 116, 139, 0.32);
+  border-radius: 22px;
+  color: #64748b;
+  background: #f8fafc;
   text-align: center;
 }
 

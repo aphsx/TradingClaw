@@ -120,8 +120,9 @@ function Sparkline({ klines }: { klines: Kline[] }) {
     <svg className="sparkline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="BNB price chart">
       <defs>
         <linearGradient id="chartGlow" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="#19fb9b" />
-          <stop offset="100%" stopColor="#f0b90b" />
+          <stop offset="0%" stopColor="#2563eb" />
+          <stop offset="52%" stopColor="#7c3aed" />
+          <stop offset="100%" stopColor="#06b6d4" />
         </linearGradient>
       </defs>
       <polyline points={points} fill="none" stroke="url(#chartGlow)" strokeLinecap="round" strokeWidth="3" />
