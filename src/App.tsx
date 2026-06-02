@@ -95,51 +95,53 @@ const formatNumber = (value: string | number | undefined, maximumFractionDigits 
   return new Intl.NumberFormat("en-US", { maximumFractionDigits }).format(Number.isFinite(number) ? number : 0);
 };
 
-const panel = "border-2 border-neutral-800 bg-neutral-950";
-const label = "text-[0.68rem] font-black uppercase tracking-[0.18em] text-sky-300";
+const frame = "overflow-hidden rounded-lg border-2 border-neutral-800 bg-neutral-950";
+const headingCell = "px-4 py-3 text-left text-[0.68rem] font-black uppercase tracking-[0.16em] text-neutral-400";
+const valueCell = "px-4 py-3 text-sm font-bold text-neutral-100";
 
-function MoneyCard({ label: title, value, meta, tone = "neutral" }: { label: string; value: string; meta?: string; tone?: "positive" | "negative" | "neutral" | "blue" }) {
+function SummaryCard({ label, value, meta, tone = "blue" }: { label: string; value: string; meta?: string; tone?: "green" | "red" | "blue" | "purple" }) {
   const toneClass = {
-    positive: "border-emerald-400/70 bg-emerald-400/10 text-emerald-200",
-    negative: "border-rose-400/70 bg-rose-400/10 text-rose-200",
-    blue: "border-sky-400/70 bg-sky-400/10 text-sky-200",
-    neutral: "border-neutral-800 bg-neutral-950 text-neutral-100"
+    green: "text-emerald-300",
+    red: "text-rose-300",
+    blue: "text-sky-300",
+    purple: "text-violet-300"
   }[tone];
 
   return (
-    <article className={`border-2 p-4 ${toneClass}`}>
-      <span className="text-[0.68rem] font-black uppercase tracking-[0.18em] text-neutral-500">{title}</span>
-      <strong className="mt-4 block text-3xl font-black leading-none tracking-[-0.07em] sm:text-4xl">{value}</strong>
-      {meta ? <small className="mt-2 block text-sm font-bold text-neutral-500">{meta}</small> : null}
+    <article className="rounded-lg border-2 border-neutral-800 bg-neutral-950 p-5 shadow-[6px_6px_0_rgba(56,189,248,0.22)]">
+      <div className="flex items-center gap-3">
+        <span className="grid size-7 place-items-center rounded-full border border-neutral-700 text-xs font-black text-neutral-500">$</span>
+        <span className="text-[0.68rem] font-black uppercase tracking-[0.18em] text-neutral-400">{label}</span>
+      </div>
+      <strong className={`mt-5 block text-4xl font-black leading-none tracking-[-0.08em] ${toneClass}`}>{value}</strong>
+      {meta ? <small className="mt-3 block text-xs font-bold text-neutral-500">{meta}</small> : null}
     </article>
   );
 }
 
-function PositionLine({ position, compact = false }: { position: PositionRisk; compact?: boolean }) {
-  const size = Number(position.positionAmt);
-  const pnl = Number(position.unRealizedProfit);
-  const isLong = size >= 0;
+function SectionFrame({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className={frame}>
+      <div className="border-b-2 border-neutral-800 px-4 py-3">
+        <h2 className="text-sm font-black uppercase tracking-[0.18em] text-neutral-100">{title}</h2>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function DetailTile({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "green" | "red" | "blue" | "neutral" }) {
+  const toneClass = {
+    green: "text-emerald-300",
+    red: "text-rose-300",
+    blue: "text-sky-300",
+    neutral: "text-neutral-100"
+  }[tone];
 
   return (
-    <div className="grid gap-3 border-2 border-neutral-800 bg-black p-4 md:grid-cols-[1fr_auto] md:items-center">
-      <div>
-        <div className="flex flex-wrap items-center gap-2">
-          <strong className="text-xl font-black tracking-[-0.05em] text-neutral-50">{position.symbol}</strong>
-          <span className={isLong ? "border border-emerald-400/60 px-2 py-0.5 text-xs font-black text-emerald-300" : "border border-rose-400/60 px-2 py-0.5 text-xs font-black text-rose-300"}>
-            {isLong ? "LONG" : "SHORT"}
-          </span>
-          <span className="border border-neutral-700 px-2 py-0.5 text-xs font-black text-neutral-400">{position.leverage}x</span>
-        </div>
-        {!compact ? (
-          <p className="mt-2 text-sm font-semibold text-neutral-500">
-            Size {formatNumber(Math.abs(size), 4)} / Entry {formatUsd(position.entryPrice, 4)} / Mark {formatUsd(position.markPrice, 4)} / Liq {formatUsd(position.liquidationPrice, 4)}
-          </p>
-        ) : null}
-      </div>
-      <div className="text-left md:text-right">
-        <span className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">UPnL</span>
-        <strong className={pnl >= 0 ? "block text-2xl font-black text-emerald-300" : "block text-2xl font-black text-rose-300"}>{formatUsd(pnl)}</strong>
-      </div>
+    <div className="border-2 border-neutral-800 bg-black p-4">
+      <span className="text-[0.68rem] font-black uppercase tracking-[0.16em] text-neutral-500">{label}</span>
+      <strong className={`mt-3 block text-2xl font-black tracking-[-0.06em] ${toneClass}`}>{value}</strong>
     </div>
   );
 }
@@ -180,214 +182,185 @@ export function App() {
   const bnbPositionAmount = Number(bnbPosition?.positionAmt ?? 0);
   const hasBnbPosition = Boolean(bnbPosition && bnbPositionAmount !== 0);
   const activePositions = data?.private.activePositions ?? [];
-  const negativePositions = activePositions.filter((position) => Number(position.unRealizedProfit) < 0);
+  const losingPositions = activePositions.filter((position) => Number(position.unRealizedProfit) < 0);
   const accountAssets = account?.assets?.filter((asset) => Number(asset.walletBalance) !== 0 || Number(asset.marginBalance) !== 0) ?? [];
   const totalPnl = Number(account?.totalUnrealizedProfit ?? activePositions.reduce((sum, position) => sum + Number(position.unRealizedProfit), 0));
   const totalNotional = activePositions.reduce((sum, position) => sum + Math.abs(Number(position.notional ?? 0)), 0);
   const updatedAt = data ? new Date(data.updatedAt).toLocaleTimeString() : "Connecting";
 
   return (
-    <main className="min-h-screen bg-black bg-[radial-gradient(circle_at_12%_0%,rgba(14,165,233,0.2),transparent_28rem),radial-gradient(circle_at_92%_4%,rgba(168,85,247,0.16),transparent_24rem)] text-neutral-50">
-      <div className="border-b border-neutral-800 bg-neutral-950 px-4 py-2">
-        <div className="mx-auto flex max-w-[1540px] flex-wrap items-center justify-between gap-3 text-xs font-black uppercase tracking-[0.18em] text-neutral-300">
-          <span>TradingClaw portfolio cockpit</span>
-          <span>{state.error ? "Feed issue" : `Last sync / ${updatedAt}`}</span>
-        </div>
-      </div>
-
-      <section className="mx-auto max-w-[1540px] px-4 py-5 sm:px-6 lg:px-8">
-        <nav className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 pb-5">
+    <main className="min-h-screen bg-black bg-[radial-gradient(circle_at_10%_0%,rgba(14,165,233,0.18),transparent_26rem),radial-gradient(circle_at_90%_4%,rgba(168,85,247,0.14),transparent_24rem)] text-neutral-100">
+      <div className="border-b-2 border-neutral-800 bg-neutral-950 px-4 py-3">
+        <div className="mx-auto flex max-w-[1540px] flex-wrap items-center justify-between gap-3">
           <div>
-            <p className={label}>Private account first</p>
-            <h1 className="mt-1 text-4xl font-black leading-none tracking-[-0.08em] text-neutral-50 sm:text-5xl">Portfolio Overview</h1>
+            <p className="text-[0.68rem] font-black uppercase tracking-[0.18em] text-sky-300">Current Portfolio Dashboard</p>
+            <h1 className="mt-1 text-3xl font-black tracking-[-0.08em] text-neutral-50">TradingClaw</h1>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-neutral-700 px-3 py-2 text-xs font-black uppercase tracking-widest text-neutral-400">
+              {state.error ? "Feed issue" : `Last sync ${updatedAt}`}
+            </span>
+            <span className="rounded-full border border-neutral-700 px-3 py-2 text-xs font-black uppercase tracking-widest text-neutral-400">
+              {data?.private.configured ? "Private API loaded" : "Public only"}
+            </span>
             <button
-              className="border-2 border-neutral-800 bg-sky-400 px-5 py-3 text-sm font-black uppercase tracking-widest text-neutral-950 shadow-[6px_6px_0_#7c3aed] transition hover:translate-x-1 hover:translate-y-1 hover:shadow-none disabled:cursor-wait disabled:opacity-60"
+              className="rounded-full border-2 border-neutral-800 bg-sky-400 px-4 py-2 text-xs font-black uppercase tracking-widest text-neutral-950 disabled:cursor-wait disabled:opacity-60"
               type="button"
               onClick={loadDashboard}
               disabled={state.loading}
             >
-              {state.loading ? "Syncing" : "Refresh portfolio"}
+              {state.loading ? "Syncing" : "Refresh"}
             </button>
-            <span className="border-2 border-neutral-800 bg-neutral-950 px-4 py-3 text-xs font-black uppercase tracking-widest text-neutral-400">
-              {data?.private.configured ? "Private API loaded" : "Public only"}
-            </span>
           </div>
-        </nav>
+        </div>
+      </div>
 
-        {state.error ? <div className="mb-5 border-2 border-neutral-800 bg-rose-950/70 p-4 font-bold text-rose-100">Binance API: {state.error}</div> : null}
+      <div className="mx-auto grid max-w-[1540px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
+        {state.error ? <div className="rounded-lg border-2 border-neutral-800 bg-rose-950/70 p-4 font-bold text-rose-100">Binance API: {state.error}</div> : null}
         {data && !data.private.configured ? (
-          <div className="mb-5 border-2 border-neutral-800 bg-sky-950/70 p-4 text-sm font-bold text-sky-100">
+          <div className="rounded-lg border-2 border-neutral-800 bg-sky-950/70 p-4 text-sm font-bold text-sky-100">
             Add <code>BINANCE_API_KEY</code> and <code>BINANCE_API_SECRET</code> in <code>.env.local</code> to show wallet balance, private positions, and account risk.
           </div>
         ) : null}
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)]">
-          <article className={`${panel} p-5`}>
-            <span className={label}>Wallet Balance</span>
-            <strong className="mt-5 block text-7xl font-black leading-none tracking-[-0.1em] text-neutral-50 sm:text-8xl">
-              {formatUsd(account?.totalWalletBalance)}
-            </strong>
-            <div className="mt-6 grid gap-3 sm:grid-cols-2">
-              <MoneyCard label="Unrealized PnL" value={formatUsd(totalPnl)} tone={totalPnl >= 0 ? "positive" : "negative"} />
-              <MoneyCard label="Available" value={formatUsd(account?.availableBalance)} tone="blue" />
-            </div>
-          </article>
+        <section className="grid gap-5 md:grid-cols-3">
+          <SummaryCard label="Wallet Balance" value={formatUsd(account?.totalWalletBalance)} meta="Current account wallet" tone="green" />
+          <SummaryCard label="Unrealized PnL" value={formatUsd(totalPnl)} meta={`${losingPositions.length} losing positions`} tone={totalPnl >= 0 ? "green" : "red"} />
+          <SummaryCard label="Active Positions" value={String(activePositions.length)} meta={`Exposure ${formatUsd(totalNotional)}`} tone="purple" />
+        </section>
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <MoneyCard label="Margin Balance" value={formatUsd(account?.totalMarginBalance)} />
-            <MoneyCard label="Maintenance" value={formatUsd(account?.totalMaintMargin)} tone="negative" />
-            <MoneyCard label="Active Positions" value={String(activePositions.length)} meta={`${negativePositions.length} losing`} tone={negativePositions.length ? "negative" : "positive"} />
-            <MoneyCard label="Total Notional" value={formatUsd(totalNotional)} meta="Absolute exposure" tone="blue" />
+        <SectionFrame title="Account Summary">
+          <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-6">
+            <DetailTile label="Wallet" value={formatUsd(account?.totalWalletBalance)} />
+            <DetailTile label="Margin Balance" value={formatUsd(account?.totalMarginBalance)} />
+            <DetailTile label="Available" value={formatUsd(account?.availableBalance)} tone="blue" />
+            <DetailTile label="Maintenance" value={formatUsd(account?.totalMaintMargin)} tone="red" />
+            <DetailTile label="UPnL" value={formatUsd(totalPnl)} tone={totalPnl >= 0 ? "green" : "red"} />
+            <DetailTile label="Notional" value={formatUsd(totalNotional)} />
           </div>
-        </section>
+        </SectionFrame>
 
-        <section className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_430px]">
-          <article className={`${panel} p-5`}>
-            <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className={label}>Current BNB position</p>
-                <h2 className="mt-2 text-4xl font-black tracking-[-0.075em] text-neutral-50">{data?.symbol ?? "BNBUSDT"}</h2>
+        <SectionFrame title="Current BNB Position">
+          <div className="grid gap-4 p-4 lg:grid-cols-[0.72fr_1fr]">
+            <div className="border-2 border-neutral-800 bg-black p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <span className="text-[0.68rem] font-black uppercase tracking-[0.16em] text-neutral-500">Symbol</span>
+                  <strong className="mt-3 block text-4xl font-black tracking-[-0.08em] text-neutral-50">{data?.symbol ?? "BNBUSDT"}</strong>
+                </div>
+                <span className={hasBnbPosition ? (bnbPositionAmount > 0 ? "border-2 border-emerald-400 bg-emerald-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950" : "border-2 border-rose-400 bg-rose-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950") : "border-2 border-neutral-800 bg-neutral-900 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-300"}>
+                  {hasBnbPosition ? (bnbPositionAmount > 0 ? "Long" : "Short") : "Flat"}
+                </span>
               </div>
-              <span className={hasBnbPosition ? (bnbPositionAmount > 0 ? "border-2 border-emerald-400 bg-emerald-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950" : "border-2 border-rose-400 bg-rose-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950") : "border-2 border-neutral-800 bg-neutral-900 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-300"}>
-                {hasBnbPosition ? (bnbPositionAmount > 0 ? "Long" : "Short") : "Flat"}
-              </span>
+              <strong className="mt-8 block text-5xl font-black leading-none tracking-[-0.08em] text-neutral-50">
+                {hasBnbPosition ? `${formatNumber(Math.abs(bnbPositionAmount), 4)} BNB` : "--"}
+              </strong>
+              <small className={Number(bnbPosition?.unRealizedProfit ?? 0) >= 0 ? "mt-4 block text-xl font-black text-emerald-300" : "mt-4 block text-xl font-black text-rose-300"}>
+                UPnL {formatUsd(bnbPosition?.unRealizedProfit)}
+              </small>
             </div>
-            <div className="grid gap-4 lg:grid-cols-[0.72fr_1fr]">
-              <div className="border-2 border-neutral-800 bg-black p-5">
-                <span className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Position Size</span>
-                <strong className="mt-4 block text-5xl font-black leading-none tracking-[-0.08em] text-neutral-50">
-                  {hasBnbPosition ? `${formatNumber(Math.abs(bnbPositionAmount), 4)} BNB` : "--"}
-                </strong>
-                <small className={Number(bnbPosition?.unRealizedProfit ?? 0) >= 0 ? "mt-4 block text-xl font-black text-emerald-300" : "mt-4 block text-xl font-black text-rose-300"}>
-                  UPnL {formatUsd(bnbPosition?.unRealizedProfit)}
-                </small>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <MoneyCard label="Entry" value={formatUsd(bnbPosition?.entryPrice, 3)} />
-                <MoneyCard label="Mark" value={formatUsd(bnbPosition?.markPrice ?? data?.market.premiumIndex.markPrice, 3)} tone="blue" />
-                <MoneyCard label="Liquidation" value={hasBnbPosition ? formatUsd(bnbPosition?.liquidationPrice, 3) : "--"} tone="negative" />
-                <MoneyCard label="Leverage" value={bnbPosition?.leverage ? `${bnbPosition.leverage}x` : "--"} />
-              </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <DetailTile label="Entry" value={formatUsd(bnbPosition?.entryPrice, 4)} />
+              <DetailTile label="Mark" value={formatUsd(bnbPosition?.markPrice ?? data?.market.premiumIndex.markPrice, 4)} tone="blue" />
+              <DetailTile label="Leverage" value={bnbPosition?.leverage ? `${bnbPosition.leverage}x` : "--"} />
+              <DetailTile label="Liquidation" value={hasBnbPosition ? formatUsd(bnbPosition?.liquidationPrice, 4) : "--"} tone="red" />
             </div>
-          </article>
+          </div>
+        </SectionFrame>
 
-          <aside className={`${panel} p-5`}>
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <p className={label}>Loss watch</p>
-                <h2 className="mt-1 text-3xl font-black tracking-[-0.07em] text-neutral-50">Negative Positions</h2>
-              </div>
-              <span className="border-2 border-rose-400 bg-rose-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950">
-                {negativePositions.length} losing
-              </span>
-            </div>
-            {negativePositions.length ? (
-              <div className="grid gap-3">
-                {negativePositions.map((position) => (
-                  <PositionLine compact key={position.symbol} position={position} />
-                ))}
-              </div>
-            ) : (
-              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-800 bg-black p-6 text-center font-bold text-neutral-500">
-                No losing active positions right now.
-              </div>
-            )}
-          </aside>
-        </section>
+        <SectionFrame title="Active Positions">
+          {activePositions.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] border-collapse">
+                <thead>
+                  <tr className="border-b border-neutral-800 bg-black">
+                    {['Symbol', 'Side', 'Size', 'Entry', 'Mark', 'UPnL', 'Notional', 'Leverage', 'Liquidation'].map((heading) => (
+                      <th className={headingCell} key={heading}>{heading}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {activePositions.map((item) => {
+                    const size = Number(item.positionAmt);
+                    const itemPnl = Number(item.unRealizedProfit);
 
-        <section className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
-          <article className={`${panel} p-5`}>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className={label}>Current active exposure only</p>
-                <h2 className="mt-1 text-3xl font-black tracking-[-0.07em] text-neutral-50">Active Positions</h2>
-              </div>
-              <span className="border-2 border-sky-400 bg-sky-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950">
-                {activePositions.length} current
-              </span>
+                    return (
+                      <tr className="border-b border-neutral-900" key={item.symbol}>
+                        <td className={valueCell}>{item.symbol}</td>
+                        <td className={`${valueCell} ${size > 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{size > 0 ? 'Long' : 'Short'}</td>
+                        <td className={valueCell}>{formatNumber(Math.abs(size), 4)}</td>
+                        <td className={valueCell}>{formatUsd(item.entryPrice, 4)}</td>
+                        <td className={valueCell}>{formatUsd(item.markPrice, 4)}</td>
+                        <td className={`${valueCell} ${itemPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{formatUsd(itemPnl)}</td>
+                        <td className={valueCell}>{formatUsd(item.notional)}</td>
+                        <td className={valueCell}>{item.leverage ? `${item.leverage}x` : '--'}</td>
+                        <td className={valueCell}>{formatUsd(item.liquidationPrice, 4)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-            {activePositions.length ? (
-              <div className="max-h-[560px] overflow-auto border-2 border-neutral-800">
-                <table className="w-full min-w-[880px] border-collapse text-sm font-bold">
-                  <thead className="sticky top-0 bg-neutral-900 text-neutral-300">
-                    <tr className="border-b border-neutral-800">
-                      {['Symbol', 'Side', 'Size', 'Entry', 'Mark', 'PnL', 'Notional', 'Lev', 'Liq'].map((heading, index) => (
-                        <th className={`px-3 py-3 ${index === 0 ? 'text-left' : 'text-right'}`} key={heading}>{heading}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activePositions.map((item) => {
-                      const size = Number(item.positionAmt);
-                      const itemPnl = Number(item.unRealizedProfit);
+          ) : (
+            <div className="p-6 text-center text-sm font-bold text-neutral-500">No active positions right now.</div>
+          )}
+        </SectionFrame>
 
-                      return (
-                        <tr className="border-b border-neutral-800 bg-black text-neutral-100" key={item.symbol}>
-                          <td className="px-3 py-3 text-left">{item.symbol}</td>
-                          <td className={size > 0 ? 'px-3 py-3 text-right text-emerald-300' : size < 0 ? 'px-3 py-3 text-right text-rose-300' : 'px-3 py-3 text-right text-neutral-600'}>
-                            {size > 0 ? 'Long' : size < 0 ? 'Short' : 'Flat'}
-                          </td>
-                          <td className="px-3 py-3 text-right">{formatNumber(Math.abs(size), 4)}</td>
-                          <td className="px-3 py-3 text-right">{formatUsd(item.entryPrice, 4)}</td>
-                          <td className="px-3 py-3 text-right">{formatUsd(item.markPrice, 4)}</td>
-                          <td className={itemPnl > 0 ? 'px-3 py-3 text-right text-emerald-300' : itemPnl < 0 ? 'px-3 py-3 text-right text-rose-300' : 'px-3 py-3 text-right'}>
-                            {formatUsd(itemPnl)}
-                          </td>
-                          <td className="px-3 py-3 text-right">{formatUsd(item.notional)}</td>
-                          <td className="px-3 py-3 text-right">{item.leverage ? `${item.leverage}x` : '--'}</td>
-                          <td className="px-3 py-3 text-right">{formatUsd(item.liquidationPrice, 4)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-800 bg-black p-6 text-center font-bold text-neutral-500">
-                No active positions right now.
-              </div>
-            )}
-          </article>
+        <SectionFrame title="Negative Positions">
+          {losingPositions.length ? (
+            <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+              {losingPositions.map((item) => {
+                const size = Number(item.positionAmt);
 
-          <article className={`${panel} p-5`}>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className={label}>Assets with non-zero balances</p>
-                <h2 className="mt-1 text-3xl font-black tracking-[-0.07em] text-neutral-50">Balances</h2>
-              </div>
-              <span className="border-2 border-sky-400 bg-sky-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950">
-                {accountAssets.length} assets
-              </span>
+                return (
+                  <article className="border-2 border-rose-400/50 bg-rose-950/20 p-4" key={item.symbol}>
+                    <div className="flex items-center justify-between gap-3">
+                      <strong className="text-xl font-black tracking-[-0.05em] text-neutral-50">{item.symbol}</strong>
+                      <span className={size > 0 ? "text-sm font-black text-emerald-300" : "text-sm font-black text-rose-300"}>
+                        {size > 0 ? "Long" : "Short"}
+                      </span>
+                    </div>
+                    <strong className="mt-4 block text-3xl font-black tracking-[-0.07em] text-rose-300">{formatUsd(item.unRealizedProfit)}</strong>
+                    <p className="mt-3 text-sm font-bold text-neutral-500">
+                      Size {formatNumber(Math.abs(size), 4)} / Entry {formatUsd(item.entryPrice, 4)} / Mark {formatUsd(item.markPrice, 4)}
+                    </p>
+                  </article>
+                );
+              })}
             </div>
-            {accountAssets.length ? (
-              <div className="grid gap-3">
-                {accountAssets.map((asset) => (
-                  <div className="border-2 border-neutral-800 bg-black p-4" key={asset.asset}>
+          ) : (
+            <div className="p-6 text-center text-sm font-bold text-neutral-500">No losing active positions right now.</div>
+          )}
+        </SectionFrame>
+
+        <SectionFrame title="Balances">
+          {accountAssets.length ? (
+            <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+              {accountAssets.map((asset) => {
+                const assetPnl = Number(asset.unrealizedProfit);
+
+                return (
+                  <article className="border-2 border-neutral-800 bg-black p-4" key={asset.asset}>
                     <div className="flex items-center justify-between gap-3">
                       <strong className="text-xl font-black tracking-[-0.05em] text-neutral-50">{asset.asset}</strong>
-                      <span className={Number(asset.unrealizedProfit) >= 0 ? 'font-black text-emerald-300' : 'font-black text-rose-300'}>
+                      <span className={assetPnl >= 0 ? "text-sm font-black text-emerald-300" : "text-sm font-black text-rose-300"}>
                         PnL {formatNumber(asset.unrealizedProfit, 6)}
                       </span>
                     </div>
-                    <div className="mt-3 grid gap-2 text-sm font-bold text-neutral-500">
+                    <div className="mt-4 grid gap-2 text-sm font-bold text-neutral-500">
                       <span>Wallet {formatNumber(asset.walletBalance, 6)}</span>
                       <span>Margin {formatNumber(asset.marginBalance, 6)}</span>
-                      <span>Available {formatNumber(asset.availableBalance, 6)}</span>
+                      <span className="text-sky-300">Available {formatNumber(asset.availableBalance, 6)}</span>
                     </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="grid min-h-44 place-items-center border border-dashed border-neutral-800 bg-black p-6 text-center font-bold text-neutral-500">
-                No non-zero assets found, or private API keys are not loaded yet.
-              </div>
-            )}
-          </article>
-        </section>
-
-      </section>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-6 text-center text-sm font-bold text-neutral-500">No non-zero assets found, or private API keys are not loaded yet.</div>
+          )}
+        </SectionFrame>
+      </div>
     </main>
   );
 }
