@@ -160,7 +160,7 @@ function DetailTile({ label, value, tone = "neutral" }: { label: string; value: 
 
 export function App() {
   const [state, setState] = useState<LoadState>({ data: null, error: null, loading: true });
-  const [socketStatus, setSocketStatus] = useState<"connecting" | "live" | "reconnecting" | "offline">("connecting");
+  const [socketStatus, setSocketStatus] = useState<"connecting" | "live" | "reconnecting" | "offline" | "polling">("connecting");
   const socketRef = useRef<WebSocket | null>(null);
 
   async function loadDashboard() {
@@ -185,6 +185,13 @@ export function App() {
   }
 
   useEffect(() => {
+    if (!import.meta.env.DEV) {
+      setSocketStatus("polling");
+      loadDashboard();
+      const timer = window.setInterval(loadDashboard, 5000);
+      return () => window.clearInterval(timer);
+    }
+
     let reconnectTimer: number | undefined;
     let stopped = false;
 
@@ -271,7 +278,7 @@ export function App() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-neutral-700 px-3 py-2 text-xs font-black uppercase tracking-widest text-neutral-400">
-              {state.error ? "Feed issue" : `Socket ${socketStatus} / ${updatedAt}`}
+              {state.error ? "Feed issue" : `${socketStatus === "polling" ? "Realtime polling" : `Socket ${socketStatus}`} / ${updatedAt}`}
             </span>
             <span className="rounded-full border border-neutral-700 px-3 py-2 text-xs font-black uppercase tracking-widest text-neutral-400">
               {data?.private.configured ? "Private API loaded" : "Public only"}
