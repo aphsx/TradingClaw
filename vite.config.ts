@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 
 const SYMBOL = "BNBUSDT";
@@ -137,6 +138,6 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
 
   return {
-    plugins: [react(), binanceApiPlugin(env)]
+    plugins: [tailwindcss(), react(), binanceApiPlugin(env)]
   };
 });
