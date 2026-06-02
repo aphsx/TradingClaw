@@ -243,9 +243,6 @@ export function App() {
 
   const data = state.data;
   const account = data?.private.account;
-  const bnbPosition = data?.private.position;
-  const bnbPositionAmount = Number(bnbPosition?.positionAmt ?? 0);
-  const hasBnbPosition = Boolean(bnbPosition && bnbPositionAmount !== 0);
   const activePositions = data?.private.activePositions ?? [];
   const losingPositions = activePositions.filter((position) => Number(position.unRealizedProfit) < 0);
   const accountAssets = account?.assets?.filter((asset) => Number(asset.walletBalance) !== 0 || Number(asset.marginBalance) !== 0) ?? [];
@@ -313,34 +310,6 @@ export function App() {
             <DetailTile label="Maintenance" value={formatUsd(account?.totalMaintMargin)} tone="red" />
             <DetailTile label="UPnL" value={formatUsd(totalPnl)} tone={totalPnl >= 0 ? "green" : "red"} />
             <DetailTile label="Notional" value={formatUsd(totalNotional)} />
-          </div>
-        </SectionFrame>
-
-        <SectionFrame title="Current BNB Position">
-          <div className="grid gap-4 p-4 lg:grid-cols-[0.72fr_1fr]">
-            <div className="border-2 border-neutral-800 bg-black p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <span className="text-[0.68rem] font-black uppercase tracking-[0.16em] text-neutral-500">Symbol</span>
-                  <strong className="mt-3 block text-4xl font-black tracking-[-0.08em] text-neutral-50">{data?.symbol ?? "BNBUSDT"}</strong>
-                </div>
-                <span className={hasBnbPosition ? (bnbPositionAmount > 0 ? "border-2 border-emerald-400 bg-emerald-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950" : "border-2 border-rose-400 bg-rose-400 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-950") : "border-2 border-neutral-800 bg-neutral-900 px-3 py-1 text-xs font-black uppercase tracking-widest text-neutral-300"}>
-                  {hasBnbPosition ? (bnbPositionAmount > 0 ? "Long" : "Short") : "Flat"}
-                </span>
-              </div>
-              <strong className="mt-8 block text-5xl font-black leading-none tracking-[-0.08em] text-neutral-50">
-                {hasBnbPosition ? `${formatNumber(Math.abs(bnbPositionAmount), 4)} BNB` : "--"}
-              </strong>
-              <small className={Number(bnbPosition?.unRealizedProfit ?? 0) >= 0 ? "mt-4 block text-xl font-black text-emerald-300" : "mt-4 block text-xl font-black text-rose-300"}>
-                UPnL {formatUsd(bnbPosition?.unRealizedProfit)}
-              </small>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <DetailTile label="Entry" value={formatUsd(bnbPosition?.entryPrice, 4)} />
-              <DetailTile label="Mark" value={formatUsd(bnbPosition?.markPrice ?? data?.market.premiumIndex.markPrice, 4)} tone="blue" />
-              <DetailTile label="Leverage" value={bnbPosition?.leverage ? `${bnbPosition.leverage}x` : "--"} />
-              <DetailTile label="Liquidation" value={hasBnbPosition ? formatUsd(bnbPosition?.liquidationPrice, 4) : "--"} tone="red" />
-            </div>
           </div>
         </SectionFrame>
 
