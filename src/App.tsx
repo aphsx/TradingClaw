@@ -168,6 +168,131 @@ function DetailTile({ label, value, tone = "neutral" }: { label: string; value: 
   );
 }
 
+function CandleChart({ symbol, klines, lastPrice }: { symbol: string; klines: Kline[]; lastPrice?: string }) {
+  const candles = klines.map((kline) => ({
+    time: kline[0],
+    open: Number(kline[1]),
+    high: Number(kline[2]),
+    low: Number(kline[3]),
+    close: Number(kline[4]),
+    volume: Number(kline[5])
+  })).filter((candle) => [candle.open, candle.high, candle.low, candle.close, candle.volume].every(Number.isFinite));
+
+  if (!candles.length) {
+    return <div className="p-8 text-center text-sm font-bold text-neutral-500">Waiting for chart data.</div>;
+  }
+
+  const width = 1160;
+  const height = 430;
+  const pad = { top: 28, right: 86, bottom: 58, left: 28 };
+  const chartHeight = 282;
+  const volumeTop = pad.top + chartHeight + 22;
+  const volumeHeight = height - volumeTop - pad.bottom;
+  const plotWidth = width - pad.left - pad.right;
+  const minLow = Math.min(...candles.map((candle) => candle.low));
+  const maxHigh = Math.max(...candles.map((candle) => candle.high));
+  const pricePadding = Math.max((maxHigh - minLow) * 0.08, maxHigh * 0.001);
+  const minPrice = minLow - pricePadding;
+  const maxPrice = maxHigh + pricePadding;
+  const priceRange = Math.max(maxPrice - minPrice, 1);
+  const maxVolume = Math.max(...candles.map((candle) => candle.volume), 1);
+  const candleSlot = plotWidth / candles.length;
+  const candleWidth = Math.max(Math.min(candleSlot * 0.58, 14), 4);
+  const yForPrice = (price: number) => pad.top + ((maxPrice - price) / priceRange) * chartHeight;
+  const xForIndex = (index: number) => pad.left + candleSlot * index + candleSlot / 2;
+  const priceTicks = Array.from({ length: 5 }, (_, index) => minPrice + (priceRange / 4) * index).reverse();
+  const timeTicks = candles.filter((_, index) => index % Math.max(Math.floor(candles.length / 6), 1) === 0);
+  const latest = candles[candles.length - 1];
+  const latestPrice = Number(lastPrice ?? latest?.close ?? 0);
+  const latestY = yForPrice(Number.isFinite(latestPrice) ? latestPrice : latest?.close ?? 0);
+  const firstClose = candles[0]?.close ?? 0;
+  const change = latest ? ((latest.close - firstClose) / firstClose) * 100 : 0;
+  const isUp = latest ? latest.close >= firstClose : true;
+
+  return (
+    <div className="p-4">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="pixel-label-muted">{symbol} Perpetual / 5m</p>
+          <strong className={`pixel-chart-price pixel-number mt-2 block ${isUp ? "text-emerald-300" : "text-rose-300"}`}>
+            {formatUsd(latest?.close, 4)}
+          </strong>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="pixel-chip px-3 py-2">O {formatUsd(latest?.open, 4)}</span>
+          <span className="pixel-chip px-3 py-2">H {formatUsd(latest?.high, 4)}</span>
+          <span className="pixel-chip px-3 py-2">L {formatUsd(latest?.low, 4)}</span>
+          <span className={`pixel-chip px-3 py-2 ${isUp ? "text-emerald-300" : "text-rose-300"}`}>
+            {change >= 0 ? "+" : ""}{formatNumber(change, 2)}%
+          </span>
+        </div>
+      </div>
+
+      <div className="pixel-chart-wrap">
+        <svg className="pixel-chart" role="img" aria-label={`${symbol} candlestick chart`} viewBox={`0 0 ${width} ${height}`}>
+          <defs>
+            <linearGradient id="chartGlow" x1="0" x2="1" y1="0" y2="1">
+              <stop offset="0%" stopColor="#6bff6b" stopOpacity="0.2" />
+              <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <rect x={pad.left} y={pad.top} width={plotWidth} height={chartHeight} fill="url(#chartGlow)" opacity="0.65" />
+          {priceTicks.map((tick) => {
+            const y = yForPrice(tick);
+
+            return (
+              <g key={tick}>
+                <line className="pixel-chart-grid" x1={pad.left} x2={width - pad.right} y1={y} y2={y} />
+                <text className="pixel-chart-label" x={width - pad.right + 12} y={y + 4}>{formatNumber(tick, 2)}</text>
+              </g>
+            );
+          })}
+          {timeTicks.map((tick) => {
+            const index = candles.indexOf(tick);
+            const x = xForIndex(index);
+
+            return (
+              <g key={tick.time}>
+                <line className="pixel-chart-grid-faint" x1={x} x2={x} y1={pad.top} y2={volumeTop + volumeHeight} />
+                <text className="pixel-chart-label" textAnchor="middle" x={x} y={height - 24}>
+                  {new Date(tick.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </text>
+              </g>
+            );
+          })}
+          <line className="pixel-chart-last-line" x1={pad.left} x2={width - pad.right} y1={latestY} y2={latestY} />
+          <text className="pixel-chart-last-label" x={width - pad.right + 12} y={latestY + 4}>{formatNumber(latestPrice, 4)}</text>
+          {candles.map((candle, index) => {
+            const x = xForIndex(index);
+            const openY = yForPrice(candle.open);
+            const closeY = yForPrice(candle.close);
+            const highY = yForPrice(candle.high);
+            const lowY = yForPrice(candle.low);
+            const candleTop = Math.min(openY, closeY);
+            const candleHeight = Math.max(Math.abs(closeY - openY), 2);
+            const volumeBarHeight = Math.max((candle.volume / maxVolume) * volumeHeight, 2);
+            const up = candle.close >= candle.open;
+
+            return (
+              <g className={up ? "pixel-candle-up" : "pixel-candle-down"} key={`${candle.time}-${index}`}>
+                <line x1={x} x2={x} y1={highY} y2={lowY} />
+                <rect x={x - candleWidth / 2} y={candleTop} width={candleWidth} height={candleHeight} />
+                <rect
+                  className="pixel-volume-bar"
+                  x={x - candleWidth / 2}
+                  y={volumeTop + volumeHeight - volumeBarHeight}
+                  width={candleWidth}
+                  height={volumeBarHeight}
+                />
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const [state, setState] = useState<LoadState>({ data: null, error: null, loading: true });
   const [socketStatus, setSocketStatus] = useState<"connecting" | "live" | "reconnecting" | "offline" | "polling">("connecting");
@@ -336,6 +461,12 @@ export function App() {
             tone="purple"
           />
         </section>
+
+        <SectionFrame title={data ? `${data.symbol} Futures Chart` : "Futures Chart"}>
+          {data ? <CandleChart symbol={data.symbol} klines={data.market.klines} lastPrice={data.market.ticker.lastPrice} /> : (
+            <div className="p-8 text-center text-sm font-bold text-neutral-500">Loading BNB chart.</div>
+          )}
+        </SectionFrame>
 
         <SectionFrame title="Account Summary">
           <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-6">

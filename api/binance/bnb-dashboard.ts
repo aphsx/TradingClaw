@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 
-const SYMBOL = "BNBUSDT";
+const DEFAULT_SYMBOL = "BNBUSDT";
 
 type Env = Record<string, string | undefined>;
 type ServerTimeResponse = {
@@ -24,6 +24,7 @@ type VercelResponse = {
 type PositionRisk = {
   symbol?: string;
   positionAmt?: string;
+  notional?: string;
   unRealizedProfit?: string;
 };
 
@@ -65,6 +66,23 @@ function getBaseUrl(env: Env) {
   } catch {
     throw new Error(`Invalid BINANCE_BASE_URL: ${rawBaseUrl}`);
   }
+}
+
+function normalizeSymbol(symbol?: string) {
+  const normalized = symbol?.trim().toUpperCase();
+  return normalized && /^[A-Z0-9_]+$/.test(normalized) ? normalized : DEFAULT_SYMBOL;
+}
+
+function chooseDashboardPosition(activePositions: PositionRisk[]) {
+  return activePositions.reduce<PositionRisk | null>((selected, position) => {
+    if (!selected) {
+      return position;
+    }
+
+    const selectedExposure = Math.abs(Number(selected.notional ?? selected.positionAmt ?? 0));
+    const positionExposure = Math.abs(Number(position.notional ?? position.positionAmt ?? 0));
+    return positionExposure > selectedExposure ? position : selected;
+  }, null);
 }
 
 async function resolveTimeOffset(baseUrl: URL) {
@@ -127,27 +145,37 @@ async function getPrivateAccountData(
     fetchJson(accountUrl, { headers })
   ]);
   const activePositions = positionRisk.filter((position) => Number(position.positionAmt ?? 0) !== 0);
-  const bnbPosition = positionRisk.find((position) => position.symbol === SYMBOL) ?? null;
+  const dashboardPosition = chooseDashboardPosition(activePositions);
 
   return {
     configured: true,
-    position: bnbPosition,
+    position: dashboardPosition,
     positions: positionRisk,
     activePositions,
     account
   };
 }
 
-async function getDashboardData(env: Env) {
-  const baseUrl = getBaseUrl(env);
+async function getMarketData(baseUrl: URL, symbol: string) {
+  const encodedSymbol = encodeURIComponent(symbol);
 
   const [ticker, premiumIndex, openInterest, klines] = await Promise.all([
-    fetchJson(new URL(`/fapi/v1/ticker/24hr?symbol=${SYMBOL}`, baseUrl)),
-    fetchJson(new URL(`/fapi/v1/premiumIndex?symbol=${SYMBOL}`, baseUrl)),
-    fetchJson(new URL(`/fapi/v1/openInterest?symbol=${SYMBOL}`, baseUrl)),
-    fetchJson(new URL(`/fapi/v1/klines?symbol=${SYMBOL}&interval=5m&limit=48`, baseUrl))
+    fetchJson(new URL(`/fapi/v1/ticker/24hr?symbol=${encodedSymbol}`, baseUrl)),
+    fetchJson(new URL(`/fapi/v1/premiumIndex?symbol=${encodedSymbol}`, baseUrl)),
+    fetchJson(new URL(`/fapi/v1/openInterest?symbol=${encodedSymbol}`, baseUrl)),
+    fetchJson(new URL(`/fapi/v1/klines?symbol=${encodedSymbol}&interval=5m&limit=48`, baseUrl))
   ]);
 
+  return {
+    ticker,
+    premiumIndex,
+    openInterest,
+    klines
+  };
+}
+
+async function getDashboardData(env: Env) {
+  const baseUrl = getBaseUrl(env);
   const apiKey = envValue(env, "BINANCE_API_KEY");
   const apiSecret = envValue(env, "BINANCE_API_SECRET");
   const hasPrivateCredentials = Boolean(apiKey && apiSecret);
@@ -156,16 +184,13 @@ async function getDashboardData(env: Env) {
   const privateData = hasPrivateCredentials
     ? await getPrivateAccountData(baseUrl, apiKey, apiSecret, timeOffsetMs, recvWindow)
     : { configured: false, position: null, positions: [], activePositions: [], account: null };
+  const symbol = normalizeSymbol(privateData.position?.symbol);
+  const marketData = await getMarketData(baseUrl, symbol);
 
   return {
-    symbol: SYMBOL,
+    symbol,
     updatedAt: new Date().toISOString(),
-    market: {
-      ticker,
-      premiumIndex,
-      openInterest,
-      klines
-    },
+    market: marketData,
     private: privateData
   };
 }

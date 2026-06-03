@@ -176,6 +176,91 @@
     color: #8a8a8a;
   }
 
+  .pixel-chart-price {
+    font-size: clamp(1.8rem, 4vw, 3.25rem);
+    font-weight: 900;
+    letter-spacing: -0.07em;
+  }
+
+  .pixel-chart-wrap {
+    overflow-x: auto;
+    border: 2px solid #181818;
+    background:
+      linear-gradient(180deg, rgba(107, 255, 107, 0.08), transparent 34%),
+      repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 28px),
+      #050505;
+  }
+
+  .pixel-chart {
+    display: block;
+    min-width: 920px;
+    width: 100%;
+    height: auto;
+  }
+
+  .pixel-chart-grid {
+    stroke: rgba(255, 255, 255, 0.12);
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+  }
+
+  .pixel-chart-grid-faint {
+    stroke: rgba(255, 255, 255, 0.06);
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+  }
+
+  .pixel-chart-label {
+    fill: #7d7d7d;
+    font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pixel-chart-last-line {
+    stroke: rgba(107, 255, 107, 0.85);
+    stroke-dasharray: 7 7;
+    stroke-width: 1.5;
+  }
+
+  .pixel-chart-last-label {
+    fill: #6bff6b;
+    font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 900;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pixel-candle-up {
+    color: #6bff6b;
+  }
+
+  .pixel-candle-down {
+    color: #ff5c7a;
+  }
+
+  .pixel-candle-up line,
+  .pixel-candle-down line {
+    stroke: currentColor;
+    stroke-width: 2;
+    shape-rendering: crispEdges;
+  }
+
+  .pixel-candle-up rect:not(.pixel-volume-bar),
+  .pixel-candle-down rect:not(.pixel-volume-bar) {
+    fill: currentColor;
+    stroke: #050505;
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+  }
+
+  .pixel-volume-bar {
+    fill: currentColor;
+    opacity: 0.32;
+    shape-rendering: crispEdges;
+  }
+
   .pixel-tile {
     border: 2px solid #242424;
     background: #080808;

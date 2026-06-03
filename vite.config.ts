@@ -5,7 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { WebSocket, WebSocketServer } from "ws";
 
-const SYMBOL = "BNBUSDT";
+const DEFAULT_SYMBOL = "BNBUSDT";
 const DASHBOARD_SOCKET_PATH = "/api/binance/bnb-dashboard/socket";
 
 type Env = Record<string, string>;
@@ -98,8 +98,26 @@ function signedUrl(
 type PositionRisk = {
   symbol?: string;
   positionAmt?: string;
+  notional?: string;
   unRealizedProfit?: string;
 };
+
+function normalizeSymbol(symbol?: string) {
+  const normalized = symbol?.trim().toUpperCase();
+  return normalized && /^[A-Z0-9_]+$/.test(normalized) ? normalized : DEFAULT_SYMBOL;
+}
+
+function chooseDashboardPosition(activePositions: PositionRisk[]) {
+  return activePositions.reduce<PositionRisk | null>((selected, position) => {
+    if (!selected) {
+      return position;
+    }
+
+    const selectedExposure = Math.abs(Number(selected.notional ?? selected.positionAmt ?? 0));
+    const positionExposure = Math.abs(Number(position.notional ?? position.positionAmt ?? 0));
+    return positionExposure > selectedExposure ? position : selected;
+  }, null);
+}
 
 async function getPrivateAccountData(
   baseUrl: URL,
@@ -124,14 +142,32 @@ async function getPrivateAccountData(
     fetchJson(accountUrl, { headers })
   ]);
   const activePositions = positionRisk.filter((position) => Number(position.positionAmt ?? 0) !== 0);
-  const bnbPosition = positionRisk.find((position) => position.symbol === SYMBOL) ?? null;
+  const dashboardPosition = chooseDashboardPosition(activePositions);
 
   return {
     configured: true,
-    position: bnbPosition,
+    position: dashboardPosition,
     positions: positionRisk,
     activePositions,
     account
+  };
+}
+
+async function getMarketData(baseUrl: URL, symbol: string) {
+  const encodedSymbol = encodeURIComponent(symbol);
+
+  const [ticker, premiumIndex, openInterest, klines] = await Promise.all([
+    fetchJson(new URL(`/fapi/v1/ticker/24hr?symbol=${encodedSymbol}`, baseUrl)),
+    fetchJson(new URL(`/fapi/v1/premiumIndex?symbol=${encodedSymbol}`, baseUrl)),
+    fetchJson(new URL(`/fapi/v1/openInterest?symbol=${encodedSymbol}`, baseUrl)),
+    fetchJson(new URL(`/fapi/v1/klines?symbol=${encodedSymbol}&interval=5m&limit=48`, baseUrl))
+  ]);
+
+  return {
+    ticker,
+    premiumIndex,
+    openInterest,
+    klines
   };
 }
 
@@ -149,13 +185,6 @@ async function getDashboardData(env: Env) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
 
-  const [ticker, premiumIndex, openInterest, klines] = await Promise.all([
-    fetchJson(new URL(`/fapi/v1/ticker/24hr?symbol=${SYMBOL}`, baseUrl)),
-    fetchJson(new URL(`/fapi/v1/premiumIndex?symbol=${SYMBOL}`, baseUrl)),
-    fetchJson(new URL(`/fapi/v1/openInterest?symbol=${SYMBOL}`, baseUrl)),
-    fetchJson(new URL(`/fapi/v1/klines?symbol=${SYMBOL}&interval=5m&limit=48`, baseUrl))
-  ]);
-
   const apiKey = envValue(env, "BINANCE_API_KEY");
   const apiSecret = envValue(env, "BINANCE_API_SECRET");
   const hasPrivateCredentials = Boolean(apiKey && apiSecret);
@@ -164,16 +193,13 @@ async function getDashboardData(env: Env) {
   const privateData = hasPrivateCredentials
     ? await getPrivateAccountData(baseUrl, apiKey, apiSecret, timeOffsetMs, recvWindow)
     : { configured: false, position: null, positions: [], activePositions: [], account: null };
+  const symbol = normalizeSymbol(privateData.position?.symbol);
+  const marketData = await getMarketData(baseUrl, symbol);
 
   return {
-    symbol: SYMBOL,
+    symbol,
     updatedAt: new Date().toISOString(),
-    market: {
-      ticker,
-      premiumIndex,
-      openInterest,
-      klines
-    },
+    market: marketData,
     private: privateData
   };
 }
