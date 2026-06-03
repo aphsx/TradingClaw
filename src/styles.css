@@ -1,14 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;600;700&display=swap");
 @import "tailwindcss";
 
 @layer base {
   :root {
-    color: #f5f5f5;
-    background: #000000;
-    font-family:
-      Inter, "Arial Narrow", "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
+    color: #f7f7f7;
+    background: #050505;
+    font-family: "Space Grotesk", "Segoe UI", Arial, ui-sans-serif, system-ui, sans-serif;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
+    --okx-black: #050505;
+    --okx-deep: #0c0c0c;
+    --okx-edge: #1f1f1f;
+    --okx-ink: #e7e7e7;
+    --okx-muted: #a5a5a5;
+    --okx-accent: #6bff6b;
+    --okx-accent-dark: #3adf52;
   }
 
   * {
@@ -19,10 +26,208 @@
     min-width: 320px;
     min-height: 100vh;
     margin: 0;
-    background: #000000;
+    background: var(--okx-black);
   }
 
   button {
     font: inherit;
+  }
+
+  code {
+    font-family: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.7rem;
+  }
+}
+
+@layer components {
+  .pixel-stage {
+    background-color: var(--okx-black);
+    background-image:
+      radial-gradient(circle at 12% 0%, rgba(107, 255, 107, 0.12), transparent 34rem),
+      radial-gradient(circle at 86% 6%, rgba(255, 255, 255, 0.08), transparent 28rem),
+      repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 4px),
+      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 4px);
+    animation: pixel-pan 18s linear infinite;
+  }
+
+  .pixel-topbar {
+    background: linear-gradient(90deg, #0c0c0c 0%, #141414 50%, #0c0c0c 100%);
+    border-bottom: 2px solid var(--okx-edge);
+    box-shadow: 0 6px 0 rgba(0, 0, 0, 0.6);
+  }
+
+  .pixel-title {
+    font-family: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 1.9rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--okx-ink);
+  }
+
+  .pixel-eyebrow {
+    font-family: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.52rem;
+    letter-spacing: 0.38em;
+    text-transform: uppercase;
+    color: var(--okx-accent);
+  }
+
+  .pixel-chip {
+    border: 2px solid var(--okx-edge);
+    background: #0e0e0e;
+    font-size: 0.56rem;
+    font-weight: 700;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    color: var(--okx-muted);
+  }
+
+  .pixel-button {
+    border: 2px solid #000000;
+    background: var(--okx-accent);
+    color: #050505;
+    font-size: 0.6rem;
+    font-weight: 800;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.8);
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+
+  .pixel-button:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.8);
+  }
+
+  .pixel-frame {
+    overflow: hidden;
+    border: 2px solid var(--okx-edge);
+    background: var(--okx-deep);
+    box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.7);
+  }
+
+  .pixel-frame-head {
+    background: #0f0f0f;
+    border-bottom: 2px solid var(--okx-edge);
+  }
+
+  .pixel-section-title {
+    font-family: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.68rem;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--okx-ink);
+  }
+
+  .pixel-card {
+    border: 2px solid var(--okx-edge);
+    background: #0a0a0a;
+    box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.7);
+  }
+
+  .pixel-card-danger {
+    border-color: rgba(248, 113, 113, 0.55);
+    background: rgba(88, 0, 0, 0.25);
+  }
+
+  .pixel-token {
+    border: 2px solid #2a2a2a;
+    color: var(--okx-muted);
+    font-size: 0.7rem;
+    font-weight: 800;
+  }
+
+  .pixel-label {
+    font-family: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.55rem;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--okx-muted);
+  }
+
+  .pixel-label-muted {
+    font-family: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.52rem;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: #8b8b8b;
+  }
+
+  .pixel-metric {
+    font-size: 2.4rem;
+    font-weight: 800;
+    letter-spacing: -0.06em;
+  }
+
+  .pixel-value {
+    font-size: 1.3rem;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+  }
+
+  .pixel-meta {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #8a8a8a;
+  }
+
+  .pixel-tile {
+    border: 2px solid #242424;
+    background: #080808;
+  }
+
+  .pixel-thead {
+    border-bottom: 2px solid var(--okx-edge);
+    background: #0a0a0a;
+  }
+
+  .pixel-thead-cell {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    font-family: "Press Start 2P", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.5rem;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: var(--okx-muted);
+  }
+
+  .pixel-tcell {
+    padding: 0.75rem 1rem;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--okx-ink);
+  }
+
+  .pixel-trow {
+    border-bottom: 1px solid #191919;
+  }
+
+  .pixel-alert {
+    border: 2px solid var(--okx-edge);
+    background: #0f0f0f;
+    font-weight: 700;
+    color: var(--okx-ink);
+    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.7);
+  }
+
+  .pixel-alert-error {
+    border-color: rgba(248, 113, 113, 0.6);
+    background: rgba(68, 8, 8, 0.5);
+    color: #fecaca;
+  }
+
+  .pixel-alert-info {
+    border-color: rgba(59, 130, 246, 0.45);
+    background: rgba(10, 24, 48, 0.6);
+    color: #dbeafe;
+  }
+}
+
+@keyframes pixel-pan {
+  0% {
+    background-position: 0 0, 0 0, 0 0, 0 0;
+  }
+  100% {
+    background-position: 200px 0, -200px 0, 0 160px, 160px 0;
   }
 }

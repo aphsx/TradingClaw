@@ -107,9 +107,9 @@ const formatNumber = (value: string | number | undefined, maximumFractionDigits 
   return new Intl.NumberFormat("en-US", { maximumFractionDigits }).format(Number.isFinite(number) ? number : 0);
 };
 
-const frame = "overflow-hidden rounded-lg border-2 border-neutral-800 bg-neutral-950";
-const headingCell = "px-4 py-3 text-left text-[0.68rem] font-black uppercase tracking-[0.16em] text-neutral-400";
-const valueCell = "px-4 py-3 text-sm font-bold text-neutral-100";
+const frame = "pixel-frame";
+const headingCell = "pixel-thead-cell";
+const valueCell = "pixel-tcell";
 
 function SummaryCard({ label, value, meta, tone = "blue" }: { label: string; value: string; meta?: string; tone?: "green" | "red" | "blue" | "purple" }) {
   const toneClass = {
@@ -120,13 +120,13 @@ function SummaryCard({ label, value, meta, tone = "blue" }: { label: string; val
   }[tone];
 
   return (
-    <article className="rounded-lg border-2 border-neutral-800 bg-neutral-950 p-5 shadow-[6px_6px_0_rgba(56,189,248,0.22)]">
+    <article className="pixel-card p-5">
       <div className="flex items-center gap-3">
-        <span className="grid size-7 place-items-center rounded-full border border-neutral-700 text-xs font-black text-neutral-500">$</span>
-        <span className="text-[0.68rem] font-black uppercase tracking-[0.18em] text-neutral-400">{label}</span>
+        <span className="pixel-token grid size-7 place-items-center">$</span>
+        <span className="pixel-label">{label}</span>
       </div>
-      <strong className={`mt-5 block text-4xl font-black leading-none tracking-[-0.08em] ${toneClass}`}>{value}</strong>
-      {meta ? <small className="mt-3 block text-xs font-bold text-neutral-500">{meta}</small> : null}
+      <strong className={`pixel-metric mt-5 block ${toneClass}`}>{value}</strong>
+      {meta ? <small className="pixel-meta mt-3 block">{meta}</small> : null}
     </article>
   );
 }
@@ -134,8 +134,8 @@ function SummaryCard({ label, value, meta, tone = "blue" }: { label: string; val
 function SectionFrame({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className={frame}>
-      <div className="border-b-2 border-neutral-800 px-4 py-3">
-        <h2 className="text-sm font-black uppercase tracking-[0.18em] text-neutral-100">{title}</h2>
+      <div className="pixel-frame-head px-4 py-3">
+        <h2 className="pixel-section-title">{title}</h2>
       </div>
       {children}
     </section>
@@ -151,9 +151,9 @@ function DetailTile({ label, value, tone = "neutral" }: { label: string; value: 
   }[tone];
 
   return (
-    <div className="border-2 border-neutral-800 bg-black p-4">
-      <span className="text-[0.68rem] font-black uppercase tracking-[0.16em] text-neutral-500">{label}</span>
-      <strong className={`mt-3 block text-2xl font-black tracking-[-0.06em] ${toneClass}`}>{value}</strong>
+    <div className="pixel-tile p-4">
+      <span className="pixel-label-muted">{label}</span>
+      <strong className={`pixel-value mt-3 block ${toneClass}`}>{value}</strong>
     </div>
   );
 }
@@ -269,22 +269,22 @@ export function App() {
   }
 
   return (
-    <main className="min-h-screen bg-black bg-[radial-gradient(circle_at_10%_0%,rgba(14,165,233,0.18),transparent_26rem),radial-gradient(circle_at_90%_4%,rgba(168,85,247,0.14),transparent_24rem)] text-neutral-100">
-      <div className="border-b-2 border-neutral-800 bg-neutral-950 px-4 py-3">
+    <main className="pixel-stage min-h-screen text-neutral-100">
+      <div className="pixel-topbar px-4 py-3">
         <div className="mx-auto flex max-w-[1540px] flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-[0.68rem] font-black uppercase tracking-[0.18em] text-sky-300">Current Portfolio Dashboard</p>
-            <h1 className="mt-1 text-3xl font-black tracking-[-0.08em] text-neutral-50">TradingClaw</h1>
+            <p className="pixel-eyebrow">Current Portfolio Dashboard</p>
+            <h1 className="pixel-title mt-2">TradingClaw</h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-neutral-700 px-3 py-2 text-xs font-black uppercase tracking-widest text-neutral-400">
+            <span className="pixel-chip px-3 py-2">
               {state.error ? "Feed issue" : `${socketStatus === "polling" ? "Realtime polling" : `Socket ${socketStatus}`} / ${updatedAt}`}
             </span>
-            <span className="rounded-full border border-neutral-700 px-3 py-2 text-xs font-black uppercase tracking-widest text-neutral-400">
+            <span className="pixel-chip px-3 py-2">
               {data?.private.configured ? "Private API loaded" : "Public only"}
             </span>
             <button
-              className="rounded-full border-2 border-neutral-800 bg-sky-400 px-4 py-2 text-xs font-black uppercase tracking-widest text-neutral-950 disabled:cursor-wait disabled:opacity-60"
+              className="pixel-button px-4 py-2 disabled:cursor-wait disabled:opacity-60"
               type="button"
               onClick={refreshDashboard}
               disabled={state.loading}
@@ -296,9 +296,9 @@ export function App() {
       </div>
 
       <div className="mx-auto grid max-w-[1540px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
-        {state.error ? <div className="rounded-lg border-2 border-neutral-800 bg-rose-950/70 p-4 font-bold text-rose-100">Binance API: {state.error}</div> : null}
+        {state.error ? <div className="pixel-alert pixel-alert-error p-4">Binance API: {state.error}</div> : null}
         {data && !data.private.configured ? (
-          <div className="rounded-lg border-2 border-neutral-800 bg-sky-950/70 p-4 text-sm font-bold text-sky-100">
+          <div className="pixel-alert pixel-alert-info p-4 text-sm">
             Add <code>BINANCE_API_KEY</code> and <code>BINANCE_API_SECRET</code> in <code>.env.local</code> to show wallet balance, private positions, and account risk.
           </div>
         ) : null}
@@ -325,7 +325,7 @@ export function App() {
             <div className="overflow-x-auto">
               <table className="w-full min-w-[980px] border-collapse">
                 <thead>
-                  <tr className="border-b border-neutral-800 bg-black">
+                  <tr className="pixel-thead">
                     {['Symbol', 'Side', 'Size', 'Entry', 'Mark', 'UPnL', 'Notional', 'Leverage', 'Liquidation'].map((heading) => (
                       <th className={headingCell} key={heading}>{heading}</th>
                     ))}
@@ -337,7 +337,7 @@ export function App() {
                     const itemPnl = Number(item.unRealizedProfit);
 
                     return (
-                      <tr className="border-b border-neutral-900" key={item.symbol}>
+                      <tr className="pixel-trow" key={item.symbol}>
                         <td className={valueCell}>{item.symbol}</td>
                         <td className={`${valueCell} ${size > 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{size > 0 ? 'Long' : 'Short'}</td>
                         <td className={valueCell}>{formatNumber(Math.abs(size), 4)}</td>
@@ -365,15 +365,15 @@ export function App() {
                 const size = Number(item.positionAmt);
 
                 return (
-                  <article className="border-2 border-rose-400/50 bg-rose-950/20 p-4" key={item.symbol}>
+                  <article className="pixel-card pixel-card-danger p-4" key={item.symbol}>
                     <div className="flex items-center justify-between gap-3">
-                      <strong className="text-xl font-black tracking-[-0.05em] text-neutral-50">{item.symbol}</strong>
+                      <strong className="pixel-value text-lg text-neutral-50">{item.symbol}</strong>
                       <span className={size > 0 ? "text-sm font-black text-emerald-300" : "text-sm font-black text-rose-300"}>
                         {size > 0 ? "Long" : "Short"}
                       </span>
                     </div>
-                    <strong className="mt-4 block text-3xl font-black tracking-[-0.07em] text-rose-300">{formatUsd(item.unRealizedProfit)}</strong>
-                    <p className="mt-3 text-sm font-bold text-neutral-500">
+                    <strong className="pixel-metric mt-4 block text-rose-300">{formatUsd(item.unRealizedProfit)}</strong>
+                    <p className="pixel-meta mt-3">
                       Size {formatNumber(Math.abs(size), 4)} / Entry {formatUsd(item.entryPrice, 4)} / Mark {formatUsd(item.markPrice, 4)}
                     </p>
                   </article>
@@ -392,14 +392,14 @@ export function App() {
                 const assetPnl = Number(asset.unrealizedProfit);
 
                 return (
-                  <article className="border-2 border-neutral-800 bg-black p-4" key={asset.asset}>
+                  <article className="pixel-card p-4" key={asset.asset}>
                     <div className="flex items-center justify-between gap-3">
-                      <strong className="text-xl font-black tracking-[-0.05em] text-neutral-50">{asset.asset}</strong>
+                      <strong className="pixel-value text-lg text-neutral-50">{asset.asset}</strong>
                       <span className={assetPnl >= 0 ? "text-sm font-black text-emerald-300" : "text-sm font-black text-rose-300"}>
                         PnL {formatNumber(asset.unrealizedProfit, 6)}
                       </span>
                     </div>
-                    <div className="mt-4 grid gap-2 text-sm font-bold text-neutral-500">
+                    <div className="pixel-meta mt-4 grid gap-2">
                       <span>Wallet {formatNumber(asset.walletBalance, 6)}</span>
                       <span>Margin {formatNumber(asset.marginBalance, 6)}</span>
                       <span className="text-sky-300">Available {formatNumber(asset.availableBalance, 6)}</span>
