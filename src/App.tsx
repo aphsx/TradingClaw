@@ -110,6 +110,7 @@ const formatNumber = (value: string | number | undefined, maximumFractionDigits 
 const frame = "pixel-frame";
 const headingCell = "pixel-thead-cell";
 const valueCell = "pixel-tcell";
+const DASHBOARD_POLLING_INTERVAL_MS = 2500;
 
 function SummaryCard({
   label,
@@ -326,9 +327,18 @@ export function App() {
   const [state, setState] = useState<LoadState>({ data: null, error: null, loading: true });
   const [socketStatus, setSocketStatus] = useState<"connecting" | "live" | "reconnecting" | "offline" | "polling">("connecting");
   const socketRef = useRef<WebSocket | null>(null);
+  const dashboardRequestRef = useRef(false);
 
-  async function loadDashboard() {
-    setState((current) => ({ ...current, loading: true, error: null }));
+  async function loadDashboard({ showLoading = true } = {}) {
+    if (dashboardRequestRef.current) {
+      return;
+    }
+
+    dashboardRequestRef.current = true;
+
+    if (showLoading) {
+      setState((current) => ({ ...current, loading: true, error: null }));
+    }
 
     try {
       const response = await fetch("/api/binance/bnb-dashboard");
@@ -345,6 +355,8 @@ export function App() {
         error: error instanceof Error ? error.message : "Unable to load dashboard",
         loading: false
       }));
+    } finally {
+      dashboardRequestRef.current = false;
     }
   }
 
@@ -352,7 +364,7 @@ export function App() {
     if (!import.meta.env.DEV) {
       setSocketStatus("polling");
       loadDashboard();
-      const timer = window.setInterval(loadDashboard, 5000);
+      const timer = window.setInterval(() => loadDashboard({ showLoading: false }), DASHBOARD_POLLING_INTERVAL_MS);
       return () => window.clearInterval(timer);
     }
 

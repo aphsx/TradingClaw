@@ -208,7 +208,7 @@ function binanceApiPlugin(env: Env): Plugin {
   return {
     name: "tradingclaw-binance-readonly-api",
     configureServer(server) {
-      const socketIntervalMs = Math.max(Number(env.DASHBOARD_SOCKET_INTERVAL_MS || 5000), 1000);
+      const socketIntervalMs = Math.max(Number(env.DASHBOARD_SOCKET_INTERVAL_MS || 2500), 1500);
       const wss = new WebSocketServer({ noServer: true });
       const clients = new Set<WebSocket>();
 
