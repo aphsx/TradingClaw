@@ -168,7 +168,17 @@ function DetailTile({ label, value, tone = "neutral" }: { label: string; value: 
   );
 }
 
-function CandleChart({ symbol, klines, lastPrice }: { symbol: string; klines: Kline[]; lastPrice?: string }) {
+function CandleChart({
+  symbol,
+  klines,
+  lastPrice,
+  position
+}: {
+  symbol: string;
+  klines: Kline[];
+  lastPrice?: string;
+  position?: PositionRisk | null;
+}) {
   const candles = klines.map((kline) => ({
     time: kline[0],
     open: Number(kline[1]),
@@ -189,8 +199,13 @@ function CandleChart({ symbol, klines, lastPrice }: { symbol: string; klines: Kl
   const volumeTop = pad.top + chartHeight + 22;
   const volumeHeight = height - volumeTop - pad.bottom;
   const plotWidth = width - pad.left - pad.right;
-  const minLow = Math.min(...candles.map((candle) => candle.low));
-  const maxHigh = Math.max(...candles.map((candle) => candle.high));
+  const entryPrice = Number(position?.entryPrice);
+  const liquidationPrice = Number(position?.liquidationPrice);
+  const entryMarker = Number.isFinite(entryPrice) && entryPrice > 0 ? entryPrice : null;
+  const liquidationMarker = Number.isFinite(liquidationPrice) && liquidationPrice > 0 ? liquidationPrice : null;
+  const markerPrices = [entryMarker, liquidationMarker].filter((price): price is number => price !== null);
+  const minLow = Math.min(...candles.map((candle) => candle.low), ...markerPrices);
+  const maxHigh = Math.max(...candles.map((candle) => candle.high), ...markerPrices);
   const pricePadding = Math.max((maxHigh - minLow) * 0.08, maxHigh * 0.001);
   const minPrice = minLow - pricePadding;
   const maxPrice = maxHigh + pricePadding;
@@ -208,6 +223,18 @@ function CandleChart({ symbol, klines, lastPrice }: { symbol: string; klines: Kl
   const firstClose = candles[0]?.close ?? 0;
   const change = latest ? ((latest.close - firstClose) / firstClose) * 100 : 0;
   const isUp = latest ? latest.close >= firstClose : true;
+  const markerLine = (price: number, label: string, className: string) => {
+    const y = yForPrice(price);
+
+    return (
+      <g key={label}>
+        <line className={className} x1={pad.left} x2={width - pad.right} y1={y} y2={y} />
+        <text className={`${className}-label`} x={width - pad.right + 12} y={y + 4}>
+          {label} {formatNumber(price, 4)}
+        </text>
+      </g>
+    );
+  };
 
   return (
     <div className="p-4">
@@ -262,6 +289,8 @@ function CandleChart({ symbol, klines, lastPrice }: { symbol: string; klines: Kl
           })}
           <line className="pixel-chart-last-line" x1={pad.left} x2={width - pad.right} y1={latestY} y2={latestY} />
           <text className="pixel-chart-last-label" x={width - pad.right + 12} y={latestY + 4}>{formatNumber(latestPrice, 4)}</text>
+          {entryMarker ? markerLine(entryMarker, "ENTRY", "pixel-chart-entry-line") : null}
+          {liquidationMarker ? markerLine(liquidationMarker, "LIQ", "pixel-chart-liquidation-line") : null}
           {candles.map((candle, index) => {
             const x = xForIndex(index);
             const openY = yForPrice(candle.open);
@@ -463,7 +492,14 @@ export function App() {
         </section>
 
         <SectionFrame title={data ? `${data.symbol} Futures Chart` : "Futures Chart"}>
-          {data ? <CandleChart symbol={data.symbol} klines={data.market.klines} lastPrice={data.market.ticker.lastPrice} /> : (
+          {data ? (
+            <CandleChart
+              symbol={data.symbol}
+              klines={data.market.klines}
+              lastPrice={data.market.ticker.lastPrice}
+              position={data.private.position}
+            />
+          ) : (
             <div className="p-8 text-center text-sm font-bold text-neutral-500">Loading BNB chart.</div>
           )}
         </SectionFrame>

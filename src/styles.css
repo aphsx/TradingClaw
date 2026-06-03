@@ -232,6 +232,34 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .pixel-chart-entry-line {
+    stroke: rgba(56, 189, 248, 0.95);
+    stroke-dasharray: 10 5;
+    stroke-width: 2;
+  }
+
+  .pixel-chart-liquidation-line {
+    stroke: rgba(255, 92, 122, 0.95);
+    stroke-dasharray: 4 4;
+    stroke-width: 2;
+  }
+
+  .pixel-chart-entry-line-label,
+  .pixel-chart-liquidation-line-label {
+    font-family: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 900;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pixel-chart-entry-line-label {
+    fill: #38bdf8;
+  }
+
+  .pixel-chart-liquidation-line-label {
+    fill: #ff5c7a;
+  }
+
   .pixel-candle-up {
     color: #6bff6b;
   }
