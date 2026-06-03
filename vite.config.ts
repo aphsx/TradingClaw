@@ -9,6 +9,13 @@ const SYMBOL = "BNBUSDT";
 const DASHBOARD_SOCKET_PATH = "/api/binance/bnb-dashboard/socket";
 
 type Env = Record<string, string>;
+type ServerTimeResponse = {
+  serverTime: number;
+};
+
+const TIME_SYNC_INTERVAL_MS = 30_000;
+let cachedTimeOffsetMs = 0;
+let lastTimeSyncAt = 0;
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -51,12 +58,36 @@ async function fetchJson<T>(url: URL, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-function signedUrl(baseUrl: URL, path: string, secret: string, params: Record<string, string>) {
+async function resolveTimeOffset(baseUrl: URL) {
+  if (Date.now() - lastTimeSyncAt < TIME_SYNC_INTERVAL_MS) {
+    return cachedTimeOffsetMs;
+  }
+
+  try {
+    const payload = await fetchJson<ServerTimeResponse>(new URL("/fapi/v1/time", baseUrl));
+    cachedTimeOffsetMs = payload.serverTime - Date.now();
+  } catch {
+    // Keep the last offset to avoid failing requests if time sync is unavailable.
+  } finally {
+    lastTimeSyncAt = Date.now();
+  }
+
+  return cachedTimeOffsetMs;
+}
+
+function signedUrl(
+  baseUrl: URL,
+  path: string,
+  secret: string,
+  params: Record<string, string>,
+  timeOffsetMs: number,
+  recvWindow: string
+) {
   const url = new URL(path, baseUrl);
   const searchParams = new URLSearchParams({
     ...params,
-    recvWindow: "5000",
-    timestamp: Date.now().toString()
+    recvWindow,
+    timestamp: (Date.now() + timeOffsetMs).toString()
   });
   const signature = createHmac("sha256", secret).update(searchParams.toString()).digest("hex");
   searchParams.set("signature", signature);
@@ -70,9 +101,22 @@ type PositionRisk = {
   unRealizedProfit?: string;
 };
 
-async function getPrivateAccountData(baseUrl: URL, apiKey: string, apiSecret: string) {
-  const positionUrl = signedUrl(baseUrl, "/fapi/v2/positionRisk", apiSecret, {});
-  const accountUrl = signedUrl(baseUrl, "/fapi/v2/account", apiSecret, {});
+async function getPrivateAccountData(
+  baseUrl: URL,
+  apiKey: string,
+  apiSecret: string,
+  timeOffsetMs: number,
+  recvWindow: string
+) {
+  const positionUrl = signedUrl(
+    baseUrl,
+    "/fapi/v2/positionRisk",
+    apiSecret,
+    {},
+    timeOffsetMs,
+    recvWindow
+  );
+  const accountUrl = signedUrl(baseUrl, "/fapi/v2/account", apiSecret, {}, timeOffsetMs, recvWindow);
   const headers = { "X-MBX-APIKEY": apiKey };
 
   const [positionRisk, account] = await Promise.all([
@@ -115,8 +159,10 @@ async function getDashboardData(env: Env) {
   const apiKey = envValue(env, "BINANCE_API_KEY");
   const apiSecret = envValue(env, "BINANCE_API_SECRET");
   const hasPrivateCredentials = Boolean(apiKey && apiSecret);
+  const recvWindow = envValue(env, "BINANCE_RECV_WINDOW", "5000");
+  const timeOffsetMs = await resolveTimeOffset(baseUrl);
   const privateData = hasPrivateCredentials
-    ? await getPrivateAccountData(baseUrl, apiKey, apiSecret)
+    ? await getPrivateAccountData(baseUrl, apiKey, apiSecret, timeOffsetMs, recvWindow)
     : { configured: false, position: null, positions: [], activePositions: [], account: null };
 
   return {
