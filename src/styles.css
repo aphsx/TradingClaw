@@ -5,7 +5,7 @@
   :root {
     color: #f7f7f7;
     background: #050505;
-    font-family: "Space Grotesk", "Segoe UI", Arial, ui-sans-serif, system-ui, sans-serif;
+    font-family: "Press Start 2P", "Space Grotesk", "Segoe UI", Arial, ui-sans-serif, system-ui, sans-serif;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
@@ -40,6 +40,11 @@
 }
 
 @layer components {
+  .pixel-number {
+    font-family: "Space Grotesk", "Press Start 2P", ui-sans-serif, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
   .pixel-stage {
     background-color: var(--okx-black);
     background-image:

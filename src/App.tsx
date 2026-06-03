@@ -111,7 +111,17 @@ const frame = "pixel-frame";
 const headingCell = "pixel-thead-cell";
 const valueCell = "pixel-tcell";
 
-function SummaryCard({ label, value, meta, tone = "blue" }: { label: string; value: string; meta?: string; tone?: "green" | "red" | "blue" | "purple" }) {
+function SummaryCard({
+  label,
+  value,
+  meta,
+  tone = "blue"
+}: {
+  label: string;
+  value: string;
+  meta?: React.ReactNode;
+  tone?: "green" | "red" | "blue" | "purple";
+}) {
   const toneClass = {
     green: "text-emerald-300",
     red: "text-rose-300",
@@ -125,7 +135,7 @@ function SummaryCard({ label, value, meta, tone = "blue" }: { label: string; val
         <span className="pixel-token grid size-7 place-items-center">$</span>
         <span className="pixel-label">{label}</span>
       </div>
-      <strong className={`pixel-metric mt-5 block ${toneClass}`}>{value}</strong>
+      <strong className={`pixel-metric pixel-number mt-5 block ${toneClass}`}>{value}</strong>
       {meta ? <small className="pixel-meta mt-3 block">{meta}</small> : null}
     </article>
   );
@@ -153,7 +163,7 @@ function DetailTile({ label, value, tone = "neutral" }: { label: string; value: 
   return (
     <div className="pixel-tile p-4">
       <span className="pixel-label-muted">{label}</span>
-      <strong className={`pixel-value mt-3 block ${toneClass}`}>{value}</strong>
+      <strong className={`pixel-value pixel-number mt-3 block ${toneClass}`}>{value}</strong>
     </div>
   );
 }
@@ -305,8 +315,26 @@ export function App() {
 
         <section className="grid gap-5 md:grid-cols-3">
           <SummaryCard label="Wallet Balance" value={formatUsd(account?.totalWalletBalance)} meta="Current account wallet" tone="green" />
-          <SummaryCard label="Unrealized PnL" value={formatUsd(totalPnl)} meta={`${losingPositions.length} losing positions`} tone={totalPnl >= 0 ? "green" : "red"} />
-          <SummaryCard label="Active Positions" value={String(activePositions.length)} meta={`Exposure ${formatUsd(totalNotional)}`} tone="purple" />
+          <SummaryCard
+            label="Unrealized PnL"
+            value={formatUsd(totalPnl)}
+            meta={(
+              <span>
+                <span className="pixel-number">{losingPositions.length}</span> losing positions
+              </span>
+            )}
+            tone={totalPnl >= 0 ? "green" : "red"}
+          />
+          <SummaryCard
+            label="Active Positions"
+            value={String(activePositions.length)}
+            meta={(
+              <span>
+                Exposure <span className="pixel-number">{formatUsd(totalNotional)}</span>
+              </span>
+            )}
+            tone="purple"
+          />
         </section>
 
         <SectionFrame title="Account Summary">
@@ -340,13 +368,13 @@ export function App() {
                       <tr className="pixel-trow" key={item.symbol}>
                         <td className={valueCell}>{item.symbol}</td>
                         <td className={`${valueCell} ${size > 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{size > 0 ? 'Long' : 'Short'}</td>
-                        <td className={valueCell}>{formatNumber(Math.abs(size), 4)}</td>
-                        <td className={valueCell}>{formatUsd(item.entryPrice, 4)}</td>
-                        <td className={valueCell}>{formatUsd(item.markPrice, 4)}</td>
-                        <td className={`${valueCell} ${itemPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{formatUsd(itemPnl)}</td>
-                        <td className={valueCell}>{formatUsd(item.notional)}</td>
-                        <td className={valueCell}>{item.leverage ? `${item.leverage}x` : '--'}</td>
-                        <td className={valueCell}>{formatUsd(item.liquidationPrice, 4)}</td>
+                        <td className={`${valueCell} pixel-number`}>{formatNumber(Math.abs(size), 4)}</td>
+                        <td className={`${valueCell} pixel-number`}>{formatUsd(item.entryPrice, 4)}</td>
+                        <td className={`${valueCell} pixel-number`}>{formatUsd(item.markPrice, 4)}</td>
+                        <td className={`${valueCell} pixel-number ${itemPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{formatUsd(itemPnl)}</td>
+                        <td className={`${valueCell} pixel-number`}>{formatUsd(item.notional)}</td>
+                        <td className={`${valueCell} pixel-number`}>{item.leverage ? `${item.leverage}x` : '--'}</td>
+                        <td className={`${valueCell} pixel-number`}>{formatUsd(item.liquidationPrice, 4)}</td>
                       </tr>
                     );
                   })}
@@ -372,9 +400,11 @@ export function App() {
                         {size > 0 ? "Long" : "Short"}
                       </span>
                     </div>
-                    <strong className="pixel-metric mt-4 block text-rose-300">{formatUsd(item.unRealizedProfit)}</strong>
+                    <strong className="pixel-metric pixel-number mt-4 block text-rose-300">{formatUsd(item.unRealizedProfit)}</strong>
                     <p className="pixel-meta mt-3">
-                      Size {formatNumber(Math.abs(size), 4)} / Entry {formatUsd(item.entryPrice, 4)} / Mark {formatUsd(item.markPrice, 4)}
+                      Size <span className="pixel-number">{formatNumber(Math.abs(size), 4)}</span> / Entry{" "}
+                      <span className="pixel-number">{formatUsd(item.entryPrice, 4)}</span> / Mark{" "}
+                      <span className="pixel-number">{formatUsd(item.markPrice, 4)}</span>
                     </p>
                   </article>
                 );
@@ -396,13 +426,19 @@ export function App() {
                     <div className="flex items-center justify-between gap-3">
                       <strong className="pixel-value text-lg text-neutral-50">{asset.asset}</strong>
                       <span className={assetPnl >= 0 ? "text-sm font-black text-emerald-300" : "text-sm font-black text-rose-300"}>
-                        PnL {formatNumber(asset.unrealizedProfit, 6)}
+                        PnL <span className="pixel-number">{formatNumber(asset.unrealizedProfit, 6)}</span>
                       </span>
                     </div>
                     <div className="pixel-meta mt-4 grid gap-2">
-                      <span>Wallet {formatNumber(asset.walletBalance, 6)}</span>
-                      <span>Margin {formatNumber(asset.marginBalance, 6)}</span>
-                      <span className="text-sky-300">Available {formatNumber(asset.availableBalance, 6)}</span>
+                      <span>
+                        Wallet <span className="pixel-number">{formatNumber(asset.walletBalance, 6)}</span>
+                      </span>
+                      <span>
+                        Margin <span className="pixel-number">{formatNumber(asset.marginBalance, 6)}</span>
+                      </span>
+                      <span className="text-sky-300">
+                        Available <span className="pixel-number">{formatNumber(asset.availableBalance, 6)}</span>
+                      </span>
                     </div>
                   </article>
                 );
