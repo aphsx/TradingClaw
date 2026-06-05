@@ -7,6 +7,7 @@ import {
   Copy,
   Plus,
   RotateCcw,
+  Search,
   Trash2,
   UserRound,
   Wallet,
@@ -246,7 +247,12 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authMessage, setAuthMessage] = useState("");
+  const [profileSearch, setProfileSearch] = useState("");
+  const [profileSearchMessage, setProfileSearchMessage] = useState("");
+  const [viewedIdentifier, setViewedIdentifier] = useState("");
+  const [viewedRecords, setViewedRecords] = useState<BetRecord[]>([]);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isProfileSearching, setIsProfileSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const canSave =
@@ -254,6 +260,7 @@ export default function Home() {
     form.teamRight.trim() &&
     (form.selectedOutcome !== "draw" || form.hasDraw);
   const profileStats = calculateProfileStats(records);
+  const viewedProfileStats = calculateProfileStats(viewedRecords);
 
   const loadRecords = useCallback(async (sessionToken: string) => {
     const { data, error } = await supabase.rpc("app_list_bets", {
@@ -399,6 +406,46 @@ export default function Home() {
     localStorage.removeItem(SESSION_TOKEN_KEY);
     setUser(null);
     setRecords([]);
+    setProfileSearch("");
+    setProfileSearchMessage("");
+    setViewedIdentifier("");
+    setViewedRecords([]);
+  }
+
+  async function loadViewedUserRecords() {
+    const targetIdentifier = profileSearch.trim();
+
+    if (!targetIdentifier) {
+      setProfileSearchMessage("พิมพ์ชื่อผู้ใช้ก่อนค้นหา");
+      return;
+    }
+
+    const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (!sessionToken) {
+      setProfileSearchMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+      await handleLogout();
+      return;
+    }
+
+    setIsProfileSearching(true);
+    setProfileSearchMessage("");
+
+    const { data, error } = await supabase.rpc("app_list_user_bets", {
+      p_token: sessionToken,
+      p_identifier: targetIdentifier,
+    });
+
+    setIsProfileSearching(false);
+
+    if (error) {
+      setProfileSearchMessage(error.message === "IDENTIFIER_REQUIRED" ? "พิมพ์ชื่อผู้ใช้ก่อนค้นหา" : error.message);
+      return;
+    }
+
+    const nextRecords = (data as BetRecordRow[]).map(rowToRecord);
+    setViewedIdentifier(targetIdentifier);
+    setViewedRecords(nextRecords);
+    setProfileSearchMessage("");
   }
 
   async function saveRecord() {
@@ -739,7 +786,24 @@ export default function Home() {
                       )}
                     </div>
                   ) : (
-                    <ProfilePanel identifier={user.identifier} onLogout={handleLogout} stats={profileStats} />
+                    <ProfilePanel
+                      identifier={user.identifier}
+                      isSearching={isProfileSearching}
+                      onClearViewedUser={() => {
+                        setViewedIdentifier("");
+                        setViewedRecords([]);
+                        setProfileSearchMessage("");
+                      }}
+                      onLogout={handleLogout}
+                      onSearch={loadViewedUserRecords}
+                      onSearchChange={setProfileSearch}
+                      searchMessage={profileSearchMessage}
+                      searchValue={profileSearch}
+                      stats={profileStats}
+                      viewedIdentifier={viewedIdentifier}
+                      viewedRecords={viewedRecords}
+                      viewedStats={viewedProfileStats}
+                    />
                   )}
                 </div>
               </section>
@@ -752,8 +816,35 @@ export default function Home() {
   );
 }
 
-function ProfilePanel({ identifier, onLogout, stats }: { identifier: string; onLogout: () => void; stats: ProfileStats }) {
+function ProfilePanel({
+  identifier,
+  isSearching,
+  onClearViewedUser,
+  onLogout,
+  onSearch,
+  onSearchChange,
+  searchMessage,
+  searchValue,
+  stats,
+  viewedIdentifier,
+  viewedRecords,
+  viewedStats,
+}: {
+  identifier: string;
+  isSearching: boolean;
+  onClearViewedUser: () => void;
+  onLogout: () => void;
+  onSearch: () => void;
+  onSearchChange: (value: string) => void;
+  searchMessage: string;
+  searchValue: string;
+  stats: ProfileStats;
+  viewedIdentifier: string;
+  viewedRecords: BetRecord[];
+  viewedStats: ProfileStats;
+}) {
   const profitClass = stats.netProfit >= 0 ? "text-[#c9ffd8]" : "text-[#ffd4dd]";
+  const viewedProfitClass = viewedStats.netProfit >= 0 ? "text-[#c9ffd8]" : "text-[#ffd4dd]";
 
   return (
     <div className="space-y-4 p-4">
@@ -779,44 +870,138 @@ function ProfilePanel({ identifier, onLogout, stats }: { identifier: string; onL
         </div>
       </section>
 
-      <div className="grid grid-cols-2 gap-3">
-        <StatCard label="อัตราชนะ" value={`${formatNumber(stats.winRate, 1)}%`} />
-        <StatCard label="ทั้งหมด" value={formatNumber(stats.totalRecords, 0)} />
-        <StatCard label="ชนะ" tone="win" value={formatNumber(stats.winCount, 0)} />
-        <StatCard label="แพ้" tone="loss" value={formatNumber(stats.lostCount, 0)} />
-      </div>
-
-      <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-4 shadow-inner shadow-black/20">
+      <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-black text-[#f4f7fb]">ค่าน้ำและเงิน</p>
-            <p className="text-xs font-medium text-[#566171]">คิดเฉพาะรายการชนะ/แพ้ ไม่รวมรอผลและคืนทุน</p>
+            <p className="text-sm font-black text-[#f4f7fb]">ค้นหาคน</p>
+            <p className="text-xs font-medium text-[#566171]">ดูโปรไฟล์และประวัติแบบอ่านอย่างเดียว</p>
           </div>
-          <span className="rounded-xl border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6]">
-            ปิดผล {formatNumber(stats.settledCount, 0)}
-          </span>
+          {viewedIdentifier ? (
+            <button
+              className="rounded-md border border-transparent bg-[#0b111c] px-3 py-1.5 text-xs font-black text-[#b7c4d6] transition hover:bg-[#111927] hover:text-[#f4f7fb]"
+              onClick={onClearViewedUser}
+              type="button"
+            >
+              กลับของฉัน
+            </button>
+          ) : null}
         </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <MiniStat label="ลงเท่ากันทุกไม้" value={`${formatSignedAmount(stats.unitNetProfit)}u (${formatSignedAmount(stats.unitRoi)}%)`} />
-          <MiniStat label="เงินลงรวม" value={formatNumber(stats.totalStake)} />
-          <MiniStat label="ยอดรับตอนชนะ" value={formatNumber(stats.grossReturn)} />
-          <MiniStat label="รอผล / คืนทุน" value={`${formatNumber(stats.pendingCount, 0)} / ${formatNumber(stats.voidCount, 0)}`} />
-        </div>
-
-        <div className="mt-3 rounded-xl border border-transparent bg-[#0b111c] p-3">
-          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">กำไรสุทธิ</p>
-          <p className={`mt-1 text-2xl font-black ${profitClass}`}>{formatSignedAmount(stats.netProfit)}</p>
-        </div>
+        <form
+          className="flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSearch();
+          }}
+        >
+          <label className="min-w-0 flex-1">
+            <span className="sr-only">ค้นหาชื่อผู้ใช้</span>
+            <input
+              className="w-full rounded-md border border-transparent bg-[#0b111c] px-4 py-3 text-sm font-bold text-[#f4f7fb] outline-none transition placeholder:text-[#3f4956] focus:border-[#5e6674]"
+              onChange={(event) => onSearchChange(event.target.value)}
+              placeholder="ชื่อผู้ใช้"
+              value={searchValue}
+            />
+          </label>
+          <button
+            aria-label="ค้นหา"
+            className="inline-flex items-center justify-center rounded-md border border-transparent bg-[#2a3542] px-4 py-3 text-[#f4f7fb] transition hover:bg-[#344252] disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={isSearching}
+            type="submit"
+          >
+            <Search className="h-4 w-4" />
+          </button>
+        </form>
+        {searchMessage ? <p className="mt-3 rounded-lg border border-[#2a3542] bg-[#0b111c] p-3 text-xs font-bold text-[#b7c4d6]">{searchMessage}</p> : null}
       </section>
 
-      <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-4 text-sm text-[#b7c4d6] shadow-inner shadow-black/20">
-        <p className="font-black text-[#f4f7fb]">สูตรค่าน้ำที่ใช้</p>
-        <p className="mt-2">
-          ถ้าชนะน้ำ 1.90 จะนับเป็น +0.90 หน่วย เพราะได้คืน 1.90 แต่เงินต้นคือ 1 หน่วย
-        </p>
-        <p className="mt-2">ถ้าแพ้จะนับ -1.00 หน่วยเต็ม แล้วเอาทุกบิลมารวมเพื่อดูว่ากลยุทธ์ย้อนหลังบวกหรือลบกี่ %</p>
-      </section>
+      {viewedIdentifier ? (
+        <section className="space-y-3 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">Viewing</p>
+              <h3 className="mt-1 truncate text-xl font-black">{viewedIdentifier}</h3>
+            </div>
+            <span className="rounded-xl border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6]">
+              {formatNumber(viewedStats.totalRecords, 0)} บิล
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <MiniStat label="อัตราชนะ" value={`${formatNumber(viewedStats.winRate, 1)}%`} />
+            <MiniStat label="ทั้งหมด" value={formatNumber(viewedStats.totalRecords, 0)} />
+            <MiniStat label="ชนะ" value={formatNumber(viewedStats.winCount, 0)} />
+            <MiniStat label="แพ้" value={formatNumber(viewedStats.lostCount, 0)} />
+          </div>
+
+          <div className="rounded-xl border border-transparent bg-[#0b111c] p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">กำไรสุทธิ</p>
+            <p className={`mt-1 text-2xl font-black ${viewedProfitClass}`}>{formatSignedAmount(viewedStats.netProfit)}</p>
+          </div>
+
+          {viewedRecords.length ? (
+            <div className="space-y-3">
+              {viewedRecords.map((record) => (
+                <BetCard
+                  canDelete={false}
+                  key={record.id}
+                  onCopy={() => {}}
+                  onDelete={() => {}}
+                  onStatusChange={() => {}}
+                  preview
+                  record={record}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-[#2a3542] bg-[#0b111c] p-6 text-center text-sm font-bold text-[#b7c4d6]">
+              ไม่พบรายการของ {viewedIdentifier} หรือยังไม่มีบิล
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {!viewedIdentifier ? (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <StatCard label="อัตราชนะ" value={`${formatNumber(stats.winRate, 1)}%`} />
+            <StatCard label="ทั้งหมด" value={formatNumber(stats.totalRecords, 0)} />
+            <StatCard label="ชนะ" tone="win" value={formatNumber(stats.winCount, 0)} />
+            <StatCard label="แพ้" tone="loss" value={formatNumber(stats.lostCount, 0)} />
+          </div>
+
+          <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-4 shadow-inner shadow-black/20">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-[#f4f7fb]">ค่าน้ำและเงิน</p>
+                <p className="text-xs font-medium text-[#566171]">คิดเฉพาะรายการชนะ/แพ้ ไม่รวมรอผลและคืนทุน</p>
+              </div>
+              <span className="rounded-xl border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6]">
+                ปิดผล {formatNumber(stats.settledCount, 0)}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <MiniStat label="ลงเท่ากันทุกไม้" value={`${formatSignedAmount(stats.unitNetProfit)}u (${formatSignedAmount(stats.unitRoi)}%)`} />
+              <MiniStat label="เงินลงรวม" value={formatNumber(stats.totalStake)} />
+              <MiniStat label="ยอดรับตอนชนะ" value={formatNumber(stats.grossReturn)} />
+              <MiniStat label="รอผล / คืนทุน" value={`${formatNumber(stats.pendingCount, 0)} / ${formatNumber(stats.voidCount, 0)}`} />
+            </div>
+
+            <div className="mt-3 rounded-xl border border-transparent bg-[#0b111c] p-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">กำไรสุทธิ</p>
+              <p className={`mt-1 text-2xl font-black ${profitClass}`}>{formatSignedAmount(stats.netProfit)}</p>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-4 text-sm text-[#b7c4d6] shadow-inner shadow-black/20">
+            <p className="font-black text-[#f4f7fb]">สูตรค่าน้ำที่ใช้</p>
+            <p className="mt-2">
+              ถ้าชนะน้ำ 1.90 จะนับเป็น +0.90 หน่วย เพราะได้คืน 1.90 แต่เงินต้นคือ 1 หน่วย
+            </p>
+            <p className="mt-2">ถ้าแพ้จะนับ -1.00 หน่วยเต็ม แล้วเอาทุกบิลมารวมเพื่อดูว่ากลยุทธ์ย้อนหลังบวกหรือลบกี่ %</p>
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }
