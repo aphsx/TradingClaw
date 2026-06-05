@@ -11,7 +11,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 type Outcome = "left" | "draw" | "right";
 type BetStatus = "pending" | "won" | "lost" | "void";
