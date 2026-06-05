@@ -255,6 +255,7 @@ export default function Home() {
   const [profileSearch, setProfileSearch] = useState("");
   const [profileSearchMessage, setProfileSearchMessage] = useState("");
   const [profileSearchResults, setProfileSearchResults] = useState<UserSearchResult[]>([]);
+  const [isProfileSearchOpen, setIsProfileSearchOpen] = useState(false);
   const [viewedIdentifier, setViewedIdentifier] = useState("");
   const [viewedRecords, setViewedRecords] = useState<BetRecord[]>([]);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
@@ -400,6 +401,7 @@ export default function Home() {
 
   function updateProfileSearch(value: string) {
     setProfileSearch(value);
+    setIsProfileSearchOpen(Boolean(value.trim()));
 
     if (!value.trim()) {
       setIsProfileSearching(false);
@@ -476,11 +478,16 @@ export default function Home() {
     setProfileSearch("");
     setProfileSearchMessage("");
     setProfileSearchResults([]);
+    setIsProfileSearchOpen(false);
     setViewedIdentifier("");
     setViewedRecords([]);
   }
 
   async function loadViewedUserRecords(targetIdentifier: string) {
+    setProfileSearch(targetIdentifier);
+    setProfileSearchResults([]);
+    setIsProfileSearchOpen(false);
+
     const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
     if (!sessionToken) {
       setProfileSearchMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
@@ -506,8 +513,6 @@ export default function Home() {
     const nextRecords = (data as BetRecordRow[]).map(rowToRecord);
     setViewedIdentifier(targetIdentifier);
     setViewedRecords(nextRecords);
-    setProfileSearch("");
-    setProfileSearchResults([]);
     setProfileSearchMessage("");
   }
 
@@ -855,6 +860,7 @@ export default function Home() {
                       onClearViewedUser={() => {
                         setProfileSearch("");
                         setProfileSearchResults([]);
+                        setIsProfileSearchOpen(false);
                         setViewedIdentifier("");
                         setViewedRecords([]);
                         setProfileSearchMessage("");
@@ -862,6 +868,7 @@ export default function Home() {
                       onLogout={handleLogout}
                       onSearchChange={updateProfileSearch}
                       onSelectUser={loadViewedUserRecords}
+                      searchOpen={isProfileSearchOpen}
                       searchMessage={profileSearchMessage}
                       searchResults={profileSearchResults}
                       searchValue={profileSearch}
@@ -889,6 +896,7 @@ function ProfilePanel({
   onLogout,
   onSearchChange,
   onSelectUser,
+  searchOpen,
   searchMessage,
   searchResults,
   searchValue,
@@ -903,6 +911,7 @@ function ProfilePanel({
   onLogout: () => void;
   onSearchChange: (value: string) => void;
   onSelectUser: (identifier: string) => void;
+  searchOpen: boolean;
   searchMessage: string;
   searchResults: UserSearchResult[];
   searchValue: string;
@@ -965,7 +974,7 @@ function ProfilePanel({
             />
           </label>
           <Search className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7f8b9c]" />
-          {searchValue.trim() ? (
+          {searchOpen && searchValue.trim() ? (
             <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-20 overflow-hidden rounded-xl border border-[#2a3542] bg-[#0b111c] shadow-2xl shadow-black/50">
               {isSearching ? (
                 <div className="p-3 text-sm font-bold text-[#7f8b9c]">กำลังค้นหา...</div>
