@@ -582,7 +582,7 @@ export default function Home() {
                   <TabButton
                     active={activeTab === "records"}
                     icon={<ClipboardList className="h-5 w-5" />}
-                    label={`รายการ (${records.length})`}
+                    label={`ประวัติ (${records.length})`}
                     onClick={() => setActiveTab("records")}
                   />
                   <TabButton
