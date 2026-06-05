@@ -58,6 +58,11 @@ type BetRecordRow = {
   created_at: string;
 };
 
+type UserSearchResult = {
+  identifier: string;
+  record_count: number;
+};
+
 type ProfileStats = {
   grossReturn: number;
   lostCount: number;
@@ -249,6 +254,7 @@ export default function Home() {
   const [authMessage, setAuthMessage] = useState("");
   const [profileSearch, setProfileSearch] = useState("");
   const [profileSearchMessage, setProfileSearchMessage] = useState("");
+  const [profileSearchResults, setProfileSearchResults] = useState<UserSearchResult[]>([]);
   const [viewedIdentifier, setViewedIdentifier] = useState("");
   const [viewedRecords, setViewedRecords] = useState<BetRecord[]>([]);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
@@ -323,6 +329,57 @@ export default function Home() {
     };
   }, [loadRecords]);
 
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    const query = profileSearch.trim();
+    if (!query) {
+      return;
+    }
+
+    let isActive = true;
+    const timeout = window.setTimeout(async () => {
+      const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
+      if (!sessionToken) {
+        if (isActive) {
+          setProfileSearchMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+          setProfileSearchResults([]);
+        }
+        return;
+      }
+
+      setIsProfileSearching(true);
+
+      const { data, error } = await supabase.rpc("app_search_users", {
+        p_token: sessionToken,
+        p_query: query,
+      });
+
+      if (!isActive) {
+        return;
+      }
+
+      setIsProfileSearching(false);
+
+      if (error) {
+        setProfileSearchResults([]);
+        setProfileSearchMessage(error.message);
+        return;
+      }
+
+      const nextResults = data as UserSearchResult[];
+      setProfileSearchResults(nextResults);
+      setProfileSearchMessage("");
+    }, 220);
+
+    return () => {
+      isActive = false;
+      window.clearTimeout(timeout);
+    };
+  }, [profileSearch, user]);
+
   function updateForm(key: keyof BetFormState, value: string | boolean) {
     setForm((current) => {
       if (key === "hasDraw" && value === false && current.selectedOutcome === "draw") {
@@ -339,6 +396,16 @@ export default function Home() {
 
       return { ...current, [key]: value };
     });
+  }
+
+  function updateProfileSearch(value: string) {
+    setProfileSearch(value);
+
+    if (!value.trim()) {
+      setIsProfileSearching(false);
+      setProfileSearchResults([]);
+      setProfileSearchMessage("");
+    }
   }
 
   async function handleLogin() {
@@ -408,18 +475,12 @@ export default function Home() {
     setRecords([]);
     setProfileSearch("");
     setProfileSearchMessage("");
+    setProfileSearchResults([]);
     setViewedIdentifier("");
     setViewedRecords([]);
   }
 
-  async function loadViewedUserRecords() {
-    const targetIdentifier = profileSearch.trim();
-
-    if (!targetIdentifier) {
-      setProfileSearchMessage("พิมพ์ชื่อผู้ใช้ก่อนค้นหา");
-      return;
-    }
-
+  async function loadViewedUserRecords(targetIdentifier: string) {
     const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
     if (!sessionToken) {
       setProfileSearchMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
@@ -445,6 +506,8 @@ export default function Home() {
     const nextRecords = (data as BetRecordRow[]).map(rowToRecord);
     setViewedIdentifier(targetIdentifier);
     setViewedRecords(nextRecords);
+    setProfileSearch("");
+    setProfileSearchResults([]);
     setProfileSearchMessage("");
   }
 
@@ -790,14 +853,17 @@ export default function Home() {
                       identifier={user.identifier}
                       isSearching={isProfileSearching}
                       onClearViewedUser={() => {
+                        setProfileSearch("");
+                        setProfileSearchResults([]);
                         setViewedIdentifier("");
                         setViewedRecords([]);
                         setProfileSearchMessage("");
                       }}
                       onLogout={handleLogout}
-                      onSearch={loadViewedUserRecords}
-                      onSearchChange={setProfileSearch}
+                      onSearchChange={updateProfileSearch}
+                      onSelectUser={loadViewedUserRecords}
                       searchMessage={profileSearchMessage}
+                      searchResults={profileSearchResults}
                       searchValue={profileSearch}
                       stats={profileStats}
                       viewedIdentifier={viewedIdentifier}
@@ -821,9 +887,10 @@ function ProfilePanel({
   isSearching,
   onClearViewedUser,
   onLogout,
-  onSearch,
   onSearchChange,
+  onSelectUser,
   searchMessage,
+  searchResults,
   searchValue,
   stats,
   viewedIdentifier,
@@ -834,9 +901,10 @@ function ProfilePanel({
   isSearching: boolean;
   onClearViewedUser: () => void;
   onLogout: () => void;
-  onSearch: () => void;
   onSearchChange: (value: string) => void;
+  onSelectUser: (identifier: string) => void;
   searchMessage: string;
+  searchResults: UserSearchResult[];
   searchValue: string;
   stats: ProfileStats;
   viewedIdentifier: string;
@@ -886,31 +954,41 @@ function ProfilePanel({
             </button>
           ) : null}
         </div>
-        <form
-          className="flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSearch();
-          }}
-        >
-          <label className="min-w-0 flex-1">
+        <div className="relative">
+          <label className="block">
             <span className="sr-only">ค้นหาชื่อผู้ใช้</span>
             <input
-              className="w-full rounded-md border border-transparent bg-[#0b111c] px-4 py-3 text-sm font-bold text-[#f4f7fb] outline-none transition placeholder:text-[#3f4956] focus:border-[#5e6674]"
+              className="w-full rounded-md border border-transparent bg-[#0b111c] py-3 pl-4 pr-11 text-sm font-bold text-[#f4f7fb] outline-none transition placeholder:text-[#3f4956] focus:border-[#5e6674]"
               onChange={(event) => onSearchChange(event.target.value)}
-              placeholder="ชื่อผู้ใช้"
+              placeholder="พิมพ์ชื่อผู้ใช้บางส่วน"
               value={searchValue}
             />
           </label>
-          <button
-            aria-label="ค้นหา"
-            className="inline-flex items-center justify-center rounded-md border border-transparent bg-[#2a3542] px-4 py-3 text-[#f4f7fb] transition hover:bg-[#344252] disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={isSearching}
-            type="submit"
-          >
-            <Search className="h-4 w-4" />
-          </button>
-        </form>
+          <Search className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7f8b9c]" />
+          {searchValue.trim() ? (
+            <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-20 overflow-hidden rounded-xl border border-[#2a3542] bg-[#0b111c] shadow-2xl shadow-black/50">
+              {isSearching ? (
+                <div className="p-3 text-sm font-bold text-[#7f8b9c]">กำลังค้นหา...</div>
+              ) : searchResults.length ? (
+                searchResults.map((result) => (
+                  <button
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-bold text-[#f4f7fb] transition hover:bg-[#111927]"
+                    key={result.identifier}
+                    onClick={() => onSelectUser(result.identifier)}
+                    type="button"
+                  >
+                    <span className="truncate">{result.identifier}</span>
+                    <span className="shrink-0 rounded-md bg-[#18222e] px-2.5 py-1 text-[11px] font-black text-[#7f8b9c]">
+                      {formatNumber(result.record_count, 0)} บิล
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <div className="p-3 text-sm font-bold text-[#7f8b9c]">ไม่พบชื่อนี้</div>
+              )}
+            </div>
+          ) : null}
+        </div>
         {searchMessage ? <p className="mt-3 rounded-lg border border-[#2a3542] bg-[#0b111c] p-3 text-xs font-bold text-[#b7c4d6]">{searchMessage}</p> : null}
       </section>
 
