@@ -15,13 +15,11 @@ html {
 body {
   min-height: 100vh;
   margin: 0;
-  background:
-    radial-gradient(circle at top left, rgba(14, 165, 233, 0.2), transparent 34rem),
-    radial-gradient(circle at top right, rgba(37, 99, 235, 0.18), transparent 30rem),
-    linear-gradient(135deg, rgba(15, 23, 42, 0.8), transparent 24rem),
-    #070b14;
+  background: #080d16;
   color: #f8fafc;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-noto-sans-thai), Arial, Helvetica, sans-serif;
+  font-feature-settings: "liga" 1, "kern" 1;
+  text-rendering: geometricPrecision;
 }
 
 button,
@@ -36,5 +34,5 @@ button {
 }
 
 ::selection {
-  background: rgba(14, 165, 233, 0.35);
+  background: rgba(59, 130, 246, 0.28);
 }

@@ -1,5 +1,12 @@
 import type { Metadata } from "next";
+import { Noto_Sans_Thai } from "next/font/google";
 import "./globals.css";
+
+const notoSansThai = Noto_Sans_Thai({
+  subsets: ["thai", "latin"],
+  variable: "--font-noto-sans-thai",
+  weight: ["400", "500", "600", "700", "800", "900"],
+});
 
 export const metadata: Metadata = {
   title: "Thunderpick",
@@ -13,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="th">
-      <body>{children}</body>
+      <body className={notoSansThai.variable}>{children}</body>
     </html>
   );
 }
