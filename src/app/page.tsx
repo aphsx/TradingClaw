@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowLeftRight,
   Check,
   ClipboardList,
   Copy,
@@ -407,22 +406,6 @@ export default function Home() {
     setRecords((current) => current.map((record) => (record.id === id ? { ...record, status } : record)));
   }
 
-  function swapTeams() {
-    setForm((current) => ({
-      ...current,
-      teamLeft: current.teamRight,
-      teamRight: current.teamLeft,
-      oddsLeft: current.oddsRight,
-      oddsRight: current.oddsLeft,
-      selectedOutcome:
-        current.selectedOutcome === "left"
-          ? "right"
-          : current.selectedOutcome === "right"
-            ? "left"
-            : "draw",
-    }));
-  }
-
   if (isAuthLoading && !user) {
     return (
       <main className="grid min-h-screen place-items-center px-4 py-5 text-slate-50">
@@ -521,14 +504,6 @@ export default function Home() {
                         <h2 className="mt-1 text-xl font-extrabold tracking-tight">สร้างคู่แข่งขัน</h2>
                       </div>
                       <div className="flex gap-2">
-                        <button
-                          className="inline-flex items-center gap-2 rounded-xl border border-slate-700/70 bg-[#111a2b] px-3 py-2 text-sm font-bold text-slate-200 transition hover:border-blue-500/40 hover:bg-[#132033]"
-                          onClick={swapTeams}
-                          type="button"
-                        >
-                          <ArrowLeftRight className="h-4 w-4" />
-                          สลับทีม
-                        </button>
                         <button
                           className="rounded-xl border border-slate-700/70 bg-[#111a2b] px-3 py-2 text-sm font-bold text-slate-400 transition hover:text-slate-100"
                           onClick={handleLogout}
