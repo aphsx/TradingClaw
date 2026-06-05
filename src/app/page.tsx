@@ -1,12 +1,14 @@
 "use client";
 
 import {
+  BarChart3,
   Check,
   ClipboardList,
   Copy,
   Plus,
   RotateCcw,
   Trash2,
+  UserRound,
   Wallet,
   X,
 } from "lucide-react";
@@ -15,7 +17,7 @@ import { supabase } from "@/lib/supabase";
 
 type Outcome = "left" | "draw" | "right";
 type BetStatus = "pending" | "won" | "lost" | "void";
-type ActiveTab = "create" | "records";
+type ActiveTab = "create" | "records" | "profile";
 type AuthMode = "login" | "signup";
 
 type AppUser = {
@@ -53,6 +55,20 @@ type BetRecordRow = {
   stake: number | null;
   status: BetStatus;
   created_at: string;
+};
+
+type ProfileStats = {
+  averageOdds: number;
+  grossReturn: number;
+  lostCount: number;
+  netProfit: number;
+  pendingCount: number;
+  settledCount: number;
+  totalRecords: number;
+  totalStake: number;
+  voidCount: number;
+  winCount: number;
+  winRate: number;
 };
 
 const SESSION_MAX_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -121,6 +137,17 @@ function formatAmount(value: string) {
   return amount.toLocaleString("th-TH");
 }
 
+function formatNumber(value: number, maximumFractionDigits = 2) {
+  return value.toLocaleString("th-TH", {
+    maximumFractionDigits,
+  });
+}
+
+function formatSignedAmount(value: number) {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatNumber(value)}`;
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("th-TH", {
     day: "2-digit",
@@ -147,6 +174,64 @@ function rowToRecord(row: BetRecordRow): BetRecord {
   };
 }
 
+function getSelectedOdds(record: BetRecord) {
+  if (record.selectedOutcome === "draw") {
+    return parseDecimal(record.oddsDraw);
+  }
+
+  if (record.selectedOutcome === "right") {
+    return parseDecimal(record.oddsRight);
+  }
+
+  return parseDecimal(record.oddsLeft);
+}
+
+function calculateProfileStats(records: BetRecord[]): ProfileStats {
+  const settledRecords = records.filter((record) => record.status === "won" || record.status === "lost");
+  const winCount = settledRecords.filter((record) => record.status === "won").length;
+  const lostCount = settledRecords.filter((record) => record.status === "lost").length;
+  const oddsRecords = settledRecords
+    .map((record) => getSelectedOdds(record))
+    .filter((odds): odds is number => odds !== null && odds > 0);
+
+  const money = settledRecords.reduce(
+    (summary, record) => {
+      const stake = parseDecimal(record.stake) ?? 0;
+      const odds = getSelectedOdds(record) ?? 0;
+
+      if (record.status === "won") {
+        const grossReturn = odds > 0 ? stake * odds : 0;
+        return {
+          grossReturn: summary.grossReturn + grossReturn,
+          netProfit: summary.netProfit + (odds > 0 ? grossReturn - stake : 0),
+          totalStake: summary.totalStake + stake,
+        };
+      }
+
+      return {
+        grossReturn: summary.grossReturn,
+        netProfit: summary.netProfit - stake,
+        totalStake: summary.totalStake + stake,
+      };
+    },
+    { grossReturn: 0, netProfit: 0, totalStake: 0 },
+  );
+
+  return {
+    averageOdds: oddsRecords.length ? oddsRecords.reduce((total, odds) => total + odds, 0) / oddsRecords.length : 0,
+    grossReturn: money.grossReturn,
+    lostCount,
+    netProfit: money.netProfit,
+    pendingCount: records.filter((record) => record.status === "pending").length,
+    settledCount: settledRecords.length,
+    totalRecords: records.length,
+    totalStake: money.totalStake,
+    voidCount: records.filter((record) => record.status === "void").length,
+    winCount,
+    winRate: settledRecords.length ? (winCount / settledRecords.length) * 100 : 0,
+  };
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("create");
   const [records, setRecords] = useState<BetRecord[]>([]);
@@ -163,6 +248,7 @@ export default function Home() {
     form.teamLeft.trim() &&
     form.teamRight.trim() &&
     (form.selectedOutcome !== "draw" || form.hasDraw);
+  const profileStats = calculateProfileStats(records);
 
   const loadRecords = useCallback(async (sessionToken: string) => {
     const { data, error } = await supabase.rpc("app_list_bets", {
@@ -475,13 +561,13 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen px-4 py-5 text-slate-50">
-      <div className="mx-auto flex min-h-screen w-full max-w-[760px]">
+    <main className="min-h-screen px-3 py-5 text-slate-50">
+      <div className="mx-auto flex min-h-screen w-full max-w-[430px]">
         <section className="flex w-full min-w-0 flex-col">
           <div className="block">
             <div className="min-w-0">
               <section className="overflow-hidden rounded-[28px] border border-slate-700/50 bg-[#0a1020] shadow-[0_18px_48px_rgba(0,0,0,0.32)]">
-                <div className="grid grid-cols-2 gap-2 border-b border-slate-800 bg-[#0d1526] p-2">
+                <div className="grid grid-cols-3 gap-2 border-b border-slate-800 bg-[#0d1526] p-2">
                   <TabButton
                     active={activeTab === "create"}
                     icon={<Plus className="h-5 w-5" />}
@@ -493,6 +579,12 @@ export default function Home() {
                     icon={<ClipboardList className="h-5 w-5" />}
                     label={`รายการ (${records.length})`}
                     onClick={() => setActiveTab("records")}
+                  />
+                  <TabButton
+                    active={activeTab === "profile"}
+                    icon={<UserRound className="h-5 w-5" />}
+                    label="โปรไฟล์"
+                    onClick={() => setActiveTab("profile")}
                   />
                 </div>
 
@@ -624,7 +716,7 @@ export default function Home() {
                       {isSaving ? "กำลังบันทึก..." : "Add to Bet Slip"}
                     </button>
                   </div>
-                ) : (
+                ) : activeTab === "records" ? (
                   <div className="space-y-3 p-4">
                     {records.length ? (
                       records.map((record) => (
@@ -642,6 +734,8 @@ export default function Home() {
                       </div>
                     )}
                   </div>
+                ) : (
+                  <ProfilePanel identifier={user.identifier} stats={profileStats} />
                 )}
               </section>
             </div>
@@ -650,6 +744,82 @@ export default function Home() {
         </section>
       </div>
     </main>
+  );
+}
+
+function ProfilePanel({ identifier, stats }: { identifier: string; stats: ProfileStats }) {
+  const profitClass = stats.netProfit >= 0 ? "text-emerald-200" : "text-rose-200";
+
+  return (
+    <div className="space-y-4 p-4">
+      <section className="overflow-hidden rounded-2xl border border-blue-400/20 bg-gradient-to-br from-blue-500/20 via-[#0d1627] to-[#08101d] p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-blue-200/60">Profile</p>
+            <h2 className="mt-1 truncate text-2xl font-extrabold">{identifier}</h2>
+            <p className="mt-2 text-sm text-slate-300/75">สรุปผลงานจากรายการที่ปิดผลแล้ว</p>
+          </div>
+          <div className="rounded-2xl border border-blue-300/20 bg-blue-500/20 p-3 text-blue-50">
+            <BarChart3 className="h-6 w-6" />
+          </div>
+        </div>
+      </section>
+
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard label="อัตราชนะ" value={`${formatNumber(stats.winRate, 1)}%`} />
+        <StatCard label="ทั้งหมด" value={formatNumber(stats.totalRecords, 0)} />
+        <StatCard label="ชนะ" tone="win" value={formatNumber(stats.winCount, 0)} />
+        <StatCard label="แพ้" tone="loss" value={formatNumber(stats.lostCount, 0)} />
+      </div>
+
+      <section className="rounded-2xl border border-slate-800 bg-[#0d1627] p-4 shadow-inner shadow-black/10">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-extrabold text-slate-200">ค่าน้ำและเงิน</p>
+            <p className="text-xs text-slate-500">คิดเฉพาะรายการชนะ/แพ้ ไม่รวมรอผลและคืนทุน</p>
+          </div>
+          <span className="rounded-xl border border-slate-700 bg-[#08101d] px-3 py-2 text-xs font-extrabold text-slate-300">
+            ปิดผล {formatNumber(stats.settledCount, 0)}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <MiniStat label="ค่าน้ำเฉลี่ย" value={stats.averageOdds ? formatNumber(stats.averageOdds, 2) : "-"} />
+          <MiniStat label="เงินลงรวม" value={formatNumber(stats.totalStake)} />
+          <MiniStat label="ยอดรับตอนชนะ" value={formatNumber(stats.grossReturn)} />
+          <MiniStat label="รอผล / คืนทุน" value={`${formatNumber(stats.pendingCount, 0)} / ${formatNumber(stats.voidCount, 0)}`} />
+        </div>
+
+        <div className="mt-3 rounded-xl border border-slate-700/70 bg-[#08101d] p-3">
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">กำไรสุทธิ</p>
+          <p className={`mt-1 text-2xl font-black ${profitClass}`}>{formatSignedAmount(stats.netProfit)}</p>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-800 bg-[#0d1627] p-4 text-sm text-slate-300 shadow-inner shadow-black/10">
+        <p className="font-extrabold text-slate-100">สูตรค่าน้ำที่ใช้</p>
+        <p className="mt-2">
+          ถ้าลง 100 ที่น้ำ 1.80 แล้วชนะ จะได้รับคืน 180 และกำไรสุทธิ 80 เพราะคิดเป็น 100 × (1.80 - 1)
+        </p>
+        <p className="mt-2">ถ้าแพ้ จะเสียเงินลงเต็ม 100 ไม่คูณ 2 และรายการคืนทุนจะไม่นับเป็นชนะหรือแพ้</p>
+      </section>
+    </div>
+  );
+}
+
+function StatCard({ label, tone = "default", value }: { label: string; tone?: "default" | "loss" | "win"; value: string }) {
+  const toneClass =
+    tone === "win"
+      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-100"
+      : tone === "loss"
+        ? "border-rose-400/25 bg-rose-400/10 text-rose-100"
+        : "border-slate-800 bg-[#0d1627] text-slate-50";
+
+  return (
+    <div className={`rounded-2xl border p-4 shadow-lg shadow-black/10 ${toneClass}`}>
+      <p className="text-[11px] font-black uppercase tracking-[0.18em] opacity-60">{label}</p>
+      <p className="mt-2 text-2xl font-black">{value}</p>
+    </div>
   );
 }
 

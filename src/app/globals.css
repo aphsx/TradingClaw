@@ -10,6 +10,7 @@
 
 html {
   scroll-behavior: smooth;
+  scrollbar-width: none;
 }
 
 body {
@@ -20,6 +21,13 @@ body {
   font-family: var(--font-noto-sans-thai), Arial, Helvetica, sans-serif;
   font-feature-settings: "liga" 1, "kern" 1;
   text-rendering: geometricPrecision;
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  display: none;
 }
 
 button,
