@@ -656,7 +656,7 @@ export default function Home() {
                       </div>
                       <button
                         className={`rounded-xl px-4 py-2 text-sm font-black transition ${
-                          form.hasDraw ? "bg-[#0b111c] text-white ring-1 ring-[#5e6674]" : "bg-[#0b111c] text-[#b7c4d6]"
+                          form.hasDraw ? "bg-[#147f9f] text-white ring-1 ring-[#35b6e8]" : "bg-[#0b111c] text-[#b7c4d6]"
                         }`}
                         onClick={() => updateForm("hasDraw", !form.hasDraw)}
                         type="button"
@@ -873,7 +873,7 @@ function TextField({
     <label className="block">
       <span className="mb-2 block text-[13px] font-bold text-[#7f8b9c]">{label}</span>
       <input
-        className="w-full rounded-md border border-transparent bg-[#0b111c] px-4 py-3 text-base font-bold text-[#f4f7fb] outline-none transition placeholder:text-[#566171] focus:border-[#5e6674] focus:bg-[#0b111c] disabled:opacity-30"
+        className="w-full rounded-md border border-transparent bg-[#0b111c] px-4 py-3 text-base font-bold text-[#f4f7fb] outline-none transition placeholder:text-[#3f4956] focus:border-[#5e6674] focus:bg-[#0b111c] disabled:opacity-30"
         disabled={disabled}
         inputMode={type === "number" ? "decimal" : "text"}
         onChange={(event) => onChange(event.target.value)}
@@ -900,7 +900,7 @@ function OutcomeButton({
     <button
       className={`rounded-xl border p-3 text-left transition ${
         active
-          ? "border-[#5e6674] bg-[#0b111c] text-white"
+          ? "border-[#35b6e8] bg-[#147f9f] text-white"
           : "border-transparent bg-[#0b111c] text-[#f4f7fb] hover:bg-[#111927]"
       }`}
       onClick={onClick}
@@ -1016,7 +1016,7 @@ function MiniStat({
   return (
     <div
       className={`min-w-0 rounded-lg border p-2.5 transition ${
-        active ? "border-[#5e6674] bg-[#0b111c] text-white" : "border-transparent bg-[#0b111c] text-[#f4f7fb]"
+        active ? "border-[#35b6e8] bg-[#147f9f] text-white" : "border-transparent bg-[#0b111c] text-[#f4f7fb]"
       } ${muted ? "opacity-35" : ""}`}
     >
       <p className={`truncate text-[11px] font-semibold ${active ? "text-white/70" : "text-[#7f8b9c]"}`}>{label}</p>
