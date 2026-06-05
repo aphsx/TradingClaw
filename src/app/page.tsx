@@ -88,12 +88,12 @@ const statusConfig: Record<
   },
   won: {
     label: "ชนะ",
-    className: "border-[#54e57c]/45 bg-[#54e57c]/12 text-[#c9ffd8]",
+    className: "border-[#2a3542] bg-[#1b2531] text-[#b7c4d6]",
     icon: <Check className="h-4 w-4" />,
   },
   lost: {
     label: "แพ้",
-    className: "border-[#ff5d7d]/45 bg-[#ff5d7d]/12 text-[#ffd4dd]",
+    className: "border-[#2a3542] bg-[#1b2531] text-[#b7c4d6]",
     icon: <X className="h-4 w-4" />,
   },
   void: {
