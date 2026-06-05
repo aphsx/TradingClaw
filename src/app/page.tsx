@@ -454,7 +454,12 @@ export default function Home() {
     setActiveTab("create");
   }
 
-  async function deleteRecord(id: string) {
+  async function deleteRecord(record: BetRecord) {
+    if (!user || record.userId !== user.id) {
+      setAuthMessage("ลบได้เฉพาะบิลที่คุณสร้างเท่านั้น");
+      return;
+    }
+
     const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
     if (!sessionToken) {
       setAuthMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
@@ -464,15 +469,15 @@ export default function Home() {
 
     const { error } = await supabase.rpc("app_delete_bet", {
       p_token: sessionToken,
-      p_bet_id: id,
+      p_bet_id: record.id,
     });
 
     if (error) {
-      setAuthMessage(error.message);
+      setAuthMessage(error.message === "BET_NOT_FOUND_OR_NOT_OWNER" ? "ลบได้เฉพาะบิลที่คุณสร้างเท่านั้น" : error.message);
       return;
     }
 
-    setRecords((current) => current.filter((record) => record.id !== id));
+    setRecords((current) => current.filter((currentRecord) => currentRecord.id !== record.id));
   }
 
   async function setRecordStatus(id: string, status: BetStatus) {
@@ -718,9 +723,10 @@ export default function Home() {
                     {records.length ? (
                       records.map((record) => (
                         <BetCard
+                          canDelete={record.userId === user.id}
                           key={record.id}
                           onCopy={() => copyRecord(record)}
-                          onDelete={() => deleteRecord(record.id)}
+                          onDelete={() => deleteRecord(record)}
                           onStatusChange={(status) => setRecordStatus(record.id, status)}
                           record={record}
                         />
@@ -913,12 +919,14 @@ function OutcomeButton({
 }
 
 function BetCard({
+  canDelete,
   onCopy,
   onDelete,
   onStatusChange,
   preview = false,
   record,
 }: {
+  canDelete: boolean;
   onCopy: () => void;
   onDelete: () => void;
   onStatusChange: (status: BetStatus) => void;
@@ -960,9 +968,11 @@ function BetCard({
               <IconButton label="คัดลอก" onClick={onCopy}>
                 <Copy className="h-4 w-4" />
               </IconButton>
-              <IconButton label="ลบ" onClick={onDelete}>
-                <Trash2 className="h-4 w-4" />
-              </IconButton>
+              {canDelete ? (
+                <IconButton label="ลบ" onClick={onDelete}>
+                  <Trash2 className="h-4 w-4" />
+                </IconButton>
+              ) : null}
             </div>
           ) : null}
         </div>
