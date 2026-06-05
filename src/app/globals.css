@@ -2,15 +2,16 @@
 
 :root {
   color-scheme: dark;
-  --tp-bg: #070b12;
-  --tp-bg-soft: #0b111c;
-  --tp-panel: #0f1724;
-  --tp-panel-soft: #141e2d;
-  --tp-border: #223148;
-  --tp-blue: #159dff;
-  --tp-blue-bright: #23c3ff;
+  --tp-bg: #060a11;
+  --tp-bg-soft: #0a1019;
+  --tp-panel: #0e1724;
+  --tp-panel-soft: #121d2c;
+  --tp-odds: #172234;
+  --tp-border: #26354a;
+  --tp-blue: #009dff;
+  --tp-blue-bright: #23c4ff;
   --tp-text: #f4f8ff;
-  --tp-muted: #8b9bb1;
+  --tp-muted: #8797ad;
 }
 
 * {
@@ -26,8 +27,8 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    radial-gradient(circle at 50% -10%, rgba(21, 157, 255, 0.2), transparent 34rem),
-    linear-gradient(180deg, #0a0f19 0%, var(--tp-bg) 42%, #05080d 100%);
+    radial-gradient(circle at 50% -12%, rgba(0, 157, 255, 0.16), transparent 32rem),
+    linear-gradient(180deg, #0b111c 0%, var(--tp-bg) 46%, #05080d 100%);
   color: var(--tp-text);
   font-family: var(--font-inter), var(--font-noto-sans-thai), Arial, Helvetica, sans-serif;
   font-feature-settings: "liga" 1, "kern" 1;
