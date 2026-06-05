@@ -268,6 +268,9 @@ export default function Home() {
     (form.selectedOutcome !== "draw" || form.hasDraw);
   const profileStats = calculateProfileStats(records);
   const viewedProfileStats = calculateProfileStats(viewedRecords);
+  const isViewingOtherUser = Boolean(viewedIdentifier);
+  const displayedRecords = isViewingOtherUser ? viewedRecords : records;
+  const displayedProfileStats = isViewingOtherUser ? viewedProfileStats : profileStats;
 
   const loadRecords = useCallback(async (sessionToken: string) => {
     const { data, error } = await supabase.rpc("app_list_bets", {
@@ -408,6 +411,15 @@ export default function Home() {
       setProfileSearchResults([]);
       setProfileSearchMessage("");
     }
+  }
+
+  function clearViewedUser() {
+    setProfileSearch("");
+    setProfileSearchResults([]);
+    setIsProfileSearchOpen(false);
+    setViewedIdentifier("");
+    setViewedRecords([]);
+    setProfileSearchMessage("");
   }
 
   async function handleLogin() {
@@ -836,20 +848,24 @@ export default function Home() {
                     </div>
                   ) : activeTab === "records" ? (
                     <div className="space-y-3 p-4">
-                      {records.length ? (
-                        records.map((record) => (
+                      {isViewingOtherUser ? (
+                        <ViewingBanner identifier={viewedIdentifier} onClear={clearViewedUser} />
+                      ) : null}
+                      {displayedRecords.length ? (
+                        displayedRecords.map((record) => (
                           <BetCard
-                            canDelete={record.userId === user.id}
+                            canDelete={!isViewingOtherUser && record.userId === user.id}
                             key={record.id}
                             onCopy={() => copyRecord(record)}
                             onDelete={() => deleteRecord(record)}
                             onStatusChange={(status) => setRecordStatus(record.id, status)}
+                            preview={isViewingOtherUser}
                             record={record}
                           />
                         ))
                       ) : (
                         <div className="rounded-xl border border-dashed border-[#2a3542] bg-[#0b111c] p-8 text-center text-[#b7c4d6]">
-                          ยังไม่มีรายการ
+                          {isViewingOtherUser ? `ไม่พบรายการของ ${viewedIdentifier} หรือยังไม่มีบิล` : "ยังไม่มีรายการ"}
                         </div>
                       )}
                     </div>
@@ -857,14 +873,7 @@ export default function Home() {
                     <ProfilePanel
                       identifier={user.identifier}
                       isSearching={isProfileSearching}
-                      onClearViewedUser={() => {
-                        setProfileSearch("");
-                        setProfileSearchResults([]);
-                        setIsProfileSearchOpen(false);
-                        setViewedIdentifier("");
-                        setViewedRecords([]);
-                        setProfileSearchMessage("");
-                      }}
+                      onClearViewedUser={clearViewedUser}
                       onLogout={handleLogout}
                       onSearchChange={updateProfileSearch}
                       onSelectUser={loadViewedUserRecords}
@@ -872,10 +881,8 @@ export default function Home() {
                       searchMessage={profileSearchMessage}
                       searchResults={profileSearchResults}
                       searchValue={profileSearch}
-                      stats={profileStats}
+                      stats={displayedProfileStats}
                       viewedIdentifier={viewedIdentifier}
-                      viewedRecords={viewedRecords}
-                      viewedStats={viewedProfileStats}
                     />
                   )}
                 </div>
@@ -902,8 +909,6 @@ function ProfilePanel({
   searchValue,
   stats,
   viewedIdentifier,
-  viewedRecords,
-  viewedStats,
 }: {
   identifier: string;
   isSearching: boolean;
@@ -917,11 +922,9 @@ function ProfilePanel({
   searchValue: string;
   stats: ProfileStats;
   viewedIdentifier: string;
-  viewedRecords: BetRecord[];
-  viewedStats: ProfileStats;
 }) {
   const profitClass = stats.netProfit >= 0 ? "text-[#c9ffd8]" : "text-[#ffd4dd]";
-  const viewedProfitClass = viewedStats.netProfit >= 0 ? "text-[#c9ffd8]" : "text-[#ffd4dd]";
+  const displayIdentifier = viewedIdentifier || identifier;
 
   return (
     <div className="space-y-4 p-4">
@@ -929,8 +932,10 @@ function ProfilePanel({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#7f8b9c]">Profile</p>
-            <h2 className="mt-1 truncate text-2xl font-black">{identifier}</h2>
-            <p className="mt-2 text-sm font-medium text-[#7f8b9c]">สรุปผลงานจากรายการที่ปิดผลแล้ว</p>
+            <h2 className="mt-1 truncate text-2xl font-black">{displayIdentifier}</h2>
+            <p className="mt-2 text-sm font-medium text-[#7f8b9c]">
+              {viewedIdentifier ? `กำลังดูข้อมูลของ ${viewedIdentifier}` : "สรุปผลงานจากรายการที่ปิดผลแล้ว"}
+            </p>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-2">
             <div className="rounded-xl border border-[#2a3542] bg-[#0b111c] p-3 text-[#b7c4d6]">
@@ -1001,54 +1006,9 @@ function ProfilePanel({
         {searchMessage ? <p className="mt-3 rounded-lg border border-[#2a3542] bg-[#0b111c] p-3 text-xs font-bold text-[#b7c4d6]">{searchMessage}</p> : null}
       </section>
 
-      {viewedIdentifier ? (
-        <section className="space-y-3 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">Viewing</p>
-              <h3 className="mt-1 truncate text-xl font-black">{viewedIdentifier}</h3>
-            </div>
-            <span className="rounded-xl border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6]">
-              {formatNumber(viewedStats.totalRecords, 0)} บิล
-            </span>
-          </div>
+      {viewedIdentifier ? <ViewingBanner identifier={viewedIdentifier} onClear={onClearViewedUser} /> : null}
 
-          <div className="grid grid-cols-2 gap-3">
-            <MiniStat label="อัตราชนะ" value={`${formatNumber(viewedStats.winRate, 1)}%`} />
-            <MiniStat label="ทั้งหมด" value={formatNumber(viewedStats.totalRecords, 0)} />
-            <MiniStat label="ชนะ" value={formatNumber(viewedStats.winCount, 0)} />
-            <MiniStat label="แพ้" value={formatNumber(viewedStats.lostCount, 0)} />
-          </div>
-
-          <div className="rounded-xl border border-transparent bg-[#0b111c] p-3">
-            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">กำไรสุทธิ</p>
-            <p className={`mt-1 text-2xl font-black ${viewedProfitClass}`}>{formatSignedAmount(viewedStats.netProfit)}</p>
-          </div>
-
-          {viewedRecords.length ? (
-            <div className="space-y-3">
-              {viewedRecords.map((record) => (
-                <BetCard
-                  canDelete={false}
-                  key={record.id}
-                  onCopy={() => {}}
-                  onDelete={() => {}}
-                  onStatusChange={() => {}}
-                  preview
-                  record={record}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-[#2a3542] bg-[#0b111c] p-6 text-center text-sm font-bold text-[#b7c4d6]">
-              ไม่พบรายการของ {viewedIdentifier} หรือยังไม่มีบิล
-            </div>
-          )}
-        </section>
-      ) : null}
-
-      {!viewedIdentifier ? (
-        <>
+      <>
           <div className="grid grid-cols-2 gap-3">
             <StatCard label="อัตราชนะ" value={`${formatNumber(stats.winRate, 1)}%`} />
             <StatCard label="ทั้งหมด" value={formatNumber(stats.totalRecords, 0)} />
@@ -1088,8 +1048,27 @@ function ProfilePanel({
             <p className="mt-2">ถ้าแพ้จะนับ -1.00 หน่วยเต็ม แล้วเอาทุกบิลมารวมเพื่อดูว่ากลยุทธ์ย้อนหลังบวกหรือลบกี่ %</p>
           </section>
         </>
-      ) : null}
     </div>
+  );
+}
+
+function ViewingBanner({ identifier, onClear }: { identifier: string; onClear: () => void }) {
+  return (
+    <section className="rounded-xl border border-[#35b6e8]/35 bg-[#147f9f]/10 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7f8b9c]">กำลังดูข้อมูลของ</p>
+          <p className="mt-1 truncate text-lg font-black text-[#f4f7fb]">{identifier}</p>
+        </div>
+        <button
+          className="shrink-0 rounded-md border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6] transition hover:bg-[#111927] hover:text-[#f4f7fb]"
+          onClick={onClear}
+          type="button"
+        >
+          กลับของฉัน
+        </button>
+      </div>
+    </section>
   );
 }
 
