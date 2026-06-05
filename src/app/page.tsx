@@ -58,7 +58,6 @@ type BetRecordRow = {
 };
 
 type ProfileStats = {
-  averageOdds: number;
   grossReturn: number;
   lostCount: number;
   netProfit: number;
@@ -66,6 +65,9 @@ type ProfileStats = {
   settledCount: number;
   totalRecords: number;
   totalStake: number;
+  unitGrossReturn: number;
+  unitNetProfit: number;
+  unitRoi: number;
   voidCount: number;
   winCount: number;
   winRate: number;
@@ -190,11 +192,8 @@ function calculateProfileStats(records: BetRecord[]): ProfileStats {
   const settledRecords = records.filter((record) => record.status === "won" || record.status === "lost");
   const winCount = settledRecords.filter((record) => record.status === "won").length;
   const lostCount = settledRecords.filter((record) => record.status === "lost").length;
-  const oddsRecords = settledRecords
-    .map((record) => getSelectedOdds(record))
-    .filter((odds): odds is number => odds !== null && odds > 0);
 
-  const money = settledRecords.reduce(
+  const summary = settledRecords.reduce(
     (summary, record) => {
       const stake = parseDecimal(record.stake) ?? 0;
       const odds = getSelectedOdds(record) ?? 0;
@@ -205,6 +204,8 @@ function calculateProfileStats(records: BetRecord[]): ProfileStats {
           grossReturn: summary.grossReturn + grossReturn,
           netProfit: summary.netProfit + (odds > 0 ? grossReturn - stake : 0),
           totalStake: summary.totalStake + stake,
+          unitGrossReturn: summary.unitGrossReturn + (odds > 0 ? odds : 0),
+          unitNetProfit: summary.unitNetProfit + (odds > 0 ? odds - 1 : 0),
         };
       }
 
@@ -212,20 +213,24 @@ function calculateProfileStats(records: BetRecord[]): ProfileStats {
         grossReturn: summary.grossReturn,
         netProfit: summary.netProfit - stake,
         totalStake: summary.totalStake + stake,
+        unitGrossReturn: summary.unitGrossReturn,
+        unitNetProfit: summary.unitNetProfit - 1,
       };
     },
-    { grossReturn: 0, netProfit: 0, totalStake: 0 },
+    { grossReturn: 0, netProfit: 0, totalStake: 0, unitGrossReturn: 0, unitNetProfit: 0 },
   );
 
   return {
-    averageOdds: oddsRecords.length ? oddsRecords.reduce((total, odds) => total + odds, 0) / oddsRecords.length : 0,
-    grossReturn: money.grossReturn,
+    grossReturn: summary.grossReturn,
     lostCount,
-    netProfit: money.netProfit,
+    netProfit: summary.netProfit,
     pendingCount: records.filter((record) => record.status === "pending").length,
     settledCount: settledRecords.length,
     totalRecords: records.length,
-    totalStake: money.totalStake,
+    totalStake: summary.totalStake,
+    unitGrossReturn: summary.unitGrossReturn,
+    unitNetProfit: summary.unitNetProfit,
+    unitRoi: settledRecords.length ? (summary.unitNetProfit / settledRecords.length) * 100 : 0,
     voidCount: records.filter((record) => record.status === "void").length,
     winCount,
     winRate: settledRecords.length ? (winCount / settledRecords.length) * 100 : 0,
@@ -784,7 +789,7 @@ function ProfilePanel({ identifier, stats }: { identifier: string; stats: Profil
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <MiniStat label="ค่าน้ำเฉลี่ย" value={stats.averageOdds ? formatNumber(stats.averageOdds, 2) : "-"} />
+          <MiniStat label="ลงเท่ากันทุกไม้" value={`${formatSignedAmount(stats.unitNetProfit)}u (${formatSignedAmount(stats.unitRoi)}%)`} />
           <MiniStat label="เงินลงรวม" value={formatNumber(stats.totalStake)} />
           <MiniStat label="ยอดรับตอนชนะ" value={formatNumber(stats.grossReturn)} />
           <MiniStat label="รอผล / คืนทุน" value={`${formatNumber(stats.pendingCount, 0)} / ${formatNumber(stats.voidCount, 0)}`} />
@@ -799,9 +804,9 @@ function ProfilePanel({ identifier, stats }: { identifier: string; stats: Profil
       <section className="rounded-2xl border border-slate-800 bg-[#0d1627] p-4 text-sm text-slate-300 shadow-inner shadow-black/10">
         <p className="font-extrabold text-slate-100">สูตรค่าน้ำที่ใช้</p>
         <p className="mt-2">
-          ถ้าลง 100 ที่น้ำ 1.80 แล้วชนะ จะได้รับคืน 180 และกำไรสุทธิ 80 เพราะคิดเป็น 100 × (1.80 - 1)
+          ถ้าชนะน้ำ 1.90 จะนับเป็น +0.90 หน่วย เพราะได้คืน 1.90 แต่เงินต้นคือ 1 หน่วย
         </p>
-        <p className="mt-2">ถ้าแพ้ จะเสียเงินลงเต็ม 100 ไม่คูณ 2 และรายการคืนทุนจะไม่นับเป็นชนะหรือแพ้</p>
+        <p className="mt-2">ถ้าแพ้จะนับ -1.00 หน่วยเต็ม แล้วเอาทุกบิลมารวมเพื่อดูว่ากลยุทธ์ย้อนหลังบวกหรือลบกี่ %</p>
       </section>
     </div>
   );
