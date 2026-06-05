@@ -11,7 +11,9 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import type { User } from "@supabase/supabase-js";
+import { useCallback, useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 type Outcome = "left" | "draw" | "right";
 type BetStatus = "pending" | "won" | "lost" | "void";
@@ -19,6 +21,7 @@ type ActiveTab = "create" | "records";
 
 type BetRecord = {
   id: string;
+  userId: string;
   teamLeft: string;
   teamRight: string;
   hasDraw: boolean;
@@ -31,7 +34,25 @@ type BetRecord = {
   createdAt: string;
 };
 
-type BetFormState = Omit<BetRecord, "id" | "status" | "createdAt">;
+type BetFormState = Omit<BetRecord, "id" | "userId" | "status" | "createdAt">;
+
+type BetRecordRow = {
+  id: string;
+  user_id: string;
+  team_left: string;
+  team_right: string;
+  has_draw: boolean;
+  odds_left: number | null;
+  odds_draw: number | null;
+  odds_right: number | null;
+  selected_outcome: Outcome;
+  stake: number | null;
+  status: BetStatus;
+  created_at: string;
+};
+
+const SESSION_MAX_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
+const LAST_SEEN_KEY = "tradingclaw:last_seen";
 
 const statusConfig: Record<
   BetStatus,
@@ -70,35 +91,6 @@ const initialForm: BetFormState = {
   stake: "",
 };
 
-const starterRecords: BetRecord[] = [
-  {
-    id: "sample-1",
-    teamLeft: "Arsenal",
-    teamRight: "Chelsea",
-    hasDraw: true,
-    oddsLeft: "1.82",
-    oddsDraw: "3.75",
-    oddsRight: "2.05",
-    selectedOutcome: "left",
-    stake: "1000",
-    status: "pending",
-    createdAt: "วันนี้ 19:20",
-  },
-  {
-    id: "sample-2",
-    teamLeft: "Talon",
-    teamRight: "Secret",
-    hasDraw: false,
-    oddsLeft: "1.95",
-    oddsDraw: "",
-    oddsRight: "1.88",
-    selectedOutcome: "right",
-    stake: "500",
-    status: "won",
-    createdAt: "วันนี้ 18:10",
-  },
-];
-
 function getOutcomeLabel(record: Pick<BetRecord, "selectedOutcome" | "teamLeft" | "teamRight">) {
   if (record.selectedOutcome === "left") return record.teamLeft || "ทีมซ้าย";
   if (record.selectedOutcome === "right") return record.teamRight || "ทีมขวา";
@@ -111,16 +103,115 @@ function getSelectedOdds(record: Pick<BetRecord, "selectedOutcome" | "oddsLeft" 
   return Number(record.oddsDraw || 0);
 }
 
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("th-TH", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function rowToRecord(row: BetRecordRow): BetRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    teamLeft: row.team_left,
+    teamRight: row.team_right,
+    hasDraw: row.has_draw,
+    oddsLeft: row.odds_left?.toString() ?? "",
+    oddsDraw: row.odds_draw?.toString() ?? "",
+    oddsRight: row.odds_right?.toString() ?? "",
+    selectedOutcome: row.selected_outcome,
+    stake: row.stake?.toString() ?? "",
+    status: row.status,
+    createdAt: formatDate(row.created_at),
+  };
+}
+
+function usernameToEmail(username: string) {
+  const normalized = username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "_") || "guest";
+  return `${normalized}@tradingclaw.local`;
+}
+
+function passwordForAuth(password: string) {
+  const value = password || "empty";
+  return value.length >= 6 ? value : `tc-${value}-pass`;
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("create");
-  const [records, setRecords] = useState<BetRecord[]>(starterRecords);
+  const [records, setRecords] = useState<BetRecord[]>([]);
   const [form, setForm] = useState<BetFormState>(initialForm);
+  const [user, setUser] = useState<User | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
   const canSave =
     form.teamLeft.trim() &&
     form.teamRight.trim() &&
     form.stake.trim() &&
     (form.selectedOutcome !== "draw" || form.hasDraw);
+
+  const loadRecords = useCallback(async (userId: string) => {
+    const { data, error } = await supabase
+      .from("bet_records")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    setRecords((data as BetRecordRow[]).map(rowToRecord));
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function initAuth() {
+      const lastSeen = Number(localStorage.getItem(LAST_SEEN_KEY) || 0);
+
+      if (lastSeen && Date.now() - lastSeen > SESSION_MAX_IDLE_MS) {
+        await supabase.auth.signOut();
+        localStorage.removeItem(LAST_SEEN_KEY);
+      }
+
+      const { data } = await supabase.auth.getSession();
+
+      if (!isMounted) return;
+
+      setUser(data.session?.user ?? null);
+      setIsAuthLoading(false);
+
+      if (data.session?.user) {
+        localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
+        await loadRecords(data.session.user.id);
+      }
+    }
+
+    initAuth();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
+        void loadRecords(session.user.id);
+      } else {
+        setRecords([]);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, [loadRecords]);
 
   function updateForm(key: keyof BetFormState, value: string | boolean) {
     setForm((current) => {
@@ -132,30 +223,95 @@ export default function Home() {
     });
   }
 
-  function saveRecord() {
-    if (!canSave) return;
+  async function handleLogin() {
+    const email = usernameToEmail(username);
+    const authPassword = passwordForAuth(password);
 
-    const nextRecord: BetRecord = {
-      ...form,
-      id: crypto.randomUUID(),
+    setIsAuthLoading(true);
+    setAuthMessage("");
+
+    const signIn = await supabase.auth.signInWithPassword({
+      email,
+      password: authPassword,
+    });
+
+    if (signIn.error) {
+      const signUp = await supabase.auth.signUp({
+        email,
+        password: authPassword,
+        options: {
+          data: {
+            username: username.trim() || "guest",
+          },
+        },
+      });
+
+      if (signUp.error) {
+        setAuthMessage(signUp.error.message);
+        setIsAuthLoading(false);
+        return;
+      }
+
+      if (!signUp.data.session) {
+        setAuthMessage("สมัครแล้ว แต่ Supabase เปิด email confirmation อยู่ ต้องปิด confirmation ก่อนถึงจะล็อกอินทันทีได้");
+        setIsAuthLoading(false);
+        return;
+      }
+    }
+
+    localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
+    setIsAuthLoading(false);
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    localStorage.removeItem(LAST_SEEN_KEY);
+    setUser(null);
+    setRecords([]);
+  }
+
+  async function saveRecord() {
+    if (!canSave || !user || isSaving) return;
+
+    setIsSaving(true);
+
+    const { error } = await supabase.from("bet_records").insert({
+      user_id: user.id,
+      team_left: form.teamLeft.trim(),
+      team_right: form.teamRight.trim(),
+      has_draw: form.hasDraw,
+      odds_left: form.oddsLeft ? Number(form.oddsLeft) : null,
+      odds_draw: form.hasDraw && form.oddsDraw ? Number(form.oddsDraw) : null,
+      odds_right: form.oddsRight ? Number(form.oddsRight) : null,
+      selected_outcome: form.selectedOutcome,
+      stake: Number(form.stake || 0),
       status: "pending",
-      createdAt: new Intl.DateTimeFormat("th-TH", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(new Date()),
-    };
+    });
 
-    setRecords((current) => [nextRecord, ...current]);
+    setIsSaving(false);
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
     setForm({
       ...initialForm,
       hasDraw: form.hasDraw,
     });
+    setActiveTab("records");
+    await loadRecords(user.id);
   }
 
-  function setRecordStatus(id: string, status: BetStatus) {
-    setRecords((current) =>
-      current.map((record) => (record.id === id ? { ...record, status } : record)),
-    );
+  async function setRecordStatus(id: string, status: BetStatus) {
+    const { error } = await supabase.from("bet_records").update({ status }).eq("id", id);
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    setRecords((current) => current.map((record) => (record.id === id ? { ...record, status } : record)));
   }
 
   function copyRecord(record: BetRecord) {
@@ -172,7 +328,14 @@ export default function Home() {
     setActiveTab("create");
   }
 
-  function deleteRecord(id: string) {
+  async function deleteRecord(id: string) {
+    const { error } = await supabase.from("bet_records").delete().eq("id", id);
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
     setRecords((current) => current.filter((record) => record.id !== id));
   }
 
@@ -190,6 +353,44 @@ export default function Home() {
             ? "left"
             : "draw",
     }));
+  }
+
+  if (isAuthLoading && !user) {
+    return (
+      <main className="grid min-h-screen place-items-center px-4 py-5 text-slate-50">
+        <div className="w-full max-w-[420px] rounded-[28px] border border-slate-700/50 bg-[#0a1020] p-5 text-center shadow-[0_18px_48px_rgba(0,0,0,0.32)]">
+          <p className="text-sm font-bold text-slate-400">กำลังตรวจสอบ session...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return (
+      <main className="grid min-h-screen place-items-center px-4 py-5 text-slate-50">
+        <section className="w-full max-w-[420px] rounded-[28px] border border-slate-700/50 bg-[#0a1020] p-5 shadow-[0_18px_48px_rgba(0,0,0,0.32)]">
+          <div className="mb-5">
+            <p className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-blue-300/55">Login</p>
+            <h1 className="mt-1 text-2xl font-extrabold tracking-tight">เข้าใช้งาน</h1>
+            <p className="mt-2 text-sm text-slate-400">ใส่ชื่อกับรหัสอะไรก็ได้ ถ้ายังไม่มี user ระบบจะสร้างให้</p>
+          </div>
+
+          <div className="space-y-4">
+            <TextField label="ชื่อผู้ใช้" onChange={setUsername} placeholder="เช่น best" value={username} />
+            <TextField label="รหัสผ่าน" onChange={setPassword} placeholder="ใส่อะไรก็ได้" type="password" value={password} />
+            {authMessage ? <p className="rounded-xl border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-100">{authMessage}</p> : null}
+            <button
+              className="w-full rounded-2xl bg-blue-500 px-5 py-4 text-base font-extrabold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={isAuthLoading || !username.trim()}
+              onClick={handleLogin}
+              type="button"
+            >
+              {isAuthLoading ? "กำลังเข้า..." : "เข้าใช้งาน"}
+            </button>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -221,15 +422,25 @@ export default function Home() {
                         <p className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-blue-300/55">Market Builder</p>
                         <h2 className="mt-1 text-xl font-extrabold tracking-tight">สร้างคู่แข่งขัน</h2>
                       </div>
-                      <button
-                        className="inline-flex items-center gap-2 rounded-xl border border-slate-700/70 bg-[#111a2b] px-3 py-2 text-sm font-bold text-slate-200 transition hover:border-blue-500/40 hover:bg-[#132033]"
-                        onClick={swapTeams}
-                        type="button"
-                      >
-                        <ArrowLeftRight className="h-4 w-4" />
-                        สลับทีม
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-700/70 bg-[#111a2b] px-3 py-2 text-sm font-bold text-slate-200 transition hover:border-blue-500/40 hover:bg-[#132033]"
+                          onClick={swapTeams}
+                          type="button"
+                        >
+                          <ArrowLeftRight className="h-4 w-4" />
+                          สลับทีม
+                        </button>
+                        <button
+                          className="rounded-xl border border-slate-700/70 bg-[#111a2b] px-3 py-2 text-sm font-bold text-slate-400 transition hover:text-slate-100"
+                          onClick={handleLogout}
+                          type="button"
+                        >
+                          ออก
+                        </button>
+                      </div>
                     </div>
+                    {authMessage ? <p className="mb-4 rounded-xl border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-100">{authMessage}</p> : null}
 
                     <div className="rounded-2xl border border-slate-800 bg-[#0d1627] p-3 shadow-inner shadow-black/10">
                       <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
@@ -333,11 +544,11 @@ export default function Home() {
 
                     <button
                       className="mt-4 w-full rounded-2xl bg-blue-500 px-5 py-4 text-base font-extrabold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={!canSave}
+                      disabled={!canSave || isSaving}
                       onClick={saveRecord}
                       type="button"
                     >
-                      Add to Bet Slip
+                      {isSaving ? "กำลังบันทึก..." : "Add to Bet Slip"}
                     </button>
                   </div>
                 ) : (
