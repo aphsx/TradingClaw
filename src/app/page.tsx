@@ -18,6 +18,7 @@ import { supabase } from "@/lib/supabase";
 type Outcome = "left" | "draw" | "right";
 type BetStatus = "pending" | "won" | "lost" | "void";
 type ActiveTab = "create" | "records";
+type AuthMode = "login" | "signup";
 
 type BetRecord = {
   id: string;
@@ -129,14 +130,19 @@ function rowToRecord(row: BetRecordRow): BetRecord {
   };
 }
 
-function usernameToEmail(username: string) {
-  const normalized = username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, "_") || "guest";
-  return `${normalized}@tradingclaw.local`;
+function identifierToEmail(identifier: string) {
+  const value = identifier.trim().toLowerCase();
+
+  if (value.includes("@")) {
+    return value;
+  }
+
+  const normalized = value.replace(/[^a-z0-9._-]/g, "_");
+  return `${normalized}@tradingclaw.app`;
 }
 
 function passwordForAuth(password: string) {
-  const value = password || "empty";
-  return value.length >= 6 ? value : `tc-${value}-pass`;
+  return password.length >= 6 ? password : `tc-${password}-pass`;
 }
 
 export default function Home() {
@@ -146,6 +152,7 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authMessage, setAuthMessage] = useState("");
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -224,7 +231,12 @@ export default function Home() {
   }
 
   async function handleLogin() {
-    const email = usernameToEmail(username);
+    if (!username.trim() || !password) {
+      setAuthMessage("กรอกชื่อผู้ใช้และรหัสผ่านก่อน");
+      return;
+    }
+
+    const email = identifierToEmail(username);
     const authPassword = passwordForAuth(password);
 
     setIsAuthLoading(true);
@@ -236,27 +248,47 @@ export default function Home() {
     });
 
     if (signIn.error) {
-      const signUp = await supabase.auth.signUp({
-        email,
-        password: authPassword,
-        options: {
-          data: {
-            username: username.trim() || "guest",
-          },
+      setAuthMessage("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง ถ้ายังไม่มีบัญชีให้กดสมัคร");
+      setIsAuthLoading(false);
+      return;
+    }
+
+    localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
+    setIsAuthLoading(false);
+  }
+
+  async function handleSignUp() {
+    if (!username.trim() || !password) {
+      setAuthMessage("กรอกชื่อผู้ใช้และรหัสผ่านก่อนสมัคร");
+      return;
+    }
+
+    const email = identifierToEmail(username);
+    const authPassword = passwordForAuth(password);
+
+    setIsAuthLoading(true);
+    setAuthMessage("");
+
+    const signUp = await supabase.auth.signUp({
+      email,
+      password: authPassword,
+      options: {
+        data: {
+          username: username.trim(),
         },
-      });
+      },
+    });
 
-      if (signUp.error) {
-        setAuthMessage(signUp.error.message);
-        setIsAuthLoading(false);
-        return;
-      }
+    if (signUp.error) {
+      setAuthMessage(signUp.error.message);
+      setIsAuthLoading(false);
+      return;
+    }
 
-      if (!signUp.data.session) {
-        setAuthMessage("สมัครแล้ว แต่ Supabase เปิด email confirmation อยู่ ต้องปิด confirmation ก่อนถึงจะล็อกอินทันทีได้");
-        setIsAuthLoading(false);
-        return;
-      }
+    if (!signUp.data.session) {
+      setAuthMessage("สมัครแล้ว แต่ Supabase เปิด email confirmation อยู่ ต้องปิด confirmation ก่อนถึงจะล็อกอินทันทีได้");
+      setIsAuthLoading(false);
+      return;
     }
 
     localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
@@ -370,22 +402,52 @@ export default function Home() {
       <main className="grid min-h-screen place-items-center px-4 py-5 text-slate-50">
         <section className="w-full max-w-[420px] rounded-[28px] border border-slate-700/50 bg-[#0a1020] p-5 shadow-[0_18px_48px_rgba(0,0,0,0.32)]">
           <div className="mb-5">
-            <p className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-blue-300/55">Login</p>
-            <h1 className="mt-1 text-2xl font-extrabold tracking-tight">เข้าใช้งาน</h1>
-            <p className="mt-2 text-sm text-slate-400">ใส่ชื่อกับรหัสอะไรก็ได้ ถ้ายังไม่มี user ระบบจะสร้างให้</p>
+            <p className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-blue-300/55">Account</p>
+            <h1 className="mt-1 text-2xl font-extrabold tracking-tight">
+              {authMode === "login" ? "เข้าสู่ระบบ" : "สมัครบัญชี"}
+            </h1>
+            <p className="mt-2 text-sm text-slate-400">
+              {authMode === "login" ? "ใช้ชื่อผู้ใช้หรืออีเมลที่สมัครไว้" : "ใช้อะไรก็ได้เป็นชื่อผู้ใช้ หรือใส่อีเมลจริงก็ได้"}
+            </p>
           </div>
 
           <div className="space-y-4">
-            <TextField label="ชื่อผู้ใช้" onChange={setUsername} placeholder="เช่น best" value={username} />
-            <TextField label="รหัสผ่าน" onChange={setPassword} placeholder="ใส่อะไรก็ได้" type="password" value={password} />
+            <div className="grid grid-cols-2 gap-2 rounded-2xl bg-[#0d1526] p-2">
+              <button
+                className={`rounded-xl px-4 py-3 text-sm font-extrabold transition ${
+                  authMode === "login" ? "bg-blue-500 text-white" : "text-slate-400 hover:bg-[#111a2b]"
+                }`}
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthMessage("");
+                }}
+                type="button"
+              >
+                เข้าสู่ระบบ
+              </button>
+              <button
+                className={`rounded-xl px-4 py-3 text-sm font-extrabold transition ${
+                  authMode === "signup" ? "bg-blue-500 text-white" : "text-slate-400 hover:bg-[#111a2b]"
+                }`}
+                onClick={() => {
+                  setAuthMode("signup");
+                  setAuthMessage("");
+                }}
+                type="button"
+              >
+                สมัคร
+              </button>
+            </div>
+            <TextField label="ชื่อผู้ใช้ / อีเมล" onChange={setUsername} placeholder="เช่น best หรือ best@mail.com" value={username} />
+            <TextField label="รหัสผ่าน" onChange={setPassword} placeholder="ต้องใส่รหัสผ่าน" type="password" value={password} />
             {authMessage ? <p className="rounded-xl border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-100">{authMessage}</p> : null}
             <button
               className="w-full rounded-2xl bg-blue-500 px-5 py-4 text-base font-extrabold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={isAuthLoading || !username.trim()}
-              onClick={handleLogin}
+              disabled={isAuthLoading || !username.trim() || !password}
+              onClick={authMode === "login" ? handleLogin : handleSignUp}
               type="button"
             >
-              {isAuthLoading ? "กำลังเข้า..." : "เข้าใช้งาน"}
+              {isAuthLoading ? "กำลังทำรายการ..." : authMode === "login" ? "เข้าใช้งาน" : "สมัครบัญชี"}
             </button>
           </div>
         </section>
