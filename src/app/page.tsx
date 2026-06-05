@@ -97,18 +97,6 @@ const initialForm: BetFormState = {
   stake: "",
 };
 
-function getOutcomeLabel(record: Pick<BetRecord, "selectedOutcome" | "teamLeft" | "teamRight">) {
-  if (record.selectedOutcome === "left") return record.teamLeft || "ทีมซ้าย";
-  if (record.selectedOutcome === "right") return record.teamRight || "ทีมขวา";
-  return "เสมอ";
-}
-
-function getSelectedOdds(record: Pick<BetRecord, "selectedOutcome" | "oddsLeft" | "oddsDraw" | "oddsRight">) {
-  if (record.selectedOutcome === "left") return parseDecimal(record.oddsLeft) ?? 0;
-  if (record.selectedOutcome === "right") return parseDecimal(record.oddsRight) ?? 0;
-  return parseDecimal(record.oddsDraw) ?? 0;
-}
-
 function isDecimalInput(value: string) {
   return /^\d*(?:[.,]\d*)?$/.test(value);
 }
@@ -122,6 +110,16 @@ function parseDecimal(value: string) {
 
   const parsedValue = Number(normalizedValue);
   return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
+function formatAmount(value: string) {
+  const amount = parseDecimal(value);
+
+  if (amount === null) {
+    return "-";
+  }
+
+  return amount.toLocaleString("th-TH");
 }
 
 function formatDate(value: string) {
@@ -776,7 +774,6 @@ function BetCard({
   preview?: boolean;
   record: BetRecord;
 }) {
-  const selectedOdds = getSelectedOdds(record);
   const status = statusConfig[record.status];
   const statusBarClass =
     record.status === "won"
@@ -789,34 +786,46 @@ function BetCard({
     <article className="relative overflow-hidden rounded-2xl border border-slate-800 bg-[#0d1627] p-3 pl-5 shadow-lg shadow-black/20">
       <div className={`absolute bottom-0 left-0 top-0 w-1.5 ${statusBarClass}`} />
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-extrabold ${status.className}`}>
               {status.icon}
               {status.label}
             </span>
           </div>
-          <h3 className="mt-3 text-base font-extrabold">
+          <h3 className="mt-3 truncate text-base font-extrabold">
             {record.teamLeft} <span className="text-slate-300/35">vs</span> {record.teamRight}
           </h3>
           <p className="mt-1 text-xs font-semibold text-slate-500">{record.createdAt}</p>
         </div>
 
-        {!preview ? (
-          <div className="flex gap-2">
-            <IconButton label="คัดลอก" onClick={onCopy}>
-              <Copy className="h-4 w-4" />
-            </IconButton>
-            <IconButton label="ลบ" onClick={onDelete}>
-              <Trash2 className="h-4 w-4" />
-            </IconButton>
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="rounded-xl border border-blue-400/20 bg-blue-500/10 px-3 py-2 text-right">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-blue-200/60">Stake</p>
+            <p className="text-base font-black text-blue-50">{formatAmount(record.stake)}</p>
           </div>
-        ) : null}
+          {!preview ? (
+            <div className="flex gap-2">
+              <IconButton label="คัดลอก" onClick={onCopy}>
+                <Copy className="h-4 w-4" />
+              </IconButton>
+              <IconButton label="ลบ" onClick={onDelete}>
+                <Trash2 className="h-4 w-4" />
+              </IconButton>
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl bg-[#08101d] p-2">
-        <MiniStat label="ลง" value={getOutcomeLabel(record)} />
-        <MiniStat label="น้ำ" value={selectedOdds ? selectedOdds.toString() : "-"} />
+      <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#08101d] p-2">
+        <MiniStat active={record.selectedOutcome === "left"} label={record.teamLeft || "ซ้าย"} value={record.oddsLeft || "-"} />
+        <MiniStat
+          active={record.selectedOutcome === "draw"}
+          label="เสมอ"
+          muted={!record.hasDraw}
+          value={record.hasDraw ? record.oddsDraw || "-" : "-"}
+        />
+        <MiniStat active={record.selectedOutcome === "right"} label={record.teamRight || "ขวา"} value={record.oddsRight || "-"} />
       </div>
 
       {!preview && record.status === "pending" ? (
@@ -842,11 +851,25 @@ function BetCard({
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: string }) {
+function MiniStat({
+  active = false,
+  label,
+  muted = false,
+  value,
+}: {
+  active?: boolean;
+  label: string;
+  muted?: boolean;
+  value: string;
+}) {
   return (
-    <div className="min-w-0 rounded-lg bg-[#0b1423] p-2.5">
-      <p className="text-[11px] font-semibold text-slate-300/55">{label}</p>
-      <p className="mt-1 truncate text-sm font-extrabold text-slate-50">{value}</p>
+    <div
+      className={`min-w-0 rounded-lg border p-2.5 transition ${
+        active ? "border-blue-500 bg-blue-500 text-white" : "border-transparent bg-[#0b1423] text-slate-50"
+      } ${muted ? "opacity-35" : ""}`}
+    >
+      <p className={`truncate text-[11px] font-semibold ${active ? "text-white/70" : "text-slate-300/55"}`}>{label}</p>
+      <p className="mt-1 truncate text-sm font-extrabold">{value}</p>
     </div>
   );
 }
