@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
-import { Noto_Sans_Thai } from "next/font/google";
+import { Inter, Noto_Sans_Thai } from "next/font/google";
 import "./globals.css";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  weight: ["400", "500", "600", "700", "800", "900"],
+});
 
 const notoSansThai = Noto_Sans_Thai({
   subsets: ["thai", "latin"],
@@ -20,7 +26,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="th">
-      <body className={notoSansThai.variable}>{children}</body>
+      <body className={`${inter.variable} ${notoSansThai.variable}`}>{children}</body>
     </html>
   );
 }

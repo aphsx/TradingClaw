@@ -2,6 +2,15 @@
 
 :root {
   color-scheme: dark;
+  --tp-bg: #070b12;
+  --tp-bg-soft: #0b111c;
+  --tp-panel: #0f1724;
+  --tp-panel-soft: #141e2d;
+  --tp-border: #223148;
+  --tp-blue: #159dff;
+  --tp-blue-bright: #23c3ff;
+  --tp-text: #f4f8ff;
+  --tp-muted: #8b9bb1;
 }
 
 * {
@@ -16,9 +25,11 @@ html {
 body {
   min-height: 100vh;
   margin: 0;
-  background: #080d16;
-  color: #f8fafc;
-  font-family: var(--font-noto-sans-thai), Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(circle at 50% -10%, rgba(21, 157, 255, 0.2), transparent 34rem),
+    linear-gradient(180deg, #0a0f19 0%, var(--tp-bg) 42%, #05080d 100%);
+  color: var(--tp-text);
+  font-family: var(--font-inter), var(--font-noto-sans-thai), Arial, Helvetica, sans-serif;
   font-feature-settings: "liga" 1, "kern" 1;
   text-rendering: geometricPrecision;
   scrollbar-width: none;
@@ -42,5 +53,5 @@ button {
 }
 
 ::selection {
-  background: rgba(59, 130, 246, 0.28);
+  background: rgba(21, 157, 255, 0.34);
 }
