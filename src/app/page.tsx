@@ -699,11 +699,15 @@ export default function Home() {
 
   return (
     <main className="h-dvh overflow-hidden px-3 py-5 text-[#f4f7fb]">
-      <div className="mx-auto flex max-h-full w-full max-w-[430px]">
-        <section className="flex max-h-full w-full min-w-0 flex-col">
-          <div className="block max-h-full">
-            <div className="max-h-full min-w-0">
-              <section className="flex max-h-full flex-col overflow-hidden rounded-[18px] border border-[#202a36] bg-[#18222e] shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
+      <div className="mx-auto flex h-full w-full max-w-[430px]">
+        <section className="flex h-full w-full min-w-0 flex-col">
+          <div className="block h-full">
+            <div className="h-full min-w-0">
+              <section
+                className={`flex h-full flex-col overflow-hidden rounded-[18px] border bg-[#18222e] shadow-[0_18px_54px_rgba(0,0,0,0.48)] transition-colors ${
+                  isViewingOtherUser ? "border-[#ff4d5d] ring-2 ring-[#ff4d5d]/45" : "border-[#202a36]"
+                }`}
+              >
                 <div className="grid shrink-0 grid-cols-3 gap-1.5 border-b border-[#202a36] bg-[#0b111c] p-1.5">
                   <TabButton
                     active={activeTab === "create"}
@@ -714,7 +718,7 @@ export default function Home() {
                   <TabButton
                     active={activeTab === "records"}
                     icon={<ClipboardList className="h-5 w-5" />}
-                    label={`ประวัติ (${records.length})`}
+                    label={`ประวัติ (${displayedRecords.length})`}
                     onClick={() => setActiveTab("records")}
                   />
                   <TabButton
@@ -848,9 +852,6 @@ export default function Home() {
                     </div>
                   ) : activeTab === "records" ? (
                     <div className="space-y-3 p-4">
-                      {isViewingOtherUser ? (
-                        <ViewingBanner identifier={viewedIdentifier} onClear={clearViewedUser} />
-                      ) : null}
                       {displayedRecords.length ? (
                         displayedRecords.map((record) => (
                           <BetCard
@@ -933,9 +934,7 @@ function ProfilePanel({
           <div className="min-w-0">
             <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#7f8b9c]">Profile</p>
             <h2 className="mt-1 truncate text-2xl font-black">{displayIdentifier}</h2>
-            <p className="mt-2 text-sm font-medium text-[#7f8b9c]">
-              {viewedIdentifier ? `กำลังดูข้อมูลของ ${viewedIdentifier}` : "สรุปผลงานจากรายการที่ปิดผลแล้ว"}
-            </p>
+            <p className="mt-2 text-sm font-medium text-[#7f8b9c]">สรุปผลงานจากรายการที่ปิดผลแล้ว</p>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-2">
             <div className="rounded-xl border border-[#2a3542] bg-[#0b111c] p-3 text-[#b7c4d6]">
@@ -1006,8 +1005,6 @@ function ProfilePanel({
         {searchMessage ? <p className="mt-3 rounded-lg border border-[#2a3542] bg-[#0b111c] p-3 text-xs font-bold text-[#b7c4d6]">{searchMessage}</p> : null}
       </section>
 
-      {viewedIdentifier ? <ViewingBanner identifier={viewedIdentifier} onClear={onClearViewedUser} /> : null}
-
       <>
           <div className="grid grid-cols-2 gap-3">
             <StatCard label="อัตราชนะ" value={`${formatNumber(stats.winRate, 1)}%`} />
@@ -1049,26 +1046,6 @@ function ProfilePanel({
           </section>
         </>
     </div>
-  );
-}
-
-function ViewingBanner({ identifier, onClear }: { identifier: string; onClear: () => void }) {
-  return (
-    <section className="rounded-xl border border-[#35b6e8]/35 bg-[#147f9f]/10 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#7f8b9c]">กำลังดูข้อมูลของ</p>
-          <p className="mt-1 truncate text-lg font-black text-[#f4f7fb]">{identifier}</p>
-        </div>
-        <button
-          className="shrink-0 rounded-md border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6] transition hover:bg-[#111927] hover:text-[#f4f7fb]"
-          onClick={onClear}
-          type="button"
-        >
-          กลับของฉัน
-        </button>
-      </div>
-    </section>
   );
 }
 
