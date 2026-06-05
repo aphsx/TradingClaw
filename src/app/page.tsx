@@ -11,7 +11,6 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import type { User } from "@supabase/supabase-js";
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -19,6 +18,11 @@ type Outcome = "left" | "draw" | "right";
 type BetStatus = "pending" | "won" | "lost" | "void";
 type ActiveTab = "create" | "records";
 type AuthMode = "login" | "signup";
+
+type AppUser = {
+  id: string;
+  identifier: string;
+};
 
 type BetRecord = {
   id: string;
@@ -54,6 +58,7 @@ type BetRecordRow = {
 
 const SESSION_MAX_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
 const LAST_SEEN_KEY = "tradingclaw:last_seen";
+const SESSION_TOKEN_KEY = "tradingclaw:session_token";
 
 const statusConfig: Record<
   BetStatus,
@@ -130,26 +135,11 @@ function rowToRecord(row: BetRecordRow): BetRecord {
   };
 }
 
-function identifierToEmail(identifier: string) {
-  const value = identifier.trim().toLowerCase();
-
-  if (value.includes("@")) {
-    return value;
-  }
-
-  const normalized = value.replace(/[^a-z0-9._-]/g, "_");
-  return `${normalized}@tradingclaw.app`;
-}
-
-function passwordForAuth(password: string) {
-  return password.length >= 6 ? password : `tc-${password}-pass`;
-}
-
 export default function Home() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("create");
   const [records, setRecords] = useState<BetRecord[]>([]);
   const [form, setForm] = useState<BetFormState>(initialForm);
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -163,12 +153,10 @@ export default function Home() {
     form.stake.trim() &&
     (form.selectedOutcome !== "draw" || form.hasDraw);
 
-  const loadRecords = useCallback(async (userId: string) => {
-    const { data, error } = await supabase
-      .from("bet_records")
-      .select("*")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+  const loadRecords = useCallback(async (sessionToken: string) => {
+    const { data, error } = await supabase.rpc("app_list_bets", {
+      p_token: sessionToken,
+    });
 
     if (error) {
       setAuthMessage(error.message);
@@ -183,40 +171,46 @@ export default function Home() {
 
     async function initAuth() {
       const lastSeen = Number(localStorage.getItem(LAST_SEEN_KEY) || 0);
+      const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
 
-      if (lastSeen && Date.now() - lastSeen > SESSION_MAX_IDLE_MS) {
-        await supabase.auth.signOut();
+      if (!sessionToken || (lastSeen && Date.now() - lastSeen > SESSION_MAX_IDLE_MS)) {
         localStorage.removeItem(LAST_SEEN_KEY);
+        localStorage.removeItem(SESSION_TOKEN_KEY);
+        if (isMounted) {
+          setIsAuthLoading(false);
+        }
+        return;
       }
 
-      const { data } = await supabase.auth.getSession();
+      const { data, error } = await supabase.rpc("app_restore_session", {
+        p_token: sessionToken,
+      });
 
       if (!isMounted) return;
 
-      setUser(data.session?.user ?? null);
-      setIsAuthLoading(false);
-
-      if (data.session?.user) {
-        localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
-        await loadRecords(data.session.user.id);
+      if (error || !data?.[0]) {
+        localStorage.removeItem(LAST_SEEN_KEY);
+        localStorage.removeItem(SESSION_TOKEN_KEY);
+        setUser(null);
+        setIsAuthLoading(false);
+        return;
       }
+
+      const restoredUser = {
+        id: data[0].user_id,
+        identifier: data[0].identifier,
+      };
+
+      setUser(restoredUser);
+      localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
+      await loadRecords(sessionToken);
+      setIsAuthLoading(false);
     }
 
     initAuth();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
-        void loadRecords(session.user.id);
-      } else {
-        setRecords([]);
-      }
-    });
-
     return () => {
       isMounted = false;
-      listener.subscription.unsubscribe();
     };
   }, [loadRecords]);
 
@@ -236,24 +230,25 @@ export default function Home() {
       return;
     }
 
-    const email = identifierToEmail(username);
-    const authPassword = passwordForAuth(password);
-
     setIsAuthLoading(true);
     setAuthMessage("");
 
-    const signIn = await supabase.auth.signInWithPassword({
-      email,
-      password: authPassword,
+    const { data, error } = await supabase.rpc("app_login", {
+      p_identifier: username,
+      p_password: password,
     });
 
-    if (signIn.error) {
+    if (error || !data?.[0]) {
       setAuthMessage("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง ถ้ายังไม่มีบัญชีให้กดสมัคร");
       setIsAuthLoading(false);
       return;
     }
 
+    const session = data[0];
+    localStorage.setItem(SESSION_TOKEN_KEY, session.session_token);
     localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
+    setUser({ id: session.user_id, identifier: session.identifier });
+    await loadRecords(session.session_token);
     setIsAuthLoading(false);
   }
 
@@ -263,41 +258,35 @@ export default function Home() {
       return;
     }
 
-    const email = identifierToEmail(username);
-    const authPassword = passwordForAuth(password);
-
     setIsAuthLoading(true);
     setAuthMessage("");
 
-    const signUp = await supabase.auth.signUp({
-      email,
-      password: authPassword,
-      options: {
-        data: {
-          username: username.trim(),
-        },
-      },
+    const { data, error } = await supabase.rpc("app_signup", {
+      p_identifier: username,
+      p_password: password,
     });
 
-    if (signUp.error) {
-      setAuthMessage(signUp.error.message);
+    if (error || !data?.[0]) {
+      setAuthMessage(error?.message === "USER_ALREADY_EXISTS" ? "ชื่อผู้ใช้นี้มีอยู่แล้ว ให้กดเข้าสู่ระบบ" : error?.message || "สมัครไม่สำเร็จ");
       setIsAuthLoading(false);
       return;
     }
 
-    if (!signUp.data.session) {
-      setAuthMessage("สมัครแล้ว แต่ Supabase เปิด email confirmation อยู่ ต้องปิด confirmation ก่อนถึงจะล็อกอินทันทีได้");
-      setIsAuthLoading(false);
-      return;
-    }
-
+    const session = data[0];
+    localStorage.setItem(SESSION_TOKEN_KEY, session.session_token);
     localStorage.setItem(LAST_SEEN_KEY, Date.now().toString());
+    setUser({ id: session.user_id, identifier: session.identifier });
+    await loadRecords(session.session_token);
     setIsAuthLoading(false);
   }
 
   async function handleLogout() {
-    await supabase.auth.signOut();
+    const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (sessionToken) {
+      await supabase.rpc("app_logout", { p_token: sessionToken });
+    }
     localStorage.removeItem(LAST_SEEN_KEY);
+    localStorage.removeItem(SESSION_TOKEN_KEY);
     setUser(null);
     setRecords([]);
   }
@@ -305,19 +294,25 @@ export default function Home() {
   async function saveRecord() {
     if (!canSave || !user || isSaving) return;
 
+    const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (!sessionToken) {
+      setAuthMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+      await handleLogout();
+      return;
+    }
+
     setIsSaving(true);
 
-    const { error } = await supabase.from("bet_records").insert({
-      user_id: user.id,
-      team_left: form.teamLeft.trim(),
-      team_right: form.teamRight.trim(),
-      has_draw: form.hasDraw,
-      odds_left: form.oddsLeft ? Number(form.oddsLeft) : null,
-      odds_draw: form.hasDraw && form.oddsDraw ? Number(form.oddsDraw) : null,
-      odds_right: form.oddsRight ? Number(form.oddsRight) : null,
-      selected_outcome: form.selectedOutcome,
-      stake: Number(form.stake || 0),
-      status: "pending",
+    const { error } = await supabase.rpc("app_create_bet", {
+      p_token: sessionToken,
+      p_team_left: form.teamLeft.trim(),
+      p_team_right: form.teamRight.trim(),
+      p_has_draw: form.hasDraw,
+      p_odds_left: form.oddsLeft ? Number(form.oddsLeft) : null,
+      p_odds_draw: form.hasDraw && form.oddsDraw ? Number(form.oddsDraw) : null,
+      p_odds_right: form.oddsRight ? Number(form.oddsRight) : null,
+      p_selected_outcome: form.selectedOutcome,
+      p_stake: Number(form.stake || 0),
     });
 
     setIsSaving(false);
@@ -332,11 +327,22 @@ export default function Home() {
       hasDraw: form.hasDraw,
     });
     setActiveTab("records");
-    await loadRecords(user.id);
+    await loadRecords(sessionToken);
   }
 
   async function setRecordStatus(id: string, status: BetStatus) {
-    const { error } = await supabase.from("bet_records").update({ status }).eq("id", id);
+    const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (!sessionToken) {
+      setAuthMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+      await handleLogout();
+      return;
+    }
+
+    const { error } = await supabase.rpc("app_update_bet_status", {
+      p_token: sessionToken,
+      p_bet_id: id,
+      p_status: status,
+    });
 
     if (error) {
       setAuthMessage(error.message);
@@ -361,7 +367,17 @@ export default function Home() {
   }
 
   async function deleteRecord(id: string) {
-    const { error } = await supabase.from("bet_records").delete().eq("id", id);
+    const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (!sessionToken) {
+      setAuthMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+      await handleLogout();
+      return;
+    }
+
+    const { error } = await supabase.rpc("app_delete_bet", {
+      p_token: sessionToken,
+      p_bet_id: id,
+    });
 
     if (error) {
       setAuthMessage(error.message);
