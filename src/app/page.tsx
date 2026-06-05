@@ -571,13 +571,13 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen px-3 py-5 text-[#f4f7fb]">
-      <div className="mx-auto flex min-h-screen w-full max-w-[430px]">
-        <section className="flex w-full min-w-0 flex-col">
-          <div className="block">
-            <div className="min-w-0">
-              <section className="overflow-hidden rounded-[18px] border border-[#202a36] bg-[#18222e] shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
-                <div className="grid grid-cols-3 gap-1.5 border-b border-[#202a36] bg-[#0b111c] p-1.5">
+    <main className="h-dvh overflow-hidden px-3 py-5 text-[#f4f7fb]">
+      <div className="mx-auto flex max-h-full w-full max-w-[430px]">
+        <section className="flex max-h-full w-full min-w-0 flex-col">
+          <div className="block max-h-full">
+            <div className="max-h-full min-w-0">
+              <section className="flex max-h-full flex-col overflow-hidden rounded-[18px] border border-[#202a36] bg-[#18222e] shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
+                <div className="grid shrink-0 grid-cols-3 gap-1.5 border-b border-[#202a36] bg-[#0b111c] p-1.5">
                   <TabButton
                     active={activeTab === "create"}
                     icon={<Plus className="h-5 w-5" />}
@@ -598,148 +598,150 @@ export default function Home() {
                   />
                 </div>
 
-                {activeTab === "create" ? (
-                  <div className="p-4">
-                    <div className="mb-4">
-                      <div className="min-w-0">
-                        <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#7f8b9c]">Market Builder</p>
-                        <h2 className="mt-1 text-xl font-black tracking-tight">สร้างคู่แข่งขัน</h2>
-                        <p className="mt-1 text-xs font-medium text-[#7f8b9c]">กรอกทีม ค่าน้ำ และจำนวนเงินในหน้าเดียว</p>
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                  {activeTab === "create" ? (
+                    <div className="p-4">
+                      <div className="mb-4">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#7f8b9c]">Market Builder</p>
+                          <h2 className="mt-1 text-xl font-black tracking-tight">สร้างคู่แข่งขัน</h2>
+                          <p className="mt-1 text-xs font-medium text-[#7f8b9c]">กรอกทีม ค่าน้ำ และจำนวนเงินในหน้าเดียว</p>
+                        </div>
                       </div>
-                    </div>
-                    {authMessage ? <p className="mb-4 rounded-xl border border-[#ff5d7d]/35 bg-[#ff5d7d]/10 p-3 text-sm text-[#ffd4dd]">{authMessage}</p> : null}
+                      {authMessage ? <p className="mb-4 rounded-xl border border-[#ff5d7d]/35 bg-[#ff5d7d]/10 p-3 text-sm text-[#ffd4dd]">{authMessage}</p> : null}
 
-                    <div className="rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
-                      <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
-                        <TextField
-                          label="ทีมซ้าย"
-                          onChange={(value) => updateForm("teamLeft", value)}
-                          placeholder="เช่น Arsenal"
-                          value={form.teamLeft}
-                        />
-                        <div className="pb-4 text-center text-xs font-black text-[#566171]">VS</div>
-                        <TextField
-                          label="ทีมขวา"
-                          onChange={(value) => updateForm("teamRight", value)}
-                          placeholder="เช่น Chelsea"
-                          value={form.teamRight}
-                        />
-                      </div>
-
-                      <div className="mt-4 grid grid-cols-3 gap-3">
-                        <TextField
-                          label={`น้ำ ${form.teamLeft || "ทีมซ้าย"}`}
-                          onChange={(value) => updateForm("oddsLeft", value)}
-                          placeholder="1.85"
-                          type="number"
-                          value={form.oddsLeft}
-                        />
-                        <div className={form.hasDraw ? "block" : "opacity-35"}>
+                      <div className="rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
+                        <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
                           <TextField
-                            disabled={!form.hasDraw}
-                            label="น้ำเสมอ"
-                            onChange={(value) => updateForm("oddsDraw", value)}
-                            placeholder="3.50"
-                            type="number"
-                            value={form.oddsDraw}
+                            label="ทีมซ้าย"
+                            onChange={(value) => updateForm("teamLeft", value)}
+                            placeholder="เช่น Arsenal"
+                            value={form.teamLeft}
+                          />
+                          <div className="pb-4 text-center text-xs font-black text-[#566171]">VS</div>
+                          <TextField
+                            label="ทีมขวา"
+                            onChange={(value) => updateForm("teamRight", value)}
+                            placeholder="เช่น Chelsea"
+                            value={form.teamRight}
                           />
                         </div>
+
+                        <div className="mt-4 grid grid-cols-3 gap-3">
+                          <TextField
+                            label={`น้ำ ${form.teamLeft || "ทีมซ้าย"}`}
+                            onChange={(value) => updateForm("oddsLeft", value)}
+                            placeholder="1.85"
+                            type="number"
+                            value={form.oddsLeft}
+                          />
+                          <div className={form.hasDraw ? "block" : "opacity-35"}>
+                            <TextField
+                              disabled={!form.hasDraw}
+                              label="น้ำเสมอ"
+                              onChange={(value) => updateForm("oddsDraw", value)}
+                              placeholder="3.50"
+                              type="number"
+                              value={form.oddsDraw}
+                            />
+                          </div>
+                          <TextField
+                            label={`น้ำ ${form.teamRight || "ทีมขวา"}`}
+                            onChange={(value) => updateForm("oddsRight", value)}
+                            placeholder="1.95"
+                            type="number"
+                            value={form.oddsRight}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
+                        <div>
+                          <p className="font-black">ตลาด 1X2</p>
+                          <p className="text-xs font-medium text-[#7f8b9c]">เปิดเสมอเมื่อรายการนี้มีราคา X</p>
+                        </div>
+                        <button
+                          className={`rounded-xl px-4 py-2 text-sm font-black transition ${
+                            form.hasDraw ? "bg-[#147f9f] text-white ring-1 ring-[#35b6e8]" : "bg-[#0b111c] text-[#b7c4d6]"
+                          }`}
+                          onClick={() => updateForm("hasDraw", !form.hasDraw)}
+                          type="button"
+                        >
+                          {form.hasDraw ? "มีเสมอ" : "ไม่มีเสมอ"}
+                        </button>
+                      </div>
+
+                      <div className="mt-4 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
+                        <div className="mb-3 flex items-center justify-between">
+                          <p className="text-sm font-black text-[#f4f7fb]">Pick</p>
+                          <p className="text-xs font-bold text-[#566171]">เลือก odds ที่ลง</p>
+                        </div>
+                        <div className={`grid gap-2 ${form.hasDraw ? "grid-cols-3" : "grid-cols-2"}`}>
+                          <OutcomeButton
+                            active={form.selectedOutcome === "left"}
+                            label={form.teamLeft || "ทีมซ้าย"}
+                            odds={form.oddsLeft}
+                            onClick={() => updateForm("selectedOutcome", "left")}
+                          />
+                          {form.hasDraw ? (
+                            <OutcomeButton
+                              active={form.selectedOutcome === "draw"}
+                              label="เสมอ"
+                              odds={form.oddsDraw}
+                              onClick={() => updateForm("selectedOutcome", "draw")}
+                            />
+                          ) : null}
+                          <OutcomeButton
+                            active={form.selectedOutcome === "right"}
+                            label={form.teamRight || "ทีมขวา"}
+                            odds={form.oddsRight}
+                            onClick={() => updateForm("selectedOutcome", "right")}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-4">
                         <TextField
-                          label={`น้ำ ${form.teamRight || "ทีมขวา"}`}
-                          onChange={(value) => updateForm("oddsRight", value)}
-                          placeholder="1.95"
+                          label="จำนวนเงิน (ไม่บังคับ)"
+                          onChange={(value) => updateForm("stake", value)}
+                          placeholder="1000"
                           type="number"
-                          value={form.oddsRight}
+                          value={form.stake}
                         />
                       </div>
-                    </div>
 
-                    <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
-                      <div>
-                        <p className="font-black">ตลาด 1X2</p>
-                        <p className="text-xs font-medium text-[#7f8b9c]">เปิดเสมอเมื่อรายการนี้มีราคา X</p>
-                      </div>
                       <button
-                        className={`rounded-xl px-4 py-2 text-sm font-black transition ${
-                          form.hasDraw ? "bg-[#147f9f] text-white ring-1 ring-[#35b6e8]" : "bg-[#0b111c] text-[#b7c4d6]"
-                        }`}
-                        onClick={() => updateForm("hasDraw", !form.hasDraw)}
+                        className="mt-4 w-full rounded-xl bg-[#2a3542] px-5 py-4 text-base font-black text-white transition hover:bg-[#344252] disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={!canSave || isSaving}
+                        onClick={saveRecord}
                         type="button"
                       >
-                        {form.hasDraw ? "มีเสมอ" : "ไม่มีเสมอ"}
+                        {isSaving ? "กำลังบันทึก..." : "Add to Bet Slip"}
                       </button>
                     </div>
-
-                    <div className="mt-4 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
-                      <div className="mb-3 flex items-center justify-between">
-                        <p className="text-sm font-black text-[#f4f7fb]">Pick</p>
-                        <p className="text-xs font-bold text-[#566171]">เลือก odds ที่ลง</p>
-                      </div>
-                      <div className={`grid gap-2 ${form.hasDraw ? "grid-cols-3" : "grid-cols-2"}`}>
-                        <OutcomeButton
-                          active={form.selectedOutcome === "left"}
-                          label={form.teamLeft || "ทีมซ้าย"}
-                          odds={form.oddsLeft}
-                          onClick={() => updateForm("selectedOutcome", "left")}
-                        />
-                        {form.hasDraw ? (
-                          <OutcomeButton
-                            active={form.selectedOutcome === "draw"}
-                            label="เสมอ"
-                            odds={form.oddsDraw}
-                            onClick={() => updateForm("selectedOutcome", "draw")}
+                  ) : activeTab === "records" ? (
+                    <div className="space-y-3 p-4">
+                      {records.length ? (
+                        records.map((record) => (
+                          <BetCard
+                            canDelete={record.userId === user.id}
+                            key={record.id}
+                            onCopy={() => copyRecord(record)}
+                            onDelete={() => deleteRecord(record)}
+                            onStatusChange={(status) => setRecordStatus(record.id, status)}
+                            record={record}
                           />
-                        ) : null}
-                        <OutcomeButton
-                          active={form.selectedOutcome === "right"}
-                          label={form.teamRight || "ทีมขวา"}
-                          odds={form.oddsRight}
-                          onClick={() => updateForm("selectedOutcome", "right")}
-                        />
-                      </div>
+                        ))
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-[#2a3542] bg-[#0b111c] p-8 text-center text-[#b7c4d6]">
+                          ยังไม่มีรายการ
+                        </div>
+                      )}
                     </div>
-
-                    <div className="mt-4">
-                      <TextField
-                        label="จำนวนเงิน (ไม่บังคับ)"
-                        onChange={(value) => updateForm("stake", value)}
-                        placeholder="1000"
-                        type="number"
-                        value={form.stake}
-                      />
-                    </div>
-
-                    <button
-                      className="mt-4 w-full rounded-xl bg-[#2a3542] px-5 py-4 text-base font-black text-white transition hover:bg-[#344252] disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={!canSave || isSaving}
-                      onClick={saveRecord}
-                      type="button"
-                    >
-                      {isSaving ? "กำลังบันทึก..." : "Add to Bet Slip"}
-                    </button>
-                  </div>
-                ) : activeTab === "records" ? (
-                  <div className="space-y-3 p-4">
-                    {records.length ? (
-                      records.map((record) => (
-                        <BetCard
-                          canDelete={record.userId === user.id}
-                          key={record.id}
-                          onCopy={() => copyRecord(record)}
-                          onDelete={() => deleteRecord(record)}
-                          onStatusChange={(status) => setRecordStatus(record.id, status)}
-                          record={record}
-                        />
-                      ))
-                    ) : (
-                      <div className="rounded-xl border border-dashed border-[#2a3542] bg-[#0b111c] p-8 text-center text-[#b7c4d6]">
-                        ยังไม่มีรายการ
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <ProfilePanel identifier={user.identifier} onLogout={handleLogout} stats={profileStats} />
-                )}
+                  ) : (
+                    <ProfilePanel identifier={user.identifier} onLogout={handleLogout} stats={profileStats} />
+                  )}
+                </div>
               </section>
             </div>
 
