@@ -698,8 +698,8 @@ export default function Home() {
   }
 
   return (
-    <main className="h-dvh overflow-hidden px-3 py-5 text-[#f4f7fb]">
-      <div className="mx-auto flex h-full w-full max-w-[430px]">
+    <main className="grid min-h-dvh place-items-center overflow-hidden px-3 py-5 text-[#f4f7fb]">
+      <div className="mx-auto flex h-[min(860px,calc(100dvh-2.5rem))] w-full max-w-[430px]">
         <section className="flex h-full w-full min-w-0 flex-col">
           <div className="block h-full">
             <div className="h-full min-w-0">
