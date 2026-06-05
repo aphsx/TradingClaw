@@ -2,16 +2,15 @@
 
 :root {
   color-scheme: dark;
-  --tp-bg: #060a11;
-  --tp-bg-soft: #0a1019;
-  --tp-panel: #0e1724;
-  --tp-panel-soft: #121d2c;
-  --tp-odds: #172234;
-  --tp-border: #26354a;
-  --tp-blue: #009dff;
-  --tp-blue-bright: #23c4ff;
-  --tp-text: #f4f8ff;
-  --tp-muted: #8797ad;
+  --tp-bg: #070b12;
+  --tp-bg-soft: #0b111c;
+  --tp-panel: #18222e;
+  --tp-panel-soft: #1b2531;
+  --tp-odds: #0b111c;
+  --tp-border: #202a36;
+  --tp-accent: #5e7890;
+  --tp-text: #f4f7fb;
+  --tp-muted: #7f8b9c;
 }
 
 * {
@@ -26,9 +25,7 @@ html {
 body {
   min-height: 100vh;
   margin: 0;
-  background:
-    radial-gradient(circle at 50% -12%, rgba(0, 157, 255, 0.16), transparent 32rem),
-    linear-gradient(180deg, #0b111c 0%, var(--tp-bg) 46%, #05080d 100%);
+  background: linear-gradient(180deg, #0b111c 0%, var(--tp-bg) 46%, #05080d 100%);
   color: var(--tp-text);
   font-family: var(--font-inter), var(--font-noto-sans-thai), Arial, Helvetica, sans-serif;
   font-feature-settings: "liga" 1, "kern" 1;
@@ -54,5 +51,5 @@ button {
 }
 
 ::selection {
-  background: rgba(21, 157, 255, 0.34);
+  background: rgba(94, 120, 144, 0.34);
 }

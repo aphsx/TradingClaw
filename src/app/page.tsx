@@ -83,7 +83,7 @@ const statusConfig: Record<
 > = {
   pending: {
     label: "รอผล",
-    className: "border-[#3a4b63] bg-[#172132] text-[#b7c4d6]",
+    className: "border-[#2a3542] bg-[#1b2531] text-[#b7c4d6]",
     icon: <RotateCcw className="h-4 w-4" />,
   },
   won: {
@@ -98,7 +98,7 @@ const statusConfig: Record<
   },
   void: {
     label: "คืนทุน",
-    className: "border-[#60708a] bg-[#1a2433] text-[#d5deec]",
+    className: "border-[#2a3542] bg-[#1b2531] text-[#d5deec]",
     icon: <Wallet className="h-4 w-4" />,
   },
 };
@@ -499,9 +499,9 @@ export default function Home() {
 
   if (isAuthLoading && !user) {
     return (
-      <main className="grid min-h-screen place-items-center px-4 py-5 text-[#f4f8ff]">
-        <div className="w-full max-w-[420px] rounded-[18px] border border-[#26354a] bg-[#0e1724] p-5 text-center shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
-          <p className="text-sm font-bold text-[#8797ad]">กำลังตรวจสอบ session...</p>
+      <main className="grid min-h-screen place-items-center px-4 py-5 text-[#f4f7fb]">
+        <div className="w-full max-w-[420px] rounded-[18px] border border-[#202a36] bg-[#18222e] p-5 text-center shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
+          <p className="text-sm font-bold text-[#7f8b9c]">กำลังตรวจสอบ session...</p>
         </div>
       </main>
     );
@@ -509,23 +509,23 @@ export default function Home() {
 
   if (!user) {
     return (
-      <main className="grid min-h-screen place-items-center px-4 py-5 text-[#f4f8ff]">
-        <section className="w-full max-w-[420px] rounded-[18px] border border-[#26354a] bg-[#0e1724] p-5 shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
+      <main className="grid min-h-screen place-items-center px-4 py-5 text-[#f4f7fb]">
+        <section className="w-full max-w-[420px] rounded-[18px] border border-[#202a36] bg-[#18222e] p-5 shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
           <div className="mb-5">
-            <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#23c4ff]">Account</p>
+            <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#7f8b9c]">Account</p>
             <h1 className="mt-1 text-2xl font-black tracking-tight">
               {authMode === "login" ? "เข้าสู่ระบบ" : "สมัครบัญชี"}
             </h1>
-            <p className="mt-2 text-sm font-medium text-[#8797ad]">
+            <p className="mt-2 text-sm font-medium text-[#7f8b9c]">
               {authMode === "login" ? "ใช้ชื่อผู้ใช้หรืออีเมลที่สมัครไว้" : "ใช้อะไรก็ได้เป็นชื่อผู้ใช้ หรือใส่อีเมลจริงก็ได้"}
             </p>
           </div>
 
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-[#0a1019] p-1.5">
+            <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-[#0b111c] p-1.5">
               <button
                 className={`rounded-xl px-4 py-3 text-sm font-black transition ${
-                  authMode === "login" ? "bg-[#009dff] text-white shadow-[0_0_22px_rgba(0,157,255,0.28)]" : "text-[#8797ad] hover:bg-[#121d2c]"
+                  authMode === "login" ? "bg-[#2a3542] text-white" : "text-[#7f8b9c] hover:bg-[#1b2531]"
                 }`}
                 onClick={() => {
                   setAuthMode("login");
@@ -537,7 +537,7 @@ export default function Home() {
               </button>
               <button
                 className={`rounded-xl px-4 py-3 text-sm font-black transition ${
-                  authMode === "signup" ? "bg-[#009dff] text-white shadow-[0_0_22px_rgba(0,157,255,0.28)]" : "text-[#8797ad] hover:bg-[#121d2c]"
+                  authMode === "signup" ? "bg-[#2a3542] text-white" : "text-[#7f8b9c] hover:bg-[#1b2531]"
                 }`}
                 onClick={() => {
                   setAuthMode("signup");
@@ -552,7 +552,7 @@ export default function Home() {
             <TextField label="รหัสผ่าน" onChange={setPassword} placeholder="ต้องใส่รหัสผ่าน" type="password" value={password} />
             {authMessage ? <p className="rounded-xl border border-[#ff5d7d]/35 bg-[#ff5d7d]/10 p-3 text-sm text-[#ffd4dd]">{authMessage}</p> : null}
             <button
-              className="w-full rounded-xl bg-[#009dff] px-5 py-4 text-base font-black text-white shadow-[0_0_24px_rgba(0,157,255,0.28)] transition hover:bg-[#23c4ff] disabled:cursor-not-allowed disabled:opacity-40"
+              className="w-full rounded-xl bg-[#2a3542] px-5 py-4 text-base font-black text-white transition hover:bg-[#344252] disabled:cursor-not-allowed disabled:opacity-40"
               disabled={isAuthLoading || !username.trim() || !password}
               onClick={authMode === "login" ? handleLogin : handleSignUp}
               type="button"
@@ -566,13 +566,13 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen px-3 py-5 text-[#f4f8ff]">
+    <main className="min-h-screen px-3 py-5 text-[#f4f7fb]">
       <div className="mx-auto flex min-h-screen w-full max-w-[430px]">
         <section className="flex w-full min-w-0 flex-col">
           <div className="block">
             <div className="min-w-0">
-              <section className="overflow-hidden rounded-[18px] border border-[#26354a] bg-[#0e1724] shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
-                <div className="grid grid-cols-3 gap-1.5 border-b border-[#1f2b3d] bg-[#0a1019] p-1.5">
+              <section className="overflow-hidden rounded-[18px] border border-[#202a36] bg-[#18222e] shadow-[0_18px_54px_rgba(0,0,0,0.48)]">
+                <div className="grid grid-cols-3 gap-1.5 border-b border-[#202a36] bg-[#0b111c] p-1.5">
                   <TabButton
                     active={activeTab === "create"}
                     icon={<Plus className="h-5 w-5" />}
@@ -595,24 +595,16 @@ export default function Home() {
 
                 {activeTab === "create" ? (
                   <div className="p-4">
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#23c4ff]">Market Builder</p>
+                    <div className="mb-4">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#7f8b9c]">Market Builder</p>
                         <h2 className="mt-1 text-xl font-black tracking-tight">สร้างคู่แข่งขัน</h2>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          className="rounded-xl border border-[#26354a] bg-[#172234] px-3 py-2 text-sm font-bold text-[#8797ad] transition hover:border-[#009dff]/55 hover:text-[#f4f8ff]"
-                          onClick={handleLogout}
-                          type="button"
-                        >
-                          ออก
-                        </button>
+                        <p className="mt-1 text-xs font-medium text-[#7f8b9c]">กรอกทีม ค่าน้ำ และจำนวนเงินในหน้าเดียว</p>
                       </div>
                     </div>
                     {authMessage ? <p className="mb-4 rounded-xl border border-[#ff5d7d]/35 bg-[#ff5d7d]/10 p-3 text-sm text-[#ffd4dd]">{authMessage}</p> : null}
 
-                    <div className="rounded-xl border border-[#1f2b3d] bg-[#0e1724] p-3 shadow-inner shadow-black/20">
+                    <div className="rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
                       <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
                         <TextField
                           label="ทีมซ้าย"
@@ -620,7 +612,7 @@ export default function Home() {
                           placeholder="เช่น Arsenal"
                           value={form.teamLeft}
                         />
-                        <div className="pb-4 text-center text-xs font-black text-[#52637a]">VS</div>
+                        <div className="pb-4 text-center text-xs font-black text-[#566171]">VS</div>
                         <TextField
                           label="ทีมขวา"
                           onChange={(value) => updateForm("teamRight", value)}
@@ -657,14 +649,14 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#1f2b3d] bg-[#0e1724] p-3 shadow-inner shadow-black/20">
+                    <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
                       <div>
                         <p className="font-black">ตลาด 1X2</p>
-                        <p className="text-xs font-medium text-[#8797ad]">เปิดเสมอเมื่อรายการนี้มีราคา X</p>
+                        <p className="text-xs font-medium text-[#7f8b9c]">เปิดเสมอเมื่อรายการนี้มีราคา X</p>
                       </div>
                       <button
                         className={`rounded-xl px-4 py-2 text-sm font-black transition ${
-                          form.hasDraw ? "bg-[#009dff] text-white shadow-[0_0_18px_rgba(0,157,255,0.26)]" : "bg-[#172234] text-[#b7c4d6]"
+                          form.hasDraw ? "bg-[#0b111c] text-white ring-1 ring-[#5e6674]" : "bg-[#0b111c] text-[#b7c4d6]"
                         }`}
                         onClick={() => updateForm("hasDraw", !form.hasDraw)}
                         type="button"
@@ -673,10 +665,10 @@ export default function Home() {
                       </button>
                     </div>
 
-                    <div className="mt-4 rounded-xl border border-[#1f2b3d] bg-[#0e1724] p-3 shadow-inner shadow-black/20">
+                    <div className="mt-4 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
                       <div className="mb-3 flex items-center justify-between">
-                        <p className="text-sm font-black text-[#f4f8ff]">Pick</p>
-                        <p className="text-xs font-bold text-[#52637a]">เลือก odds ที่ลง</p>
+                        <p className="text-sm font-black text-[#f4f7fb]">Pick</p>
+                        <p className="text-xs font-bold text-[#566171]">เลือก odds ที่ลง</p>
                       </div>
                       <div className={`grid gap-2 ${form.hasDraw ? "grid-cols-3" : "grid-cols-2"}`}>
                         <OutcomeButton
@@ -713,7 +705,7 @@ export default function Home() {
                     </div>
 
                     <button
-                      className="mt-4 w-full rounded-xl bg-[#009dff] px-5 py-4 text-base font-black text-white shadow-[0_0_24px_rgba(0,157,255,0.28)] transition hover:bg-[#23c4ff] disabled:cursor-not-allowed disabled:opacity-40"
+                      className="mt-4 w-full rounded-xl bg-[#2a3542] px-5 py-4 text-base font-black text-white transition hover:bg-[#344252] disabled:cursor-not-allowed disabled:opacity-40"
                       disabled={!canSave || isSaving}
                       onClick={saveRecord}
                       type="button"
@@ -734,13 +726,13 @@ export default function Home() {
                         />
                       ))
                     ) : (
-                      <div className="rounded-xl border border-dashed border-[#009dff]/25 bg-[#009dff]/[0.06] p-8 text-center text-[#b7c4d6]">
+                      <div className="rounded-xl border border-dashed border-[#2a3542] bg-[#0b111c] p-8 text-center text-[#b7c4d6]">
                         ยังไม่มีรายการ
                       </div>
                     )}
                   </div>
                 ) : (
-                  <ProfilePanel identifier={user.identifier} stats={profileStats} />
+                  <ProfilePanel identifier={user.identifier} onLogout={handleLogout} stats={profileStats} />
                 )}
               </section>
             </div>
@@ -752,20 +744,29 @@ export default function Home() {
   );
 }
 
-function ProfilePanel({ identifier, stats }: { identifier: string; stats: ProfileStats }) {
+function ProfilePanel({ identifier, onLogout, stats }: { identifier: string; onLogout: () => void; stats: ProfileStats }) {
   const profitClass = stats.netProfit >= 0 ? "text-[#c9ffd8]" : "text-[#ffd4dd]";
 
   return (
     <div className="space-y-4 p-4">
-      <section className="overflow-hidden rounded-xl border border-[#009dff]/25 bg-gradient-to-br from-[#009dff]/20 via-[#0e1724] to-[#080d15] p-4">
+      <section className="overflow-hidden rounded-xl border border-[#202a36] bg-[#18222e] p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#23c4ff]">Profile</p>
+            <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#7f8b9c]">Profile</p>
             <h2 className="mt-1 truncate text-2xl font-black">{identifier}</h2>
-            <p className="mt-2 text-sm font-medium text-[#b7c4d6]">สรุปผลงานจากรายการที่ปิดผลแล้ว</p>
+            <p className="mt-2 text-sm font-medium text-[#7f8b9c]">สรุปผลงานจากรายการที่ปิดผลแล้ว</p>
           </div>
-          <div className="rounded-xl border border-[#23c4ff]/30 bg-[#009dff]/18 p-3 text-[#e6f7ff]">
-            <BarChart3 className="h-6 w-6" />
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <div className="rounded-xl border border-[#2a3542] bg-[#0b111c] p-3 text-[#b7c4d6]">
+              <BarChart3 className="h-6 w-6" />
+            </div>
+            <button
+              className="rounded-md border border-transparent bg-[#0b111c] px-3 py-1.5 text-xs font-black text-[#b7c4d6] transition hover:bg-[#111927] hover:text-[#f4f7fb]"
+              onClick={onLogout}
+              type="button"
+            >
+              ออก
+            </button>
           </div>
         </div>
       </section>
@@ -777,13 +778,13 @@ function ProfilePanel({ identifier, stats }: { identifier: string; stats: Profil
         <StatCard label="แพ้" tone="loss" value={formatNumber(stats.lostCount, 0)} />
       </div>
 
-      <section className="rounded-xl border border-[#1f2b3d] bg-[#0e1724] p-4 shadow-inner shadow-black/20">
+      <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-4 shadow-inner shadow-black/20">
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-black text-[#f4f8ff]">ค่าน้ำและเงิน</p>
-            <p className="text-xs font-medium text-[#52637a]">คิดเฉพาะรายการชนะ/แพ้ ไม่รวมรอผลและคืนทุน</p>
+            <p className="text-sm font-black text-[#f4f7fb]">ค่าน้ำและเงิน</p>
+            <p className="text-xs font-medium text-[#566171]">คิดเฉพาะรายการชนะ/แพ้ ไม่รวมรอผลและคืนทุน</p>
           </div>
-          <span className="rounded-xl border border-[#26354a] bg-[#0a1019] px-3 py-2 text-xs font-black text-[#b7c4d6]">
+          <span className="rounded-xl border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6]">
             ปิดผล {formatNumber(stats.settledCount, 0)}
           </span>
         </div>
@@ -795,14 +796,14 @@ function ProfilePanel({ identifier, stats }: { identifier: string; stats: Profil
           <MiniStat label="รอผล / คืนทุน" value={`${formatNumber(stats.pendingCount, 0)} / ${formatNumber(stats.voidCount, 0)}`} />
         </div>
 
-        <div className="mt-3 rounded-xl border border-[#26354a] bg-[#0a1019] p-3">
-          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#52637a]">กำไรสุทธิ</p>
+        <div className="mt-3 rounded-xl border border-transparent bg-[#0b111c] p-3">
+          <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">กำไรสุทธิ</p>
           <p className={`mt-1 text-2xl font-black ${profitClass}`}>{formatSignedAmount(stats.netProfit)}</p>
         </div>
       </section>
 
-      <section className="rounded-xl border border-[#1f2b3d] bg-[#0e1724] p-4 text-sm text-[#b7c4d6] shadow-inner shadow-black/20">
-        <p className="font-black text-[#f4f8ff]">สูตรค่าน้ำที่ใช้</p>
+      <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-4 text-sm text-[#b7c4d6] shadow-inner shadow-black/20">
+        <p className="font-black text-[#f4f7fb]">สูตรค่าน้ำที่ใช้</p>
         <p className="mt-2">
           ถ้าชนะน้ำ 1.90 จะนับเป็น +0.90 หน่วย เพราะได้คืน 1.90 แต่เงินต้นคือ 1 หน่วย
         </p>
@@ -818,7 +819,7 @@ function StatCard({ label, tone = "default", value }: { label: string; tone?: "d
       ? "border-[#54e57c]/30 bg-[#54e57c]/10 text-[#c9ffd8]"
       : tone === "loss"
         ? "border-[#ff5d7d]/30 bg-[#ff5d7d]/10 text-[#ffd4dd]"
-        : "border-[#1f2b3d] bg-[#0e1724] text-[#f4f8ff]";
+        : "border-[#202a36] bg-[#18222e] text-[#f4f7fb]";
 
   return (
     <div className={`rounded-xl border p-4 shadow-lg shadow-black/20 ${toneClass}`}>
@@ -842,7 +843,7 @@ function TabButton({
   return (
     <button
       className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition ${
-        active ? "bg-[#009dff] text-white shadow-[0_0_18px_rgba(0,157,255,0.26)]" : "text-[#8797ad] hover:bg-[#121d2c] hover:text-[#f4f8ff]"
+        active ? "bg-[#2a3542] text-white" : "text-[#7f8b9c] hover:bg-[#1b2531] hover:text-[#f4f7fb]"
       }`}
       onClick={onClick}
       type="button"
@@ -870,9 +871,9 @@ function TextField({
 }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-[13px] font-bold text-[#b7c4d6]">{label}</span>
+      <span className="mb-2 block text-[13px] font-bold text-[#7f8b9c]">{label}</span>
       <input
-        className="w-full rounded-xl border border-[#26354a] bg-[#0a1019] px-4 py-3 text-base font-bold text-[#f4f8ff] outline-none transition placeholder:text-[#52637a] focus:border-[#009dff] focus:bg-[#101a29] disabled:opacity-30"
+        className="w-full rounded-md border border-transparent bg-[#0b111c] px-4 py-3 text-base font-bold text-[#f4f7fb] outline-none transition placeholder:text-[#566171] focus:border-[#5e6674] focus:bg-[#0b111c] disabled:opacity-30"
         disabled={disabled}
         inputMode={type === "number" ? "decimal" : "text"}
         onChange={(event) => onChange(event.target.value)}
@@ -899,14 +900,14 @@ function OutcomeButton({
     <button
       className={`rounded-xl border p-3 text-left transition ${
         active
-          ? "border-[#23c4ff] bg-[#009dff] text-white shadow-[0_0_20px_rgba(0,157,255,0.26)]"
-          : "border-[#26354a] bg-[#172234] text-[#f4f8ff] hover:border-[#009dff]/60 hover:bg-[#1b2a40]"
+          ? "border-[#5e6674] bg-[#0b111c] text-white"
+          : "border-transparent bg-[#0b111c] text-[#f4f7fb] hover:bg-[#111927]"
       }`}
       onClick={onClick}
       type="button"
     >
-      <p className={`truncate text-xs font-black uppercase tracking-wide ${active ? "text-white/75" : "text-[#8797ad]"}`}>{label}</p>
-      <p className={`mt-1 text-xl font-black ${active ? "text-white" : "text-[#dce8f6]"}`}>{odds || "-"}</p>
+      <p className={`truncate text-xs font-black uppercase tracking-wide ${active ? "text-white/70" : "text-[#7f8b9c]"}`}>{label}</p>
+      <p className={`mt-1 text-xl font-black ${active ? "text-white" : "text-[#f4f7fb]"}`}>{odds || "-"}</p>
     </button>
   );
 }
@@ -930,29 +931,29 @@ function BetCard({
       ? "bg-[#54e57c]"
       : record.status === "lost"
         ? "bg-[#ff5d7d]"
-        : "bg-[#009dff]";
+        : "bg-[#5e6674]";
 
   return (
-    <article className="relative overflow-hidden rounded-xl border border-[#1f2b3d] bg-[#0e1724] p-3 pl-5 shadow-lg shadow-black/25">
+    <article className="relative overflow-hidden rounded-xl border border-[#202a36] bg-[#18222e] p-3 pl-5 shadow-lg shadow-black/25">
       <div className={`absolute bottom-0 left-0 top-0 w-1.5 ${statusBarClass}`} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-black ${status.className}`}>
+            <span className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] font-black ${status.className}`}>
               {status.icon}
               {status.label}
             </span>
           </div>
           <h3 className="mt-3 truncate text-base font-black">
-            {record.teamLeft} <span className="text-[#52637a]">vs</span> {record.teamRight}
+            {record.teamLeft} <span className="text-[#566171]">vs</span> {record.teamRight}
           </h3>
-          <p className="mt-1 text-xs font-semibold text-[#52637a]">{record.createdAt}</p>
+          <p className="mt-1 text-xs font-semibold text-[#566171]">{record.createdAt}</p>
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-2">
-          <div className="rounded-xl border border-[#009dff]/25 bg-[#009dff]/10 px-3 py-2 text-right">
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-[#23c4ff]/70">Stake</p>
-            <p className="text-base font-black text-[#e6f7ff]">{formatAmount(record.stake)}</p>
+          <div className="inline-flex items-center gap-1.5 rounded-md border border-transparent bg-[#0b111c] px-2.5 py-1 text-[11px] font-black text-[#f4f7fb]">
+            <span className="uppercase tracking-[0.16em] text-[#7f8b9c]/70">Stake</span>
+            <span>{formatAmount(record.stake)}</span>
           </div>
           {!preview ? (
             <div className="flex gap-2">
@@ -967,7 +968,7 @@ function BetCard({
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#0a1019] p-2">
+      <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#18222e]">
         <MiniStat active={record.selectedOutcome === "left"} label={record.teamLeft || "ซ้าย"} value={record.oddsLeft || "-"} />
         <MiniStat
           active={record.selectedOutcome === "draw"}
@@ -981,14 +982,14 @@ function BetCard({
       {!preview && record.status === "pending" ? (
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
-            className="rounded-xl border border-[#26354a] bg-[#172234] px-3 py-2 text-xs font-black text-[#b7c4d6] transition hover:border-[#54e57c]/50 hover:bg-[#1b2a40]"
+            className="rounded-md border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6] transition hover:bg-[#111927]"
             onClick={() => onStatusChange("won")}
             type="button"
           >
             ชนะ
           </button>
           <button
-            className="rounded-xl border border-[#26354a] bg-[#172234] px-3 py-2 text-xs font-black text-[#b7c4d6] transition hover:border-[#ff5d7d]/50 hover:bg-[#1b2a40]"
+            className="rounded-md border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6] transition hover:bg-[#111927]"
             onClick={() => onStatusChange("lost")}
             type="button"
           >
@@ -1015,10 +1016,10 @@ function MiniStat({
   return (
     <div
       className={`min-w-0 rounded-lg border p-2.5 transition ${
-        active ? "border-[#23c4ff] bg-[#009dff] text-white shadow-[0_0_16px_rgba(0,157,255,0.22)]" : "border-transparent bg-[#172234] text-[#f4f8ff]"
+        active ? "border-[#5e6674] bg-[#0b111c] text-white" : "border-transparent bg-[#0b111c] text-[#f4f7fb]"
       } ${muted ? "opacity-35" : ""}`}
     >
-      <p className={`truncate text-[11px] font-semibold ${active ? "text-white/70" : "text-[#8797ad]"}`}>{label}</p>
+      <p className={`truncate text-[11px] font-semibold ${active ? "text-white/70" : "text-[#7f8b9c]"}`}>{label}</p>
       <p className="mt-1 truncate text-sm font-black">{value}</p>
     </div>
   );
@@ -1036,7 +1037,7 @@ function IconButton({
   return (
     <button
       aria-label={label}
-      className="rounded-xl border border-[#26354a] bg-[#172234] p-2.5 text-[#b7c4d6] transition hover:border-[#009dff]/55 hover:bg-[#009dff]/10"
+      className="rounded-md border border-transparent bg-[#0b111c] p-2.5 text-[#b7c4d6] transition hover:bg-[#111927]"
       onClick={onClick}
       type="button"
     >
