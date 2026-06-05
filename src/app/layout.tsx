@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "TradingClaw",
-  description: "Fast bet tracking dashboard",
+  title: "Thunderpick",
+  description: "Fast bet tracking dashboard with a thunder betting theme",
 };
 
 export default function RootLayout({
