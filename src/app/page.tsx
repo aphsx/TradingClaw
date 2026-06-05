@@ -66,12 +66,12 @@ const statusConfig: Record<
 > = {
   pending: {
     label: "รอผล",
-    className: "border-blue-400/40 bg-blue-400/15 text-blue-100",
+    className: "border-slate-500/40 bg-slate-500/15 text-slate-200",
     icon: <RotateCcw className="h-4 w-4" />,
   },
   won: {
     label: "ชนะ",
-    className: "border-blue-500/35 bg-blue-500/12 text-blue-100",
+    className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-100",
     icon: <Check className="h-4 w-4" />,
   },
   lost: {
@@ -104,9 +104,24 @@ function getOutcomeLabel(record: Pick<BetRecord, "selectedOutcome" | "teamLeft" 
 }
 
 function getSelectedOdds(record: Pick<BetRecord, "selectedOutcome" | "oddsLeft" | "oddsDraw" | "oddsRight">) {
-  if (record.selectedOutcome === "left") return Number(record.oddsLeft || 0);
-  if (record.selectedOutcome === "right") return Number(record.oddsRight || 0);
-  return Number(record.oddsDraw || 0);
+  if (record.selectedOutcome === "left") return parseDecimal(record.oddsLeft) ?? 0;
+  if (record.selectedOutcome === "right") return parseDecimal(record.oddsRight) ?? 0;
+  return parseDecimal(record.oddsDraw) ?? 0;
+}
+
+function isDecimalInput(value: string) {
+  return /^\d*(?:[.,]\d*)?$/.test(value);
+}
+
+function parseDecimal(value: string) {
+  const normalizedValue = value.trim().replace(",", ".");
+
+  if (!normalizedValue || normalizedValue === ".") {
+    return null;
+  }
+
+  const parsedValue = Number(normalizedValue);
+  return Number.isFinite(parsedValue) ? parsedValue : null;
 }
 
 function formatDate(value: string) {
@@ -150,7 +165,6 @@ export default function Home() {
   const canSave =
     form.teamLeft.trim() &&
     form.teamRight.trim() &&
-    form.stake.trim() &&
     (form.selectedOutcome !== "draw" || form.hasDraw);
 
   const loadRecords = useCallback(async (sessionToken: string) => {
@@ -218,6 +232,14 @@ export default function Home() {
     setForm((current) => {
       if (key === "hasDraw" && value === false && current.selectedOutcome === "draw") {
         return { ...current, hasDraw: false, oddsDraw: "", selectedOutcome: "left" };
+      }
+
+      if (
+        typeof value === "string" &&
+        (key === "oddsLeft" || key === "oddsDraw" || key === "oddsRight" || key === "stake") &&
+        !isDecimalInput(value)
+      ) {
+        return current;
       }
 
       return { ...current, [key]: value };
@@ -308,11 +330,11 @@ export default function Home() {
       p_team_left: form.teamLeft.trim(),
       p_team_right: form.teamRight.trim(),
       p_has_draw: form.hasDraw,
-      p_odds_left: form.oddsLeft ? Number(form.oddsLeft) : null,
-      p_odds_draw: form.hasDraw && form.oddsDraw ? Number(form.oddsDraw) : null,
-      p_odds_right: form.oddsRight ? Number(form.oddsRight) : null,
+      p_odds_left: parseDecimal(form.oddsLeft),
+      p_odds_draw: form.hasDraw ? parseDecimal(form.oddsDraw) : null,
+      p_odds_right: parseDecimal(form.oddsRight),
       p_selected_outcome: form.selectedOutcome,
-      p_stake: Number(form.stake || 0),
+      p_stake: parseDecimal(form.stake) ?? 0,
     });
 
     setIsSaving(false);
@@ -328,28 +350,6 @@ export default function Home() {
     });
     setActiveTab("records");
     await loadRecords(sessionToken);
-  }
-
-  async function setRecordStatus(id: string, status: BetStatus) {
-    const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
-    if (!sessionToken) {
-      setAuthMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
-      await handleLogout();
-      return;
-    }
-
-    const { error } = await supabase.rpc("app_update_bet_status", {
-      p_token: sessionToken,
-      p_bet_id: id,
-      p_status: status,
-    });
-
-    if (error) {
-      setAuthMessage(error.message);
-      return;
-    }
-
-    setRecords((current) => current.map((record) => (record.id === id ? { ...record, status } : record)));
   }
 
   function copyRecord(record: BetRecord) {
@@ -385,6 +385,28 @@ export default function Home() {
     }
 
     setRecords((current) => current.filter((record) => record.id !== id));
+  }
+
+  async function setRecordStatus(id: string, status: BetStatus) {
+    const sessionToken = localStorage.getItem(SESSION_TOKEN_KEY);
+    if (!sessionToken) {
+      setAuthMessage("Session หมดอายุ กรุณาเข้าสู่ระบบใหม่");
+      await handleLogout();
+      return;
+    }
+
+    const { error } = await supabase.rpc("app_update_bet_status", {
+      p_token: sessionToken,
+      p_bet_id: id,
+      p_status: status,
+    });
+
+    if (error) {
+      setAuthMessage(error.message);
+      return;
+    }
+
+    setRecords((current) => current.map((record) => (record.id === id ? { ...record, status } : record)));
   }
 
   function swapTeams() {
@@ -612,7 +634,7 @@ export default function Home() {
 
                     <div className="mt-4">
                       <TextField
-                        label="จำนวนเงิน"
+                        label="จำนวนเงิน (ไม่บังคับ)"
                         onChange={(value) => updateForm("stake", value)}
                         placeholder="1000"
                         type="number"
@@ -707,7 +729,7 @@ function TextField({
         inputMode={type === "number" ? "decimal" : "text"}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        type={type}
+        type={type === "number" ? "text" : type}
         value={value}
       />
     </label>
@@ -756,9 +778,16 @@ function BetCard({
 }) {
   const selectedOdds = getSelectedOdds(record);
   const status = statusConfig[record.status];
+  const statusBarClass =
+    record.status === "won"
+      ? "bg-emerald-500"
+      : record.status === "lost"
+        ? "bg-rose-500"
+        : "bg-slate-500";
 
   return (
-    <article className="rounded-2xl border border-slate-800 bg-[#0d1627] p-3 shadow-lg shadow-black/20">
+    <article className="relative overflow-hidden rounded-2xl border border-slate-800 bg-[#0d1627] p-3 pl-5 shadow-lg shadow-black/20">
+      <div className={`absolute bottom-0 left-0 top-0 w-1.5 ${statusBarClass}`} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -790,24 +819,25 @@ function BetCard({
         <MiniStat label="น้ำ" value={selectedOdds ? selectedOdds.toString() : "-"} />
       </div>
 
-      {!preview ? (
-        <div className="mt-3 grid grid-cols-4 gap-2">
-          {(Object.keys(statusConfig) as BetStatus[]).map((statusKey) => (
-            <button
-              className={`rounded-xl border px-3 py-2 text-xs font-extrabold transition ${
-                record.status === statusKey
-                  ? statusConfig[statusKey].className
-                  : "border-slate-700/70 bg-[#08101d] text-slate-300 hover:bg-blue-500/10"
-              }`}
-              key={statusKey}
-              onClick={() => onStatusChange(statusKey)}
-              type="button"
-            >
-              {statusConfig[statusKey].label}
-            </button>
-          ))}
+      {!preview && record.status === "pending" ? (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            className="rounded-xl border border-slate-700/70 bg-[#08101d] px-3 py-2 text-xs font-extrabold text-slate-300 transition hover:bg-[#0d1a2c]"
+            onClick={() => onStatusChange("won")}
+            type="button"
+          >
+            ชนะ
+          </button>
+          <button
+            className="rounded-xl border border-slate-700/70 bg-[#08101d] px-3 py-2 text-xs font-extrabold text-slate-300 transition hover:bg-[#0d1a2c]"
+            onClick={() => onStatusChange("lost")}
+            type="button"
+          >
+            แพ้
+          </button>
         </div>
       ) : null}
+
     </article>
   );
 }
