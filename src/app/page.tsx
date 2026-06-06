@@ -41,7 +41,11 @@ type BetRecord = {
   createdAt: string;
 };
 
-type BetFormState = Omit<BetRecord, "id" | "userId" | "status" | "createdAt">;
+type BetFormState = {
+  teamLeft: string;
+  teamRight: string;
+  selectedOutcome: Exclude<Outcome, "draw">;
+};
 
 type BetRecordRow = {
   id: string;
@@ -64,16 +68,10 @@ type UserSearchResult = {
 };
 
 type ProfileStats = {
-  grossReturn: number;
   lostCount: number;
-  netProfit: number;
   pendingCount: number;
   settledCount: number;
   totalRecords: number;
-  totalStake: number;
-  unitGrossReturn: number;
-  unitNetProfit: number;
-  unitRoi: number;
   voidCount: number;
   winCount: number;
   winRate: number;
@@ -112,48 +110,13 @@ const statusConfig: Record<
 const initialForm: BetFormState = {
   teamLeft: "",
   teamRight: "",
-  hasDraw: false,
-  oddsLeft: "",
-  oddsDraw: "",
-  oddsRight: "",
   selectedOutcome: "left",
-  stake: "",
 };
-
-function isDecimalInput(value: string) {
-  return /^\d*(?:[.,]\d*)?$/.test(value);
-}
-
-function parseDecimal(value: string) {
-  const normalizedValue = value.trim().replace(",", ".");
-
-  if (!normalizedValue || normalizedValue === ".") {
-    return null;
-  }
-
-  const parsedValue = Number(normalizedValue);
-  return Number.isFinite(parsedValue) ? parsedValue : null;
-}
-
-function formatAmount(value: string) {
-  const amount = parseDecimal(value);
-
-  if (amount === null) {
-    return "-";
-  }
-
-  return amount.toLocaleString("th-TH");
-}
 
 function formatNumber(value: number, maximumFractionDigits = 2) {
   return value.toLocaleString("th-TH", {
     maximumFractionDigits,
   });
-}
-
-function formatSignedAmount(value: number) {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${formatNumber(value)}`;
 }
 
 function formatDate(value: string) {
@@ -163,6 +126,18 @@ function formatDate(value: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function getSelectedOutcomeLabel(record: BetRecord) {
+  if (record.selectedOutcome === "draw") {
+    return "เสมอ";
+  }
+
+  if (record.selectedOutcome === "right") {
+    return record.teamRight || "ทีมขวา";
+  }
+
+  return record.teamLeft || "ทีมซ้าย";
 }
 
 function rowToRecord(row: BetRecordRow): BetRecord {
@@ -182,61 +157,16 @@ function rowToRecord(row: BetRecordRow): BetRecord {
   };
 }
 
-function getSelectedOdds(record: BetRecord) {
-  if (record.selectedOutcome === "draw") {
-    return parseDecimal(record.oddsDraw);
-  }
-
-  if (record.selectedOutcome === "right") {
-    return parseDecimal(record.oddsRight);
-  }
-
-  return parseDecimal(record.oddsLeft);
-}
-
 function calculateProfileStats(records: BetRecord[]): ProfileStats {
   const settledRecords = records.filter((record) => record.status === "won" || record.status === "lost");
   const winCount = settledRecords.filter((record) => record.status === "won").length;
   const lostCount = settledRecords.filter((record) => record.status === "lost").length;
 
-  const summary = settledRecords.reduce(
-    (summary, record) => {
-      const stake = parseDecimal(record.stake) ?? 0;
-      const odds = getSelectedOdds(record) ?? 0;
-
-      if (record.status === "won") {
-        const grossReturn = odds > 0 ? stake * odds : 0;
-        return {
-          grossReturn: summary.grossReturn + grossReturn,
-          netProfit: summary.netProfit + (odds > 0 ? grossReturn - stake : 0),
-          totalStake: summary.totalStake + stake,
-          unitGrossReturn: summary.unitGrossReturn + (odds > 0 ? odds : 0),
-          unitNetProfit: summary.unitNetProfit + (odds > 0 ? odds - 1 : 0),
-        };
-      }
-
-      return {
-        grossReturn: summary.grossReturn,
-        netProfit: summary.netProfit - stake,
-        totalStake: summary.totalStake + stake,
-        unitGrossReturn: summary.unitGrossReturn,
-        unitNetProfit: summary.unitNetProfit - 1,
-      };
-    },
-    { grossReturn: 0, netProfit: 0, totalStake: 0, unitGrossReturn: 0, unitNetProfit: 0 },
-  );
-
   return {
-    grossReturn: summary.grossReturn,
     lostCount,
-    netProfit: summary.netProfit,
     pendingCount: records.filter((record) => record.status === "pending").length,
     settledCount: settledRecords.length,
     totalRecords: records.length,
-    totalStake: summary.totalStake,
-    unitGrossReturn: summary.unitGrossReturn,
-    unitNetProfit: summary.unitNetProfit,
-    unitRoi: settledRecords.length ? (summary.unitNetProfit / settledRecords.length) * 100 : 0,
     voidCount: records.filter((record) => record.status === "void").length,
     winCount,
     winRate: settledRecords.length ? (winCount / settledRecords.length) * 100 : 0,
@@ -262,10 +192,7 @@ export default function Home() {
   const [isProfileSearching, setIsProfileSearching] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  const canSave =
-    form.teamLeft.trim() &&
-    form.teamRight.trim() &&
-    (form.selectedOutcome !== "draw" || form.hasDraw);
+  const canSave = form.teamLeft.trim() && form.teamRight.trim();
   const profileStats = calculateProfileStats(records);
   const viewedProfileStats = calculateProfileStats(viewedRecords);
   const isViewingOtherUser = Boolean(viewedIdentifier);
@@ -384,22 +311,8 @@ export default function Home() {
     };
   }, [profileSearch, user]);
 
-  function updateForm(key: keyof BetFormState, value: string | boolean) {
-    setForm((current) => {
-      if (key === "hasDraw" && value === false && current.selectedOutcome === "draw") {
-        return { ...current, hasDraw: false, oddsDraw: "", selectedOutcome: "left" };
-      }
-
-      if (
-        typeof value === "string" &&
-        (key === "oddsLeft" || key === "oddsDraw" || key === "oddsRight" || key === "stake") &&
-        !isDecimalInput(value)
-      ) {
-        return current;
-      }
-
-      return { ...current, [key]: value };
-    });
+  function updateForm<K extends keyof BetFormState>(key: K, value: BetFormState[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
   }
 
   function updateProfileSearch(value: string) {
@@ -544,12 +457,12 @@ export default function Home() {
       p_token: sessionToken,
       p_team_left: form.teamLeft.trim(),
       p_team_right: form.teamRight.trim(),
-      p_has_draw: form.hasDraw,
-      p_odds_left: parseDecimal(form.oddsLeft),
-      p_odds_draw: form.hasDraw ? parseDecimal(form.oddsDraw) : null,
-      p_odds_right: parseDecimal(form.oddsRight),
+      p_has_draw: false,
+      p_odds_left: null,
+      p_odds_draw: null,
+      p_odds_right: null,
       p_selected_outcome: form.selectedOutcome,
-      p_stake: parseDecimal(form.stake) ?? 0,
+      p_stake: 0,
     });
 
     setIsSaving(false);
@@ -559,10 +472,7 @@ export default function Home() {
       return;
     }
 
-    setForm({
-      ...initialForm,
-      hasDraw: form.hasDraw,
-    });
+    setForm(initialForm);
     setActiveTab("records");
     await loadRecords(sessionToken);
   }
@@ -571,12 +481,7 @@ export default function Home() {
     setForm({
       teamLeft: record.teamLeft,
       teamRight: record.teamRight,
-      hasDraw: record.hasDraw,
-      oddsLeft: record.oddsLeft,
-      oddsDraw: record.oddsDraw,
-      oddsRight: record.oddsRight,
-      selectedOutcome: record.selectedOutcome,
-      stake: record.stake,
+      selectedOutcome: record.selectedOutcome === "right" ? "right" : "left",
     });
     setActiveTab("create");
   }
@@ -736,7 +641,7 @@ export default function Home() {
                         <div className="min-w-0">
                           <p className="text-[11px] font-black uppercase tracking-[0.24em] text-[#7f8b9c]">Market Builder</p>
                           <h2 className="mt-1 text-xl font-black tracking-tight">สร้างคู่แข่งขัน</h2>
-                          <p className="mt-1 text-xs font-medium text-[#7f8b9c]">กรอกทีม ค่าน้ำ และจำนวนเงินในหน้าเดียว</p>
+                          <p className="mt-1 text-xs font-medium text-[#7f8b9c]">กรอกชื่อทีม แล้วเลือกทีมที่ลง</p>
                         </div>
                       </div>
                       {authMessage ? <p className="mb-4 rounded-xl border border-[#ff5d7d]/35 bg-[#ff5d7d]/10 p-3 text-sm text-[#ffd4dd]">{authMessage}</p> : null}
@@ -758,87 +663,25 @@ export default function Home() {
                           />
                         </div>
 
-                        <div className="mt-4 grid grid-cols-3 gap-3">
-                          <TextField
-                            label={`น้ำ ${form.teamLeft || "ทีมซ้าย"}`}
-                            onChange={(value) => updateForm("oddsLeft", value)}
-                            placeholder="1.85"
-                            type="number"
-                            value={form.oddsLeft}
-                          />
-                          <div className={form.hasDraw ? "block" : "opacity-35"}>
-                            <TextField
-                              disabled={!form.hasDraw}
-                              label="น้ำเสมอ"
-                              onChange={(value) => updateForm("oddsDraw", value)}
-                              placeholder="3.50"
-                              type="number"
-                              value={form.oddsDraw}
-                            />
-                          </div>
-                          <TextField
-                            label={`น้ำ ${form.teamRight || "ทีมขวา"}`}
-                            onChange={(value) => updateForm("oddsRight", value)}
-                            placeholder="1.95"
-                            type="number"
-                            value={form.oddsRight}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
-                        <div>
-                          <p className="font-black">ตลาด 1X2</p>
-                          <p className="text-xs font-medium text-[#7f8b9c]">เปิดเสมอเมื่อรายการนี้มีราคา X</p>
-                        </div>
-                        <button
-                          className={`rounded-xl px-4 py-2 text-sm font-black transition ${
-                            form.hasDraw ? "bg-[#147f9f] text-white ring-1 ring-[#35b6e8]" : "bg-[#0b111c] text-[#b7c4d6]"
-                          }`}
-                          onClick={() => updateForm("hasDraw", !form.hasDraw)}
-                          type="button"
-                        >
-                          {form.hasDraw ? "มีเสมอ" : "ไม่มีเสมอ"}
-                        </button>
                       </div>
 
                       <div className="mt-4 rounded-xl border border-[#202a36] bg-[#18222e] p-3 shadow-inner shadow-black/20">
                         <div className="mb-3 flex items-center justify-between">
-                          <p className="text-sm font-black text-[#f4f7fb]">Pick</p>
-                          <p className="text-xs font-bold text-[#566171]">เลือก odds ที่ลง</p>
+                          <p className="text-sm font-black text-[#f4f7fb]">เลือกทีมที่ลง</p>
+                          <p className="text-xs font-bold text-[#566171]">เลือกได้ 1 ทีม</p>
                         </div>
-                        <div className={`grid gap-2 ${form.hasDraw ? "grid-cols-3" : "grid-cols-2"}`}>
+                        <div className="grid grid-cols-2 gap-2">
                           <OutcomeButton
                             active={form.selectedOutcome === "left"}
                             label={form.teamLeft || "ทีมซ้าย"}
-                            odds={form.oddsLeft}
                             onClick={() => updateForm("selectedOutcome", "left")}
                           />
-                          {form.hasDraw ? (
-                            <OutcomeButton
-                              active={form.selectedOutcome === "draw"}
-                              label="เสมอ"
-                              odds={form.oddsDraw}
-                              onClick={() => updateForm("selectedOutcome", "draw")}
-                            />
-                          ) : null}
                           <OutcomeButton
                             active={form.selectedOutcome === "right"}
                             label={form.teamRight || "ทีมขวา"}
-                            odds={form.oddsRight}
                             onClick={() => updateForm("selectedOutcome", "right")}
                           />
                         </div>
-                      </div>
-
-                      <div className="mt-4">
-                        <TextField
-                          label="จำนวนเงิน (ไม่บังคับ)"
-                          onChange={(value) => updateForm("stake", value)}
-                          placeholder="1000"
-                          type="number"
-                          value={form.stake}
-                        />
                       </div>
 
                       <button
@@ -847,7 +690,7 @@ export default function Home() {
                         onClick={saveRecord}
                         type="button"
                       >
-                        {isSaving ? "กำลังบันทึก..." : "Add to Bet Slip"}
+                        {isSaving ? "กำลังบันทึก..." : "บันทึกบิล"}
                       </button>
                     </div>
                   ) : activeTab === "records" ? (
@@ -924,7 +767,6 @@ function ProfilePanel({
   stats: ProfileStats;
   viewedIdentifier: string;
 }) {
-  const profitClass = stats.netProfit >= 0 ? "text-[#c9ffd8]" : "text-[#ffd4dd]";
   const displayIdentifier = viewedIdentifier || identifier;
 
   return (
@@ -1011,13 +853,15 @@ function ProfilePanel({
             <StatCard label="ทั้งหมด" value={formatNumber(stats.totalRecords, 0)} />
             <StatCard label="ชนะ" tone="win" value={formatNumber(stats.winCount, 0)} />
             <StatCard label="แพ้" tone="loss" value={formatNumber(stats.lostCount, 0)} />
+            <StatCard label="รอผล" value={formatNumber(stats.pendingCount, 0)} />
+            <StatCard label="คืนทุน" value={formatNumber(stats.voidCount, 0)} />
           </div>
 
           <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-4 shadow-inner shadow-black/20">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <p className="text-sm font-black text-[#f4f7fb]">ค่าน้ำและเงิน</p>
-                <p className="text-xs font-medium text-[#566171]">คิดเฉพาะรายการชนะ/แพ้ ไม่รวมรอผลและคืนทุน</p>
+                <p className="text-sm font-black text-[#f4f7fb]">สรุปผล</p>
+                <p className="text-xs font-medium text-[#566171]">นับเฉพาะรายการที่ปิดผลชนะ/แพ้แล้ว</p>
               </div>
               <span className="rounded-xl border border-transparent bg-[#0b111c] px-3 py-2 text-xs font-black text-[#b7c4d6]">
                 ปิดผล {formatNumber(stats.settledCount, 0)}
@@ -1025,24 +869,11 @@ function ProfilePanel({
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <MiniStat label="ลงเท่ากันทุกไม้" value={`${formatSignedAmount(stats.unitNetProfit)}u (${formatSignedAmount(stats.unitRoi)}%)`} />
-              <MiniStat label="เงินลงรวม" value={formatNumber(stats.totalStake)} />
-              <MiniStat label="ยอดรับตอนชนะ" value={formatNumber(stats.grossReturn)} />
+              <MiniStat label="บิลที่ชนะ" value={formatNumber(stats.winCount, 0)} />
+              <MiniStat label="บิลที่แพ้" value={formatNumber(stats.lostCount, 0)} />
               <MiniStat label="รอผล / คืนทุน" value={`${formatNumber(stats.pendingCount, 0)} / ${formatNumber(stats.voidCount, 0)}`} />
+              <MiniStat label="ทั้งหมด" value={formatNumber(stats.totalRecords, 0)} />
             </div>
-
-            <div className="mt-3 rounded-xl border border-transparent bg-[#0b111c] p-3">
-              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">กำไรสุทธิ</p>
-              <p className={`mt-1 text-2xl font-black ${profitClass}`}>{formatSignedAmount(stats.netProfit)}</p>
-            </div>
-          </section>
-
-          <section className="rounded-xl border border-[#202a36] bg-[#18222e] p-4 text-sm text-[#b7c4d6] shadow-inner shadow-black/20">
-            <p className="font-black text-[#f4f7fb]">สูตรค่าน้ำที่ใช้</p>
-            <p className="mt-2">
-              ถ้าชนะน้ำ 1.90 จะนับเป็น +0.90 หน่วย เพราะได้คืน 1.90 แต่เงินต้นคือ 1 หน่วย
-            </p>
-            <p className="mt-2">ถ้าแพ้จะนับ -1.00 หน่วยเต็ม แล้วเอาทุกบิลมารวมเพื่อดูว่ากลยุทธ์ย้อนหลังบวกหรือลบกี่ %</p>
           </section>
         </>
     </div>
@@ -1124,12 +955,10 @@ function TextField({
 function OutcomeButton({
   active,
   label,
-  odds,
   onClick,
 }: {
   active: boolean;
   label: string;
-  odds: string;
   onClick: () => void;
 }) {
   return (
@@ -1143,7 +972,7 @@ function OutcomeButton({
       type="button"
     >
       <p className={`truncate text-xs font-black uppercase tracking-wide ${active ? "text-white/70" : "text-[#7f8b9c]"}`}>{label}</p>
-      <p className={`mt-1 text-xl font-black ${active ? "text-white" : "text-[#f4f7fb]"}`}>{odds || "-"}</p>
+      <p className={`mt-1 text-xl font-black ${active ? "text-white" : "text-[#f4f7fb]"}`}>{active ? "เลือกแล้ว" : "เลือกทีมนี้"}</p>
     </button>
   );
 }
@@ -1164,6 +993,7 @@ function BetCard({
   record: BetRecord;
 }) {
   const status = statusConfig[record.status];
+  const selectedOutcomeLabel = getSelectedOutcomeLabel(record);
   const statusBarClass =
     record.status === "won"
       ? "bg-[#54e57c]"
@@ -1190,8 +1020,8 @@ function BetCard({
 
         <div className="flex shrink-0 flex-col items-end gap-2">
           <div className="inline-flex items-center gap-1.5 rounded-md border border-transparent bg-[#0b111c] px-2.5 py-1 text-[11px] font-black text-[#f4f7fb]">
-            <span className="uppercase tracking-[0.16em] text-[#7f8b9c]/70">Stake</span>
-            <span>{formatAmount(record.stake)}</span>
+            <span className="uppercase tracking-[0.16em] text-[#7f8b9c]/70">Pick</span>
+            <span>{selectedOutcomeLabel}</span>
           </div>
           {!preview ? (
             <div className="flex gap-2">
@@ -1208,15 +1038,9 @@ function BetCard({
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-[#18222e]">
-        <MiniStat active={record.selectedOutcome === "left"} label={record.teamLeft || "ซ้าย"} value={record.oddsLeft || "-"} />
-        <MiniStat
-          active={record.selectedOutcome === "draw"}
-          label="เสมอ"
-          muted={!record.hasDraw}
-          value={record.hasDraw ? record.oddsDraw || "-" : "-"}
-        />
-        <MiniStat active={record.selectedOutcome === "right"} label={record.teamRight || "ขวา"} value={record.oddsRight || "-"} />
+      <div className="mt-3 rounded-xl border border-transparent bg-[#0b111c] p-3">
+        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-[#566171]">ทีมที่ลง</p>
+        <p className="mt-1 truncate text-lg font-black text-[#f4f7fb]">{selectedOutcomeLabel}</p>
       </div>
 
       {!preview && record.status === "pending" ? (
